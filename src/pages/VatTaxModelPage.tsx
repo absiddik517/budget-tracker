@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Upload } from 'lucide-react';
+import { Trash2, Upload } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
@@ -235,57 +235,140 @@ export function VatTaxModelPage() {
   };
 
   const actions = canEdit ? (
-    <div className="flex items-center gap-2">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".csv"
-        onChange={handleCsvFile}
-        className="hidden"
-      />
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap"
-      >
-        <Upload className="w-3.5 h-3.5" />
-        <span>{t('importCsv')}</span>
-      </button>
-      <button
-        type="button"
-        onClick={handleCopyNextFy}
-        disabled={copying || vatTaxRates.length === 0}
-        className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] disabled:opacity-50 whitespace-nowrap"
-      >
-        {copying ? 'Copying…' : t('copyToNextFy')}
-      </button>
-      <button
-        type="button"
-        onClick={openCreateModal}
-        className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
-      >
-        {t('newRate')}
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={openCreateModal}
+      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+    >
+      {t('newRate')}
+    </button>
   ) : null;
 
   return (
     <Layout title={t('navVatTax')} actions={actions}>
-      <div className="space-y-4">
-        <div className="card-surface px-4 py-3 text-xs text-[var(--muted)]">
-          Rates are copied into a budget when it is created. Changing a rate here does not change existing budgets.
+      <div className="space-y-3.5 md:space-y-4">
+        <div className="card-surface px-3.5 md:px-4 py-3 text-xs text-[var(--muted)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <p>
+            Rates are copied into a budget when it is created. Changing a rate here does not change existing budgets.
+          </p>
+          {canEdit && (
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                onChange={handleCsvFile}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="min-h-[44px] md:min-h-[38px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>{t('importCsv')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyNextFy}
+                disabled={copying || vatTaxRates.length === 0}
+                className="min-h-[44px] md:min-h-[38px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] disabled:opacity-50 whitespace-nowrap"
+              >
+                {copying ? 'Copying…' : t('copyToNextFy')}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="card-surface overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile Card List */}
+          <div className="md:hidden divide-y divide-[var(--line)]">
+            {loading ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                Loading rates…
+              </div>
+            ) : pagedRates.length === 0 ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                No VAT &amp; Tax rates configured for FY {selectedFy}.
+              </div>
+            ) : (
+              pagedRates.map((rate) => {
+                const head = getHead(rate.economicCode, {
+                  headName: rate.description,
+                  headNameBn: rate.descriptionBn,
+                });
+                const vatStr =
+                  rate.vat.length > 1
+                    ? rate.vat.map((v) => `${v.rate}%`).join(' / ')
+                    : rate.vat[0]?.rate
+                    ? `${rate.vat[0].rate}%`
+                    : '—';
+                const variantsStr =
+                  rate.vat.length > 1 ? rate.vat.map((v) => v.label).join(' / ') : '';
+
+                const cardBody = (
+                  <>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold tabular-nums text-[var(--accent)] break-all">
+                          {rate.economicCode}
+                        </div>
+                        <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
+                          {head.headName}
+                        </div>
+                        {head.headNameBn && (
+                          <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
+                        )}
+                      </div>
+                      {variantsStr && (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] border border-[var(--line)] text-[var(--text)] shrink-0">
+                          {variantsStr}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1.5 text-xs border-t border-[var(--line)]/60">
+                      <div>
+                        <span className="text-[var(--muted)]">Income tax: </span>
+                        <span className="font-semibold tabular-nums">
+                          {rate.incomeTax > 0 ? `${rate.incomeTax}%` : '—'}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[var(--muted)]">VAT: </span>
+                        <span className="font-semibold tabular-nums">{vatStr}</span>
+                      </div>
+                    </div>
+                  </>
+                );
+
+                return canEdit ? (
+                  <button
+                    key={rate.id}
+                    type="button"
+                    onClick={() => openEditModal(rate)}
+                    className="w-full text-left p-3.5 space-y-2 hover:bg-[var(--surface-subtle)] active:bg-[var(--surface-subtle)] transition-colors"
+                  >
+                    {cardBody}
+                  </button>
+                ) : (
+                  <div key={rate.id} className="p-3.5 space-y-2">
+                    {cardBody}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="py-3 px-4 font-medium">Code</th>
+                  <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Code</th>
                   <th className="py-3 px-4 font-medium">Description</th>
-                  <th className="py-3 px-4 font-medium text-right">Income tax</th>
-                  <th className="py-3 px-4 font-medium text-right">VAT</th>
-                  <th className="py-3 px-4 font-medium">Variants</th>
+                  <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Income tax</th>
+                  <th className="py-3 px-4 font-medium text-right whitespace-nowrap">VAT</th>
+                  <th className="py-3 px-4 font-medium whitespace-nowrap">Variants</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
@@ -322,11 +405,11 @@ export function VatTaxModelPage() {
                       <tr
                         key={rate.id}
                         onClick={() => openEditModal(rate)}
-                        className={`${
+                        className={`group ${
                           canEdit ? 'cursor-pointer hover:bg-[var(--surface-subtle)]' : ''
                         } transition-colors`}
                       >
-                        <td className="py-3 px-4 font-medium tabular-nums whitespace-nowrap">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-medium tabular-nums whitespace-nowrap transition-colors">
                           {rate.economicCode === 'GENERAL-CONSTRUCTION'
                             ? 'GENERAL-CONSTRUCTION'
                             : rate.economicCode}
@@ -374,8 +457,28 @@ export function VatTaxModelPage() {
         onClose={() => setModalOpen(false)}
         title={editingRate ? `Edit Rate · ${editingRate.economicCode}` : 'New Vat & Tax Rate'}
         subtitle={`FY ${selectedFy}`}
+        maxWidthClass="md:max-w-lg"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setModalOpen(false)}
+              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="vat-tax-form"
+              disabled={saving}
+              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            >
+              {saving ? 'Saving…' : t('save')}
+            </button>
+          </div>
+        }
       >
-        <form onSubmit={handleSave} className="space-y-4">
+        <form id="vat-tax-form" onSubmit={handleSave} className="space-y-4">
           <EconomicCodeSelect
             label="Economic code (7 digits or GENERAL-CONSTRUCTION)"
             value={code}
@@ -392,11 +495,11 @@ export function VatTaxModelPage() {
               <div className="text-[11px] font-medium text-[var(--muted)]">
                 Head of expenditure (from Economic Codes)
               </div>
-              <div className="text-sm font-medium text-[var(--text)] mt-0.5">
+              <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
                 {description || getHead(code).headName}
               </div>
               {(descriptionBn || getHead(code).headNameBn) && (
-                <div className="bn mt-0.5">{descriptionBn || getHead(code).headNameBn}</div>
+                <div className="bn mt-0.5 break-words">{descriptionBn || getHead(code).headNameBn}</div>
               )}
             </div>
           )}
@@ -413,17 +516,17 @@ export function VatTaxModelPage() {
               max="100"
               value={incomeTax}
               onChange={(e) => setIncomeTax(e.target.value)}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
             />
           </div>
 
           <div className="space-y-3 pt-1">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-[var(--muted)]">VAT structure</span>
               <button
                 type="button"
                 onClick={() => setHasVariants((v) => !v)}
-                className="text-xs font-medium text-[var(--accent)] hover:underline"
+                className="min-h-[36px] text-xs font-medium text-[var(--accent)] hover:underline text-left"
               >
                 {hasVariants ? 'Switch to single rate' : 'Use multiple VAT variants (e.g. AC / Non-AC)'}
               </button>
@@ -442,13 +545,13 @@ export function VatTaxModelPage() {
                   max="100"
                   value={singleVat}
                   onChange={(e) => setSingleVat(e.target.value)}
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
                 />
               </div>
             ) : (
               <div className="space-y-2">
                 {variants.map((v, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                  <div key={idx} className="flex items-center gap-2">
                     <input
                       type="text"
                       value={v.label}
@@ -458,7 +561,7 @@ export function VatTaxModelPage() {
                         setVariants(next);
                       }}
                       placeholder="Variant label (e.g. AC)"
-                      className="col-span-6 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                      className="min-w-0 flex-1 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                     />
                     <input
                       type="number"
@@ -472,15 +575,16 @@ export function VatTaxModelPage() {
                         setVariants(next);
                       }}
                       placeholder="%"
-                      className="col-span-4 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+                      className="w-20 sm:w-24 shrink-0 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-right"
                     />
                     <button
                       type="button"
                       disabled={variants.length <= 2}
                       onClick={() => setVariants(variants.filter((_, i) => i !== idx))}
-                      className="col-span-2 min-h-[44px] text-xs text-[var(--danger-text)] disabled:opacity-30"
+                      aria-label="Remove VAT variant"
+                      className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center rounded-lg border border-[var(--line)] text-[var(--danger-text)] disabled:opacity-30"
                     >
-                      Remove
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 ))}
@@ -492,29 +596,12 @@ export function VatTaxModelPage() {
                       { key: `v${variants.length + 1}`, label: 'Variant', rate: 0 },
                     ])
                   }
-                  className="text-xs font-medium text-[var(--accent)] hover:underline"
+                  className="min-h-[36px] text-xs font-medium text-[var(--accent)] hover:underline"
                 >
                   + Add variant
                 </button>
               </div>
             )}
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--line)]">
-            <button
-              type="button"
-              onClick={() => setModalOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : t('save')}
-            </button>
           </div>
         </form>
       </Modal>

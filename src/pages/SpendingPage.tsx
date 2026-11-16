@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, Trash2 } from 'lucide-react';
+import { ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
@@ -485,7 +485,7 @@ export function SpendingPage() {
     <button
       type="button"
       onClick={openNewSpending}
-      className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
     >
       {t('newSpending')}
     </button>
@@ -493,10 +493,10 @@ export function SpendingPage() {
 
   return (
     <Layout title={t('navSpending')} actions={actions}>
-      <div className="space-y-4">
+      <div className="space-y-3.5 md:space-y-4">
         {/* Filters & Search */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-3">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {(['all', 'draft', 'submitted', 'approved', 'rejected', 'voided'] as const).map((st) => {
               const active = statusFilter === st;
               return (
@@ -513,7 +513,7 @@ export function SpendingPage() {
                       setSearchParams({ status: st }, { replace: true });
                     }
                   }}
-                  className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                  className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                     active
                       ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                       : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
@@ -525,7 +525,7 @@ export function SpendingPage() {
             })}
           </div>
 
-          <div className="relative w-full sm:w-64">
+          <div className="relative w-full md:w-64">
             <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="search"
@@ -536,18 +536,98 @@ export function SpendingPage() {
               }}
               placeholder="Search payee, bill, cheque…"
               aria-label="Search spendings"
-              className="w-full min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             />
           </div>
         </div>
 
-        {/* Table Card */}
+        {/* Table / Mobile Cards */}
         <div className="card-surface overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile Card List */}
+          <div className="md:hidden divide-y divide-[var(--line)]">
+            {loading ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                Loading spendings…
+              </div>
+            ) : pagedSpendings.length === 0 ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                {t('noDataFound')}
+              </div>
+            ) : (
+              pagedSpendings.map((s) => {
+                const deductTotal = s.gross - s.netPayable;
+                const head = getHead(s.economicCode, {
+                  headName: s.headName,
+                  headNameBn: s.headNameBn,
+                });
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setDetailId(s.id);
+                      setActionMode('none');
+                      setActionInput('');
+                    }}
+                    className="w-full text-left p-3.5 space-y-2 hover:bg-[var(--surface-subtle)] active:bg-[var(--surface-subtle)] transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--muted)] tabular-nums">
+                          <span>{formatDateDisplay(s.date)}</span>
+                          <span className="font-semibold text-[var(--text)]">· {s.billNo}</span>
+                          {s.chequeNo && <span>· Chq {s.chequeNo}</span>}
+                        </div>
+                        <div className="text-sm font-semibold text-[var(--text)] mt-1 break-words">
+                          {s.payee}
+                        </div>
+                        <div className="text-xs text-[var(--muted)] mt-0.5 break-words">
+                          {head.headName}
+                        </div>
+                        {head.headNameBn && (
+                          <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <StatusChip variant={statusToChip(s.status)}>
+                          {t(s.status)}
+                        </StatusChip>
+                        <ChevronRight className="w-4 h-4 text-[var(--muted)]" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 pt-1 text-xs border-t border-[var(--line)]/60">
+                      <div className="min-w-0">
+                        <div className="text-[11px] text-[var(--muted)]">{t('gross')}</div>
+                        <div className="font-medium tabular-nums truncate">
+                          {formatNumberIN(s.gross)}
+                        </div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] text-[var(--muted)]">Deduct.</div>
+                        <div className="font-medium text-[var(--muted)] tabular-nums truncate">
+                          {formatNumberIN(deductTotal)}
+                        </div>
+                      </div>
+                      <div className="min-w-0 text-right">
+                        <div className="text-[11px] text-[var(--muted)]">{t('net')}</div>
+                        <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
+                          {formatNumberIN(s.netPayable)}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="py-3 px-4 font-medium whitespace-nowrap">{t('date')}</th>
+                  <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">{t('date')}</th>
                   <th className="py-3 px-4 font-medium whitespace-nowrap">{t('bill')}</th>
                   <th className="py-3 px-4 font-medium whitespace-nowrap">{t('cheque')}</th>
                   <th className="py-3 px-4 font-medium">{t('payee')}</th>
@@ -586,9 +666,9 @@ export function SpendingPage() {
                           setActionMode('none');
                           setActionInput('');
                         }}
-                        className="cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
+                        className="group cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
                       >
-                        <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)] transition-colors">
                           {formatDateDisplay(s.date)}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap font-medium">{s.billNo}</td>
@@ -641,7 +721,49 @@ export function SpendingPage() {
             : 'New Spending'
         }
         subtitle={`FY ${selectedFy}`}
-        maxWidthClass="lg:max-w-2xl"
+        maxWidthClass="md:max-w-2xl"
+        footer={
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
+            {editingSpending?.status === 'approved' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setFormOpen(false)}
+                  className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+                >
+                  {t('cancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={formSaving}
+                  onClick={() => handleSaveSpending('editApproved')}
+                  className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+                >
+                  {formSaving ? 'Saving…' : 'Save approved changes'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={formSaving}
+                  onClick={() => handleSaveSpending('draft')}
+                  className="min-h-[44px] px-5 rounded-lg border border-[var(--line)] text-sm font-semibold hover:bg-[var(--surface-subtle)] disabled:opacity-60"
+                >
+                  {t('saveDraft')}
+                </button>
+                <button
+                  type="button"
+                  disabled={formSaving}
+                  onClick={() => handleSaveSpending('submitted')}
+                  className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+                >
+                  {t('submit')}
+                </button>
+              </>
+            )}
+          </div>
+        }
       >
         <div className="space-y-4">
           <div className="space-y-3.5">
@@ -670,7 +792,7 @@ export function SpendingPage() {
               </select>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label htmlFor="sp-date" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
                   Date
@@ -680,7 +802,7 @@ export function SpendingPage() {
                   type="date"
                   value={formDate}
                   onChange={(e) => setFormDate(e.target.value)}
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
                 />
               </div>
               <div>
@@ -693,7 +815,7 @@ export function SpendingPage() {
                   value={formBillNo}
                   onChange={(e) => setFormBillNo(e.target.value)}
                   placeholder="B-101"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
               </div>
               <div>
@@ -706,7 +828,7 @@ export function SpendingPage() {
                   value={formPayee}
                   onChange={(e) => setFormPayee(e.target.value)}
                   placeholder="Payee name"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
               </div>
             </div>
@@ -722,7 +844,7 @@ export function SpendingPage() {
                   value={formChequeNo}
                   onChange={(e) => setFormChequeNo(e.target.value)}
                   placeholder="C-5521"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
               </div>
             )}
@@ -806,8 +928,8 @@ export function SpendingPage() {
             </div>
 
             <div className="space-y-2.5">
-              <div className="flex items-center justify-between gap-3">
-                <label htmlFor="ded-vat" className="text-sm text-[var(--text)]">
+              <div className="flex items-center justify-between gap-2.5">
+                <label htmlFor="ded-vat" className="text-sm text-[var(--text)] min-w-0">
                   VAT ({selectedVatObj.rate}%)
                 </label>
                 <input
@@ -820,12 +942,12 @@ export function SpendingPage() {
                     setVatManuallyEdited(true);
                     setFormVatStr(e.target.value);
                   }}
-                  className="w-36 min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-sm tabular-nums"
+                  className="w-28 sm:w-36 shrink-0 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-base md:text-sm tabular-nums"
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <label htmlFor="ded-it" className="text-sm text-[var(--text)]">
+              <div className="flex items-center justify-between gap-2.5">
+                <label htmlFor="ded-it" className="text-sm text-[var(--text)] min-w-0">
                   Income tax ({formBudget?.deductionRates.incomeTax ?? 0}%)
                 </label>
                 <input
@@ -838,12 +960,12 @@ export function SpendingPage() {
                     setItManuallyEdited(true);
                     setFormItStr(e.target.value);
                   }}
-                  className="w-36 min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-sm tabular-nums"
+                  className="w-28 sm:w-36 shrink-0 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-base md:text-sm tabular-nums"
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <label htmlFor="ded-sc" className="text-sm text-[var(--text)]">
+              <div className="flex items-center justify-between gap-2.5">
+                <label htmlFor="ded-sc" className="text-sm text-[var(--text)] min-w-0">
                   Service charge ({formBudget?.deductionRates.serviceCharge ?? 0}%)
                 </label>
                 <input
@@ -856,12 +978,12 @@ export function SpendingPage() {
                     setScManuallyEdited(true);
                     setFormScStr(e.target.value);
                   }}
-                  className="w-36 min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-sm tabular-nums"
+                  className="w-28 sm:w-36 shrink-0 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-base md:text-sm tabular-nums"
                 />
               </div>
 
               {otherRows.map((row, idx) => (
-                <div key={idx} className="flex items-center gap-2">
+                <div key={idx} className="flex flex-wrap sm:flex-nowrap items-center gap-2">
                   <input
                     type="text"
                     value={row.label}
@@ -871,7 +993,7 @@ export function SpendingPage() {
                       setOtherRows(next);
                     }}
                     placeholder="Other (e.g. Security deposit)"
-                    className="flex-1 min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs"
+                    className="min-w-0 flex-1 basis-full sm:basis-auto min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs"
                   />
                   <input
                     type="number"
@@ -884,13 +1006,13 @@ export function SpendingPage() {
                       setOtherRows(next);
                     }}
                     placeholder="0"
-                    className="w-28 min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-sm tabular-nums"
+                    className="flex-1 sm:flex-none sm:w-28 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-right text-base md:text-sm tabular-nums"
                   />
                   <button
                     type="button"
                     onClick={() => setOtherRows(otherRows.filter((_, i) => i !== idx))}
                     aria-label="Remove other deduction"
-                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg text-[var(--muted)] hover:text-[var(--danger-text)]"
+                    className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center rounded-lg border border-[var(--line)] sm:border-transparent text-[var(--muted)] hover:text-[var(--danger-text)]"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -900,7 +1022,7 @@ export function SpendingPage() {
               <button
                 type="button"
                 onClick={() => setOtherRows([...otherRows, { label: '', amountStr: '0' }])}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--accent)] hover:underline pt-1"
+                className="min-h-[44px] md:min-h-[36px] inline-flex items-center gap-1.5 text-xs font-medium text-[var(--accent)] hover:underline"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add other deduction</span>
@@ -919,47 +1041,6 @@ export function SpendingPage() {
                 {formatTaka(formNetPayablePaisa)}
               </span>
             </div>
-          </div>
-
-          <div className="flex flex-col-reverse sm:flex-row justify-end gap-2.5 pt-2">
-            {editingSpending?.status === 'approved' ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setFormOpen(false)}
-                  className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-                >
-                  {t('cancel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={formSaving}
-                  onClick={() => handleSaveSpending('editApproved')}
-                  className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-                >
-                  {formSaving ? 'Saving…' : 'Save approved changes'}
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  disabled={formSaving}
-                  onClick={() => handleSaveSpending('draft')}
-                  className="min-h-[44px] px-5 rounded-lg border border-[var(--line)] text-sm font-semibold hover:bg-[var(--surface-subtle)] disabled:opacity-60"
-                >
-                  {t('saveDraft')}
-                </button>
-                <button
-                  type="button"
-                  disabled={formSaving}
-                  onClick={() => handleSaveSpending('submitted')}
-                  className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-                >
-                  {t('submit')}
-                </button>
-              </>
-            )}
           </div>
         </div>
       </Modal>
@@ -982,7 +1063,8 @@ export function SpendingPage() {
               } · ${formatDateDisplay(selectedSpending.date)}`
             : ''
         }
-        maxWidthClass="lg:max-w-xl"
+        fullScreenOnMobile
+        maxWidthClass="md:max-w-xl"
       >
         {selectedSpending && (
           <div className="space-y-5">
@@ -1045,7 +1127,7 @@ export function SpendingPage() {
 
             {/* Action subforms */}
             {actionMode === 'approve' && (
-              <form onSubmit={handleDetailApprove} className="p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
+              <form onSubmit={handleDetailApprove} className="p-3.5 md:p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
                 <label htmlFor="approve-cheque" className="block text-xs font-medium text-[var(--text)]">
                   Cheque number (required for approval)
                 </label>
@@ -1056,20 +1138,20 @@ export function SpendingPage() {
                   value={actionInput}
                   onChange={(e) => setActionInput(e.target.value)}
                   placeholder="C-5521"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setActionMode('none')}
-                    className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
+                    className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
                   >
                     {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={actionBusy}
-                    className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
+                    className="min-h-[44px] md:min-h-[40px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
                   >
                     {actionBusy ? 'Approving…' : 'Confirm Approve'}
                   </button>
@@ -1078,7 +1160,7 @@ export function SpendingPage() {
             )}
 
             {actionMode === 'reject' && (
-              <form onSubmit={handleDetailReject} className="p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
+              <form onSubmit={handleDetailReject} className="p-3.5 md:p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
                 <label htmlFor="reject-reason" className="block text-xs font-medium text-[var(--text)]">
                   Reason for rejection
                 </label>
@@ -1089,20 +1171,20 @@ export function SpendingPage() {
                   value={actionInput}
                   onChange={(e) => setActionInput(e.target.value)}
                   placeholder="Missing supporting voucher"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setActionMode('none')}
-                    className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
+                    className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
                   >
                     {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={actionBusy}
-                    className="min-h-[40px] px-4 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold"
+                    className="min-h-[44px] md:min-h-[40px] px-4 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold"
                   >
                     {actionBusy ? 'Rejecting…' : 'Confirm Reject'}
                   </button>
@@ -1111,7 +1193,7 @@ export function SpendingPage() {
             )}
 
             {actionMode === 'void' && (
-              <form onSubmit={handleDetailVoid} className="p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
+              <form onSubmit={handleDetailVoid} className="p-3.5 md:p-4 rounded-xl bg-[var(--surface-subtle)] space-y-3">
                 <label htmlFor="void-reason" className="block text-xs font-medium text-[var(--text)]">
                   Reason for voiding this approved entry
                 </label>
@@ -1122,20 +1204,20 @@ export function SpendingPage() {
                   value={actionInput}
                   onChange={(e) => setActionInput(e.target.value)}
                   placeholder="Cheque cancelled"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                  className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
                 />
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setActionMode('none')}
-                    className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
+                    className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
                   >
                     {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={actionBusy}
-                    className="min-h-[40px] px-4 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold"
+                    className="min-h-[44px] md:min-h-[40px] px-4 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold"
                   >
                     {actionBusy ? 'Voiding…' : 'Confirm Void'}
                   </button>
@@ -1152,21 +1234,21 @@ export function SpendingPage() {
                       <button
                         type="button"
                         onClick={() => openEditSpending(selectedSpending)}
-                        className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium"
+                        className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium"
                       >
                         {t('edit')}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleSubmitFromDetail(selectedSpending)}
-                        className="min-h-[42px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
+                        className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
                       >
                         {t('submit')}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteSpending(selectedSpending)}
-                        className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
+                        className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
                       >
                         {t('delete')}
                       </button>
@@ -1181,7 +1263,7 @@ export function SpendingPage() {
                         setActionMode('approve');
                         setActionInput('');
                       }}
-                      className="min-h-[42px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
+                      className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
                     >
                       {t('approve')}
                     </button>
@@ -1191,7 +1273,7 @@ export function SpendingPage() {
                         setActionMode('reject');
                         setActionInput('');
                       }}
-                      className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
+                      className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
                     >
                       {t('reject')}
                     </button>
@@ -1205,7 +1287,7 @@ export function SpendingPage() {
                       setActionMode('void');
                       setActionInput('');
                     }}
-                    className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
+                    className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
                   >
                     {t('void')}
                   </button>
@@ -1216,14 +1298,14 @@ export function SpendingPage() {
                     <button
                       type="button"
                       onClick={() => openEditSpending(selectedSpending)}
-                      className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium"
+                      className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium"
                     >
                       {t('edit')}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDeleteSpending(selectedSpending)}
-                      className="min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
+                      className="min-h-[44px] md:min-h-[42px] px-4 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)]"
                     >
                       {t('delete')}
                     </button>

@@ -170,7 +170,7 @@ export function SettingsPage() {
       type="button"
       onClick={handleSave}
       disabled={saving}
-      className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold transition-colors disabled:opacity-60 whitespace-nowrap"
+      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold transition-colors disabled:opacity-60 whitespace-nowrap"
     >
       {saving ? 'Saving…' : t('saveChanges')}
     </button>
@@ -179,14 +179,14 @@ export function SettingsPage() {
   return (
     <Layout title={t('navSettings')} actions={headerActions}>
       {needsOfficeSetup && isSuperAdmin && (
-        <div className="mb-5 px-4 py-3 rounded-[14px] bg-[var(--accent-soft)] text-[var(--accent)] text-sm font-medium">
+        <div className="mb-4 md:mb-5 px-3.5 md:px-4 py-3 rounded-[14px] bg-[var(--accent-soft)] text-[var(--accent)] text-sm font-medium">
           Welcome! You are the first administrator. Please fill in your office name and fiscal year below and save.
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 md:gap-5">
         {isSuperAdmin && (
-          <section className="card-surface p-5 space-y-4">
+          <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('office')}</h2>
             <div>
               <label htmlFor="office-name" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
@@ -197,7 +197,7 @@ export function SettingsPage() {
                 type="text"
                 value={officeName}
                 onChange={(e) => setOfficeName(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
             </div>
             <div>
@@ -209,14 +209,14 @@ export function SettingsPage() {
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
             </div>
           </section>
         )}
 
         {isSuperAdmin && (
-          <section className="card-surface p-5 space-y-4">
+          <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('fiscalYear')}</h2>
             <div>
               <label htmlFor="active-fy" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
@@ -226,7 +226,7 @@ export function SettingsPage() {
                 id="active-fy"
                 value={activeFiscalYear}
                 onChange={(e) => setActiveFiscalYear(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               >
                 {Array.from(new Set([...fiscalYears, activeFiscalYear]))
                   .sort()
@@ -245,12 +245,12 @@ export function SettingsPage() {
                 onChange={(e) => setNewFyInput(e.target.value)}
                 placeholder="Add FY (e.g. 2026-27)"
                 aria-label="New fiscal year"
-                className="flex-1 min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="min-w-0 flex-1 min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
               <button
                 type="button"
                 onClick={handleAddFiscalYear}
-                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors whitespace-nowrap"
+                className="min-h-[44px] px-4 shrink-0 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors whitespace-nowrap"
               >
                 Add FY
               </button>
@@ -262,7 +262,7 @@ export function SettingsPage() {
         )}
 
         {/* Appearance: available to everyone */}
-        <section className="card-surface p-5 space-y-4">
+        <section className="card-surface p-4 md:p-5 space-y-4">
           <h2 className="text-base font-semibold text-[var(--text)]">{t('appearance')}</h2>
 
           <div>
@@ -319,7 +319,7 @@ export function SettingsPage() {
 
         {/* Data card: Super Admin only */}
         {isSuperAdmin && (
-          <section className="card-surface p-5 space-y-4">
+          <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('data')}</h2>
             <p className="text-xs text-[var(--muted)]">
               Download a JSON backup of budgets and spending, or load sample FY 2025-26 data.
@@ -331,7 +331,7 @@ export function SettingsPage() {
                 disabled={exporting}
                 className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
               >
-                <Download className="w-4 h-4" />
+                <Download className="w-4 h-4 shrink-0" />
                 <span>{exporting ? 'Exporting…' : t('exportBackup')}</span>
               </button>
 
@@ -341,7 +341,7 @@ export function SettingsPage() {
                 disabled={seeding}
                 className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
               >
-                <Database className="w-4 h-4" />
+                <Database className="w-4 h-4 shrink-0" />
                 <span>{seeding ? 'Loading…' : t('loadSampleData')}</span>
               </button>
 
@@ -349,9 +349,9 @@ export function SettingsPage() {
                 type="button"
                 onClick={handleBuildEconomicCodes}
                 disabled={migratingCodes}
-                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
+                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60 text-left"
               >
-                <Database className="w-4 h-4" />
+                <Database className="w-4 h-4 shrink-0" />
                 <span>
                   {migratingCodes
                     ? 'Building codes…'
@@ -364,7 +364,7 @@ export function SettingsPage() {
                 onClick={() => setActivityModalOpen(true)}
                 className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors"
               >
-                <History className="w-4 h-4" />
+                <History className="w-4 h-4 shrink-0" />
                 <span>{t('globalActivity')}</span>
               </button>
             </div>
@@ -378,56 +378,93 @@ export function SettingsPage() {
         onClose={() => setActivityModalOpen(false)}
         title={t('globalActivity')}
         subtitle="Audit trail across budgets, spendings, rates, limits, and users"
-        maxWidthClass="lg:max-w-3xl"
+        fullScreenOnMobile
+        maxWidthClass="md:max-w-3xl"
       >
         {logsLoading ? (
           <p className="text-sm text-[var(--muted)]">Loading activity log…</p>
         ) : globalLogs.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No audit logs recorded yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-[var(--line)] text-[var(--muted)]">
-                  <th className="py-2.5 pr-3 font-medium">Time</th>
-                  <th className="py-2.5 pr-3 font-medium">User</th>
-                  <th className="py-2.5 pr-3 font-medium">Action</th>
-                  <th className="py-2.5 pr-3 font-medium">Collection</th>
-                  <th className="py-2.5 font-medium">Document ID</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--line)]">
-                {globalLogs.map((log) => {
-                  const ts = log.timestamp
-                    ? (() => {
-                        const d = log.timestamp.toDate();
-                        return `${String(d.getDate()).padStart(2, '0')}/${String(
-                          d.getMonth() + 1
-                        ).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(
-                          2,
-                          '0'
-                        )}:${String(d.getMinutes()).padStart(2, '0')}`;
-                      })()
-                    : 'Pending';
-                  return (
-                    <tr key={log.id}>
-                      <td className="py-2.5 pr-3 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                        {ts}
-                      </td>
-                      <td className="py-2.5 pr-3 font-medium text-[var(--text)]">
-                        {log.userName || log.userId}
-                      </td>
-                      <td className="py-2.5 pr-3 capitalize">{log.action}</td>
-                      <td className="py-2.5 pr-3 text-[var(--muted)]">{log.collection}</td>
-                      <td className="py-2.5 font-mono text-[11px] text-[var(--muted)]">
-                        {log.docId}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {/* Mobile Activity Cards */}
+            <div className="md:hidden divide-y divide-[var(--line)]">
+              {globalLogs.map((log) => {
+                const ts = log.timestamp
+                  ? (() => {
+                      const d = log.timestamp.toDate();
+                      return `${String(d.getDate()).padStart(2, '0')}/${String(
+                        d.getMonth() + 1
+                      ).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(
+                        2,
+                        '0'
+                      )}:${String(d.getMinutes()).padStart(2, '0')}`;
+                    })()
+                  : 'Pending';
+                return (
+                  <div key={log.id} className="py-3 space-y-1 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[var(--text)] capitalize">
+                        {log.action} · {log.collection}
+                      </span>
+                      <span className="tabular-nums text-[var(--muted)] shrink-0">{ts}</span>
+                    </div>
+                    <div className="text-[var(--text)]">
+                      By <span className="font-medium">{log.userName || log.userId}</span>
+                    </div>
+                    <div className="font-mono text-[11px] text-[var(--muted)] break-all">
+                      {log.docId}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                    <th className="sticky left-0 z-10 bg-[var(--card)] py-2.5 pr-3 font-medium whitespace-nowrap">Time</th>
+                    <th className="py-2.5 pr-3 font-medium whitespace-nowrap">User</th>
+                    <th className="py-2.5 pr-3 font-medium whitespace-nowrap">Action</th>
+                    <th className="py-2.5 pr-3 font-medium whitespace-nowrap">Collection</th>
+                    <th className="py-2.5 font-medium whitespace-nowrap">Document ID</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--line)]">
+                  {globalLogs.map((log) => {
+                    const ts = log.timestamp
+                      ? (() => {
+                          const d = log.timestamp.toDate();
+                          return `${String(d.getDate()).padStart(2, '0')}/${String(
+                            d.getMonth() + 1
+                          ).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(
+                            2,
+                            '0'
+                          )}:${String(d.getMinutes()).padStart(2, '0')}`;
+                        })()
+                      : 'Pending';
+                    return (
+                      <tr key={log.id}>
+                        <td className="sticky left-0 z-10 bg-[var(--card)] py-2.5 pr-3 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                          {ts}
+                        </td>
+                        <td className="py-2.5 pr-3 font-medium text-[var(--text)] whitespace-nowrap">
+                          {log.userName || log.userId}
+                        </td>
+                        <td className="py-2.5 pr-3 capitalize whitespace-nowrap">{log.action}</td>
+                        <td className="py-2.5 pr-3 text-[var(--muted)] whitespace-nowrap">{log.collection}</td>
+                        <td className="py-2.5 font-mono text-[11px] text-[var(--muted)] whitespace-nowrap">
+                          {log.docId}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Modal>
     </Layout>

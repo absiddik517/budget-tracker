@@ -259,38 +259,31 @@ export function EconomicCodesPage() {
   };
 
   const actions = canEdit ? (
-    <div className="flex items-center gap-2">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".csv"
-        onChange={handleCsvFile}
-        className="hidden"
-      />
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap"
-      >
-        <Upload className="w-3.5 h-3.5" />
-        <span>{t('importCsv')}</span>
-      </button>
-      <button
-        type="button"
-        onClick={openCreateModal}
-        className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
-      >
-        {t('newEconomicCode')}
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={openCreateModal}
+      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+    >
+      {t('newEconomicCode')}
+    </button>
   ) : null;
 
   return (
     <Layout title={t('navEconomicCodes')} actions={actions}>
-      <div className="space-y-4">
-        {/* Filters & Search */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="space-y-3.5 md:space-y-4">
+        {canEdit && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleCsvFile}
+            className="hidden"
+          />
+        )}
+
+        {/* Filters, Search & CSV Import */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-3">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {(['all', 'active', 'inactive'] as const).map((f) => {
               const active = statusFilter === f;
               return (
@@ -301,7 +294,7 @@ export function EconomicCodesPage() {
                     setStatusFilter(f);
                     setPage(1);
                   }}
-                  className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                  className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                     active
                       ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                       : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
@@ -313,29 +306,114 @@ export function EconomicCodesPage() {
             })}
           </div>
 
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search code, English, or বাংলা…"
-              aria-label="Search economic codes"
-              className="w-full min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            />
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <div className="relative flex-1 min-w-0 md:w-72">
+              <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search code, English, or বাংলা…"
+                aria-label="Search economic codes"
+                className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              />
+            </div>
+
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>{t('importCsv')}</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Table Card */}
+        {/* Table / Mobile Cards */}
         <div className="card-surface overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile Card List */}
+          <div className="md:hidden divide-y divide-[var(--line)]">
+            {loading ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                Loading economic codes…
+              </div>
+            ) : paged.length === 0 ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                {t('noDataFound')}
+              </div>
+            ) : (
+              paged.map((item) => {
+                const budgetCount = budgetUsageMap.get(item.code) || 0;
+                const usedAnywhere = isCodeUsedAnywhere(item.code);
+                return (
+                  <div key={item.code} className="p-3.5 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold tabular-nums text-[var(--text)]">
+                            {item.code}
+                          </span>
+                          <span className="text-xs text-[var(--muted)] tabular-nums">
+                            · {budgetCount} {budgetCount === 1 ? 'budget' : 'budgets'}
+                          </span>
+                        </div>
+                        <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
+                          {item.headName}
+                        </div>
+                        {item.headNameBn && (
+                          <div className="bn mt-0.5 break-words">{item.headNameBn}</div>
+                        )}
+                      </div>
+                      <StatusChip variant={item.active ? 'active' : 'withdrawn'}>
+                        {item.active ? t('active') : t('inactive')}
+                      </StatusChip>
+                    </div>
+
+                    {canEdit && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(item)}
+                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
+                        >
+                          {t('edit')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleActive(item)}
+                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
+                        >
+                          {item.active ? 'Deactivate' : 'Activate'}
+                        </button>
+                        {isSuperAdmin && !usedAnywhere && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(item)}
+                            className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
+                          >
+                            {t('delete')}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="py-3 px-4 font-medium whitespace-nowrap">Code</th>
+                  <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Code</th>
                   <th className="py-3 px-4 font-medium">Head of expenditure</th>
                   <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
                   <th className="py-3 px-4 font-medium whitespace-nowrap">{t('status')}</th>
@@ -365,9 +443,9 @@ export function EconomicCodesPage() {
                     return (
                       <tr
                         key={item.code}
-                        className="hover:bg-[var(--surface-subtle)] transition-colors"
+                        className="group hover:bg-[var(--surface-subtle)] transition-colors"
                       >
-                        <td className="py-3 px-4 font-semibold tabular-nums whitespace-nowrap">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-semibold tabular-nums whitespace-nowrap transition-colors">
                           {item.code}
                         </td>
                         <td className="py-3 px-4 font-medium text-[var(--text)]">
@@ -433,8 +511,28 @@ export function EconomicCodesPage() {
         onClose={() => setModalOpen(false)}
         title={editingEntry ? `Edit Code · ${editingEntry.code}` : 'New Economic Code'}
         subtitle="Master economic code entry"
+        maxWidthClass="md:max-w-lg"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setModalOpen(false)}
+              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="economic-code-form"
+              disabled={saving}
+              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            >
+              {saving ? 'Saving…' : t('save')}
+            </button>
+          </div>
+        }
       >
-        <form onSubmit={handleSave} className="space-y-4">
+        <form id="economic-code-form" onSubmit={handleSave} className="space-y-4">
           <div>
             <label htmlFor="ec-code" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
               Code (7 digits)
@@ -449,7 +547,7 @@ export function EconomicCodesPage() {
               value={codeInput}
               onChange={(e) => setCodeInput(e.target.value)}
               placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums disabled:opacity-60"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums disabled:opacity-60"
             />
           </div>
 
@@ -464,7 +562,7 @@ export function EconomicCodesPage() {
               value={headNameInput}
               onChange={(e) => setHeadNameInput(e.target.value)}
               placeholder="Entertainment"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             />
           </div>
 
@@ -479,12 +577,12 @@ export function EconomicCodesPage() {
               onChange={(e) => setHeadNameBnInput(e.target.value)}
               placeholder="আপ্যায়ন ব্যয়"
               style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             />
           </div>
 
-          <div className="flex items-center justify-between py-2">
-            <div>
+          <div className="flex items-center justify-between gap-3 py-2">
+            <div className="min-w-0">
               <div className="text-sm font-medium text-[var(--text)]">Active</div>
               <div className="text-xs text-[var(--muted)]">
                 Inactive codes are hidden from selects while existing records keep their name.
@@ -505,23 +603,6 @@ export function EconomicCodesPage() {
                   activeInput ? 'translate-x-5' : 'translate-x-0'
                 }`}
               />
-            </button>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--line)]">
-            <button
-              type="button"
-              onClick={() => setModalOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : t('save')}
             </button>
           </div>
         </form>

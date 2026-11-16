@@ -127,7 +127,7 @@ export function UsersPage() {
     <button
       type="button"
       onClick={() => setInviteOpen(true)}
-      className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
     >
       {t('newUser')}
     </button>
@@ -135,18 +135,116 @@ export function UsersPage() {
 
   return (
     <Layout title={t('navUsers')} actions={actions}>
-      <div className="space-y-5">
+      <div className="space-y-4 md:space-y-5">
         <div className="card-surface overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Mobile Card List */}
+          <div className="md:hidden divide-y divide-[var(--line)]">
+            {loading ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                Loading users…
+              </div>
+            ) : users.length === 0 && invites.length === 0 ? (
+              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                {t('noDataFound')}
+              </div>
+            ) : (
+              <>
+                {users.map((u) => (
+                  <div key={u.id} className="p-3.5 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-[var(--text)] break-words">
+                          {u.name}
+                        </div>
+                        {u.designation && (
+                          <div className="text-xs text-[var(--muted)] mt-0.5 break-words">
+                            {u.designation}
+                          </div>
+                        )}
+                        <div className="text-xs text-[var(--muted)] mt-0.5 break-all">
+                          {u.email}
+                        </div>
+                      </div>
+                      <StatusChip variant={u.status === 'active' ? 'active' : 'disabled'}>
+                        {u.status === 'active' ? t('active') : t('disabled')}
+                      </StatusChip>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <select
+                        value={u.role}
+                        onChange={(e) => handleRoleChange(u, e.target.value as Role)}
+                        aria-label={`Role for ${u.name}`}
+                        className="flex-1 min-w-0 min-h-[44px] px-3 rounded-lg text-base font-medium border border-[var(--line)] bg-[var(--card)] text-[var(--text)]"
+                      >
+                        <option value="employee">Employee</option>
+                        <option value="ddo">DDO</option>
+                        <option value="superAdmin">Super Admin</option>
+                      </select>
+
+                      {u.id !== userDoc?.id && (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(u)}
+                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)] shrink-0"
+                        >
+                          {u.status === 'disabled' ? 'Enable' : 'Disable'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {invites.map((inv) => (
+                  <div key={inv.id} className="p-3.5 space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-[var(--text)] break-words">
+                          {inv.name || inv.email.split('@')[0]}
+                        </div>
+                        {inv.designation && (
+                          <div className="text-xs text-[var(--muted)] mt-0.5 break-words">
+                            {inv.designation}
+                          </div>
+                        )}
+                        <div className="text-xs text-[var(--muted)] mt-0.5 break-all">
+                          {inv.email}
+                        </div>
+                      </div>
+                      <StatusChip variant="invited">{t('invited')}</StatusChip>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <StatusChip
+                        variant={inv.role === 'employee' ? 'roleNeutral' : 'roleAccent'}
+                      >
+                        {formatRoleLabel(inv.role)}
+                      </StatusChip>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteInvite(inv)}
+                        className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="py-3 px-4 font-medium">Name</th>
-                  <th className="py-3 px-4 font-medium">Designation</th>
-                  <th className="py-3 px-4 font-medium">Email</th>
-                  <th className="py-3 px-4 font-medium">Role</th>
-                  <th className="py-3 px-4 font-medium">Status</th>
-                  <th className="py-3 px-4 font-medium text-right">Actions</th>
+                  <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Name</th>
+                  <th className="py-3 px-4 font-medium whitespace-nowrap">Designation</th>
+                  <th className="py-3 px-4 font-medium whitespace-nowrap">Email</th>
+                  <th className="py-3 px-4 font-medium whitespace-nowrap">Role</th>
+                  <th className="py-3 px-4 font-medium whitespace-nowrap">Status</th>
+                  <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
@@ -159,8 +257,10 @@ export function UsersPage() {
                 ) : (
                   <>
                     {users.map((u) => (
-                      <tr key={u.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
-                        <td className="py-3 px-4 font-medium whitespace-nowrap">{u.name}</td>
+                      <tr key={u.id} className="group hover:bg-[var(--surface-subtle)] transition-colors">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-medium whitespace-nowrap transition-colors">
+                          {u.name}
+                        </td>
                         <td className="py-3 px-4 text-[var(--muted)] whitespace-nowrap">
                           {u.designation}
                         </td>
@@ -199,8 +299,8 @@ export function UsersPage() {
                     ))}
 
                     {invites.map((inv) => (
-                      <tr key={inv.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
-                        <td className="py-3 px-4 font-medium whitespace-nowrap">
+                      <tr key={inv.id} className="group hover:bg-[var(--surface-subtle)] transition-colors">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-medium whitespace-nowrap transition-colors">
                           {inv.name || inv.email.split('@')[0]}
                         </td>
                         <td className="py-3 px-4 text-[var(--muted)] whitespace-nowrap">
@@ -237,8 +337,8 @@ export function UsersPage() {
           </div>
         </div>
 
-        {/* Role permissions card (Screenshot 7) */}
-        <section className="card-surface p-5 space-y-2 text-sm">
+        {/* Role permissions card */}
+        <section className="card-surface p-4 md:p-5 space-y-2 text-sm">
           <h2 className="text-base font-semibold text-[var(--text)]">Role permissions</h2>
           <p className="text-[var(--muted)]">
             <strong className="text-[var(--text)]">Super Admin:</strong> everything, including users and settings, and editing/deleting approved entries or budgets.
@@ -258,8 +358,28 @@ export function UsersPage() {
         onClose={() => setInviteOpen(false)}
         title="Invite User"
         subtitle="The user will receive their assigned role automatically on first sign-in."
+        maxWidthClass="md:max-w-lg"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setInviteOpen(false)}
+              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="invite-user-form"
+              disabled={saving}
+              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            >
+              {saving ? 'Inviting…' : 'Send invite'}
+            </button>
+          </div>
+        }
       >
-        <form onSubmit={handleInviteSubmit} className="space-y-4">
+        <form id="invite-user-form" onSubmit={handleInviteSubmit} className="space-y-4">
           <div>
             <label htmlFor="inv-email" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
               Email address
@@ -271,11 +391,11 @@ export function UsersPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="officer@office.gov.bd"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label htmlFor="inv-name" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
                 Name (optional)
@@ -286,7 +406,7 @@ export function UsersPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Full name"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               />
             </div>
             <div>
@@ -300,7 +420,7 @@ export function UsersPage() {
                 value={designation}
                 onChange={(e) => setDesignation(e.target.value)}
                 placeholder="Accountant"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               />
             </div>
           </div>
@@ -313,29 +433,12 @@ export function UsersPage() {
               id="inv-role"
               value={role}
               onChange={(e) => setRole(e.target.value as Role)}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             >
               <option value="employee">Employee</option>
               <option value="ddo">DDO</option>
               <option value="superAdmin">Super Admin</option>
             </select>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--line)]">
-            <button
-              type="button"
-              onClick={() => setInviteOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Inviting…' : 'Send invite'}
-            </button>
           </div>
         </form>
       </Modal>

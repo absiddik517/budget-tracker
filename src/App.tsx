@@ -28,7 +28,7 @@ function AppGate() {
 
   if (accessState === 'loading') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--text)] gap-3">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--text)] gap-3 px-4">
         <div className="w-7 h-7 rounded-full border-2 border-[var(--line)] border-t-[var(--accent)] animate-spin" />
         <p className="text-sm text-[var(--muted)]">Verifying office access…</p>
       </div>

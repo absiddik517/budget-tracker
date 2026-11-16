@@ -5,6 +5,15 @@ const config = {
   server: {
     androidScheme: 'https',
   },
+  plugins: {
+    Keyboard: {
+      resize: 'body',
+      resizeOnFullScreen: true,
+    },
+    StatusBar: {
+      overlaysWebView: false,
+    },
+  },
 };
 
 export default config;

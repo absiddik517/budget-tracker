@@ -277,7 +277,7 @@ export function EconomicCodeSelect({
             aria-label="Search economic codes"
             aria-controls={listboxId}
             aria-activedescendant={activeOptionId}
-            className="w-full min-h-[42px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            className="w-full min-h-[44px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           />
         </div>
       </div>
@@ -286,7 +286,7 @@ export function EconomicCodeSelect({
         id={listboxId}
         role="listbox"
         aria-labelledby={label ? labelId : undefined}
-        className="overflow-y-auto flex-1 max-h-[300px] lg:max-h-[280px] p-1.5 space-y-0.5"
+        className="overflow-y-auto overscroll-contain flex-1 max-h-[52dvh] lg:max-h-[280px] p-1.5 space-y-0.5"
       >
         {filteredOptions.length === 0 ? (
           <div className="px-3 py-5 text-center space-y-2">
@@ -295,7 +295,7 @@ export function EconomicCodeSelect({
               <button
                 type="button"
                 onClick={openQuickAdd}
-                className="min-h-[40px] px-3.5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-semibold inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+                className="min-h-[44px] px-4 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-semibold inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add economic code</span>
@@ -402,7 +402,7 @@ export function EconomicCodeSelect({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {clearable && value && !disabled && <span className="w-8" aria-hidden="true" />}
+            {clearable && value && !disabled && <span className="w-10" aria-hidden="true" />}
             <ChevronDown
               className={`w-4 h-4 text-[var(--muted)] transition-transform ${
                 open ? 'rotate-180' : ''
@@ -420,7 +420,7 @@ export function EconomicCodeSelect({
               triggerRef.current?.focus();
             }}
             aria-label="Clear economic code"
-            className="absolute right-8 top-1/2 -translate-y-1/2 min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+            className="absolute right-8 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-subtle)]"
           >
             <X className="w-4 h-4" />
           </button>
@@ -441,20 +441,20 @@ export function EconomicCodeSelect({
       {/* Mobile Full-Width Bottom Sheet */}
       {open && !isDesktop && (
         <div
-          className="fixed inset-0 z-50 flex items-end bg-black/50"
+          className="fixed inset-0 z-50 flex items-end bg-black/50 overscroll-contain"
           role="presentation"
         >
           <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="relative z-10 w-full max-h-[82dvh] flex flex-col bg-[var(--card)] border-t border-[var(--line)] rounded-t-[16px] overflow-hidden safe-bottom">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)] shrink-0">
-              <span className="text-sm font-semibold text-[var(--text)]">
+          <div className="relative z-10 w-full max-h-[85dvh] flex flex-col bg-[var(--card)] border-t border-[var(--line)] rounded-t-[16px] overflow-hidden safe-bottom">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--line)] shrink-0">
+              <span className="text-sm font-semibold text-[var(--text)] truncate">
                 {label || 'Economic code'}
               </span>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close code picker"
-                className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-lg text-[var(--muted)]"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-[var(--muted)] shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -470,8 +470,27 @@ export function EconomicCodeSelect({
         onClose={() => setQuickAddOpen(false)}
         title="Add Economic Code"
         subtitle="Creates a master economic code entry"
+        footer={
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setQuickAddOpen(false)}
+              className="w-full sm:w-auto min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form={`${baseId}-qa-form`}
+              disabled={qaSaving}
+              className="w-full sm:w-auto min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            >
+              {qaSaving ? 'Saving…' : 'Save code'}
+            </button>
+          </div>
+        }
       >
-        <form onSubmit={handleQuickAddSubmit} className="space-y-4">
+        <form id={`${baseId}-qa-form`} onSubmit={handleQuickAddSubmit} className="space-y-4">
           <div>
             <label htmlFor={`${baseId}-qa-code`} className="block text-xs font-medium text-[var(--muted)] mb-1.5">
               Economic code (7 digits)
@@ -479,13 +498,14 @@ export function EconomicCodeSelect({
             <input
               id={`${baseId}-qa-code`}
               type="text"
+              inputMode="numeric"
               required
               pattern="\d{7}"
               title="Economic code must be 7 digits"
               value={qaCode}
               onChange={(e) => setQaCode(e.target.value)}
               placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
             />
           </div>
           <div>
@@ -499,7 +519,7 @@ export function EconomicCodeSelect({
               value={qaHeadName}
               onChange={(e) => setQaHeadName(e.target.value)}
               placeholder="Entertainment"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             />
           </div>
           <div>
@@ -512,24 +532,8 @@ export function EconomicCodeSelect({
               value={qaHeadNameBn}
               onChange={(e) => setQaHeadNameBn(e.target.value)}
               placeholder="আপ্যায়ন ব্যয়"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
             />
-          </div>
-          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--line)]">
-            <button
-              type="button"
-              onClick={() => setQuickAddOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={qaSaving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {qaSaving ? 'Saving…' : 'Save code'}
-            </button>
           </div>
         </form>
       </Modal>

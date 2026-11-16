@@ -200,8 +200,8 @@ export function SpendingLimitsPage() {
     return { cap, spent, spendable, budgetLabel };
   };
 
-  const addLimitFormContent = (
-    <form onSubmit={handleSaveLimit} className="space-y-3.5">
+  const renderAddLimitForm = (formId: string, showInlineButtons: boolean) => (
+    <form id={formId} onSubmit={handleSaveLimit} className="space-y-3.5">
       <div>
         <div className="text-xs font-medium text-[var(--muted)] mb-1.5">Type</div>
         <div className="grid grid-cols-2 gap-1.5">
@@ -211,7 +211,7 @@ export function SpendingLimitsPage() {
               setLimitType('code');
               setBudgetId('');
             }}
-            className={`min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
               limitType === 'code'
                 ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                 : 'border border-[var(--line)] text-[var(--text)]'
@@ -222,7 +222,7 @@ export function SpendingLimitsPage() {
           <button
             type="button"
             onClick={() => setLimitType('budget')}
-            className={`min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
               limitType === 'budget'
                 ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                 : 'border border-[var(--line)] text-[var(--text)]'
@@ -247,26 +247,26 @@ export function SpendingLimitsPage() {
           <div className="text-[11px] font-medium text-[var(--muted)]">
             Head of expenditure (from Economic Codes)
           </div>
-          <div className="text-sm font-medium text-[var(--text)] mt-0.5">
+          <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
             {headName || getHead(economicCode).headName}
           </div>
           {(headNameBn || getHead(economicCode).headNameBn) && (
-            <div className="bn mt-0.5">{headNameBn || getHead(economicCode).headNameBn}</div>
+            <div className="bn mt-0.5 break-words">{headNameBn || getHead(economicCode).headNameBn}</div>
           )}
         </div>
       )}
 
       {limitType === 'budget' && (
         <div>
-          <label htmlFor="limit-budget" className="block text-xs font-medium text-[var(--muted)] mb-1">
+          <label htmlFor={`${formId}-budget`} className="block text-xs font-medium text-[var(--muted)] mb-1">
             Budget entry
           </label>
           <select
-            id="limit-budget"
+            id={`${formId}-budget`}
             required
             value={budgetId}
             onChange={(e) => handleSelectBudget(e.target.value)}
-            className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
           >
             <option value="">Select budget…</option>
             {budgets
@@ -287,11 +287,11 @@ export function SpendingLimitsPage() {
       )}
 
       <div>
-        <label htmlFor="limit-rate" className="block text-xs font-medium text-[var(--muted)] mb-1">
+        <label htmlFor={`${formId}-rate`} className="block text-xs font-medium text-[var(--muted)] mb-1">
           Rate (% of allocation)
         </label>
         <input
-          id="limit-rate"
+          id={`${formId}-rate`}
           type="number"
           step="0.01"
           min="1"
@@ -299,42 +299,42 @@ export function SpendingLimitsPage() {
           required
           value={rateStr}
           onChange={(e) => setRateStr(e.target.value)}
-          className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
         />
       </div>
 
       <div>
-        <label htmlFor="limit-date" className="block text-xs font-medium text-[var(--muted)] mb-1">
+        <label htmlFor={`${formId}-date`} className="block text-xs font-medium text-[var(--muted)] mb-1">
           Effective date
         </label>
         <input
-          id="limit-date"
+          id={`${formId}-date`}
           type="date"
           required
           value={effectiveDate}
           onChange={(e) => setEffectiveDate(e.target.value)}
-          className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
         />
       </div>
 
       <div>
-        <label htmlFor="limit-ref" className="block text-xs font-medium text-[var(--muted)] mb-1">
+        <label htmlFor={`${formId}-ref`} className="block text-xs font-medium text-[var(--muted)] mb-1">
           Letter / reference no.
         </label>
         <input
-          id="limit-ref"
+          id={`${formId}-ref`}
           type="text"
           required
           value={refNo}
           onChange={(e) => setRefNo(e.target.value)}
           placeholder="Ref-001"
-          className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
         />
       </div>
 
       {/* Live Preview */}
       <div className="pt-2 space-y-1.5">
-        <div className="flex items-center justify-between text-xs font-medium">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium">
           <span className="tabular-nums">Cap {formatTaka(previewStats.cap)}</span>
           <span className="tabular-nums text-[var(--accent)]">
             Spendable {formatTaka(previewStats.spendable)}
@@ -348,25 +348,27 @@ export function SpendingLimitsPage() {
         </div>
       </div>
 
-      <div className="flex gap-2 pt-2">
-        <button
-          type="button"
-          onClick={() => {
-            resetForm();
-            setMobileAddOpen(false);
-          }}
-          className="flex-1 min-h-[42px] rounded-lg border border-[var(--line)] text-sm font-medium"
-        >
-          {t('cancel')}
-        </button>
-        <button
-          type="submit"
-          disabled={saving}
-          className="flex-1 min-h-[42px] rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-        >
-          {saving ? 'Saving…' : 'Save limit'}
-        </button>
-      </div>
+      {showInlineButtons && (
+        <div className="flex gap-2 pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              resetForm();
+              setMobileAddOpen(false);
+            }}
+            className="flex-1 min-h-[44px] rounded-lg border border-[var(--line)] text-sm font-medium"
+          >
+            {t('cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="flex-1 min-h-[44px] rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+          >
+            {saving ? 'Saving…' : 'Save limit'}
+          </button>
+        </div>
+      )}
     </form>
   );
 
@@ -374,7 +376,7 @@ export function SpendingLimitsPage() {
     <button
       type="button"
       onClick={() => setMobileAddOpen(true)}
-      className="xl:hidden min-h-[40px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+      className="xl:hidden min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
     >
       {t('newLimit')}
     </button>
@@ -382,13 +384,13 @@ export function SpendingLimitsPage() {
 
   return (
     <Layout title={t('navLimits')} actions={actions}>
-      <div className="space-y-4">
-        <div className="card-surface px-4 py-3 text-xs text-[var(--muted)]">
+      <div className="space-y-3.5 md:space-y-4">
+        <div className="card-surface px-3.5 md:px-4 py-3 text-xs text-[var(--muted)]">
           Caps set by the ministry or directorate. Spending on a code or budget cannot exceed rate × allocation. If both a code cap and a budget cap apply, the stricter one wins.
         </div>
 
         {/* Filter chips */}
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
           {([
             { id: 'all', label: t('all') },
             { id: 'code', label: t('onCode') },
@@ -404,7 +406,7 @@ export function SpendingLimitsPage() {
                   setFilter(tab.id);
                   setPage(1);
                 }}
-                className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                     : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
@@ -417,22 +419,102 @@ export function SpendingLimitsPage() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-          {/* Table */}
+          {/* Table / Mobile Cards */}
           <div className={`${canManage ? 'xl:col-span-8' : 'xl:col-span-12'} card-surface overflow-hidden`}>
-            <div className="overflow-x-auto">
+            {/* Mobile Card List */}
+            <div className="md:hidden divide-y divide-[var(--line)]">
+              {loading ? (
+                <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                  Loading spending limits…
+                </div>
+              ) : pagedLimits.length === 0 ? (
+                <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                  No spending limits for FY {selectedFy}.
+                </div>
+              ) : (
+                pagedLimits.map((l) => {
+                  const stats = computeRowNumbers(l);
+                  const head = getHead(l.economicCode, {
+                    headName: l.headName,
+                    headNameBn: l.headNameBn,
+                  });
+                  return (
+                    <div key={l.id} className="p-3.5 space-y-2.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border border-[var(--line)] text-[var(--muted)]">
+                              {l.type === 'code' ? 'On code' : 'On budget'}
+                            </span>
+                            <span>· {stats.budgetLabel}</span>
+                            <span className="tabular-nums">· Eff. {formatDateDisplay(l.effectiveDate)}</span>
+                          </div>
+                          <div className="text-sm font-medium text-[var(--text)] mt-1.5 break-words">
+                            <span className="tabular-nums font-semibold">{l.economicCode}</span>{' '}
+                            {head.headName}
+                          </div>
+                          {head.headNameBn && (
+                            <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
+                          )}
+                        </div>
+                        <StatusChip variant={l.status === 'active' ? 'active' : 'withdrawn'}>
+                          {l.status === 'active' ? t('active') : t('withdrawn')}
+                        </StatusChip>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 pt-1.5 text-xs border-t border-[var(--line)]/60">
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[var(--muted)]">Rate · Cap</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {l.rate}% · {formatNumberIN(stats.cap)}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[var(--muted)]">Spent</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {l.status === 'active' ? formatNumberIN(stats.spent) : '—'}
+                          </div>
+                        </div>
+                        <div className="min-w-0 text-right">
+                          <div className="text-[11px] text-[var(--muted)]">Spendable</div>
+                          <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
+                            {l.status === 'active' ? formatNumberIN(stats.spendable) : '—'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {canManage && l.status === 'active' && (
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleWithdraw(l)}
+                            className="min-h-[44px] w-full rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+                          >
+                            {t('withdraw')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                    <th className="py-3 px-4 font-medium">Type</th>
+                    <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Type</th>
                     <th className="py-3 px-4 font-medium">Code · Head</th>
                     <th className="py-3 px-4 font-medium">Budget</th>
-                    <th className="py-3 px-4 font-medium text-right">Rate</th>
-                    <th className="py-3 px-4 font-medium text-right">Cap</th>
-                    <th className="py-3 px-4 font-medium text-right">Spent</th>
-                    <th className="py-3 px-4 font-medium text-right">Spendable</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Rate</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Cap</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Spent</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Spendable</th>
                     <th className="py-3 px-4 font-medium whitespace-nowrap">Effective</th>
-                    <th className="py-3 px-4 font-medium">Status</th>
-                    {canManage && <th className="py-3 px-4 font-medium text-right">Action</th>}
+                    <th className="py-3 px-4 font-medium whitespace-nowrap">Status</th>
+                    {canManage && <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Action</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
@@ -456,8 +538,8 @@ export function SpendingLimitsPage() {
                         headNameBn: l.headNameBn,
                       });
                       return (
-                        <tr key={l.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
-                          <td className="py-3 px-4 whitespace-nowrap">
+                        <tr key={l.id} className="group hover:bg-[var(--surface-subtle)] transition-colors">
+                          <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 whitespace-nowrap transition-colors">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs border border-[var(--line)] text-[var(--muted)]">
                               {l.type === 'code' ? 'On code' : 'On budget'}
                             </span>
@@ -524,7 +606,7 @@ export function SpendingLimitsPage() {
           {canManage && (
             <div className="hidden xl:block xl:col-span-4 card-surface p-5">
               <h2 className="text-base font-semibold text-[var(--text)] mb-3">Add limit</h2>
-              {addLimitFormContent}
+              {renderAddLimitForm('desktop-limit-form', true)}
             </div>
           )}
         </div>
@@ -536,8 +618,31 @@ export function SpendingLimitsPage() {
         onClose={() => setMobileAddOpen(false)}
         title="Add limit"
         subtitle={`FY ${selectedFy}`}
+        maxWidthClass="md:max-w-lg"
+        footer={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                resetForm();
+                setMobileAddOpen(false);
+              }}
+              className="flex-1 min-h-[44px] rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="submit"
+              form="mobile-limit-form"
+              disabled={saving}
+              className="flex-1 min-h-[44px] rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            >
+              {saving ? 'Saving…' : 'Save limit'}
+            </button>
+          </div>
+        }
       >
-        {addLimitFormContent}
+        {renderAddLimitForm('mobile-limit-form', false)}
       </Modal>
     </Layout>
   );

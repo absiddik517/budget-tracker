@@ -111,32 +111,32 @@ export function DashboardPage() {
 
   return (
     <Layout title={t('navDashboard')}>
-      <div className="space-y-5">
+      <div className="space-y-3.5 md:space-y-5">
         {/* Pending Approval Banner for DDO & Super Admin */}
         {canReview && totals.pendingCount > 0 && (
           <Link
             to="/spending?status=submitted"
-            className="card-surface px-4 py-3 flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors"
+            className="card-surface px-3.5 md:px-4 py-3 min-h-[44px] flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors"
           >
-            <div className="text-sm font-medium text-[var(--text)]">
+            <div className="text-sm font-medium text-[var(--text)] min-w-0">
               <span className="font-bold text-[var(--accent)] tabular-nums">
                 {totals.pendingCount}
               </span>{' '}
               {t('pendingApproval').toLowerCase()}
             </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)]">
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)] shrink-0">
               <span>Review</span>
               <ChevronRight className="w-4 h-4" />
             </span>
           </Link>
         )}
 
-        {/* Mobile Hero Card (Screenshot 9) */}
-        <div className="lg:hidden card-surface p-5 space-y-3">
+        {/* Mobile Hero Card */}
+        <div className="lg:hidden card-surface p-4 sm:p-5 space-y-2.5">
           <div className="text-xs font-medium text-[var(--muted)]">
             {t('remainingAllocation')}
           </div>
-          <div className="text-3xl font-bold tracking-tight text-[var(--accent)] tabular-nums">
+          <div className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--accent)] tabular-nums break-words">
             {loading ? '—' : formatTaka(totals.remaining)}
           </div>
           <div className="h-2 rounded-full bg-[var(--surface-subtle)] overflow-hidden">
@@ -145,13 +145,13 @@ export function DashboardPage() {
               style={{ width: `${totals.pctUsed}%` }}
             />
           </div>
-          <div className="flex items-center justify-between text-xs text-[var(--muted)] tabular-nums">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-[var(--muted)] tabular-nums">
             <span>Spent {formatTaka(totals.totalSpent)}</span>
             <span>of {formatTaka(totals.totalAllocated)}</span>
           </div>
         </div>
 
-        {/* Desktop 4 KPI Cards (Screenshot 1) */}
+        {/* Desktop 4 KPI Cards */}
         <div className="hidden lg:grid lg:grid-cols-4 gap-4">
           <div className="card-surface p-5">
             <div className="text-xs font-medium text-[var(--muted)]">{t('totalAllocation')}</div>
@@ -180,7 +180,7 @@ export function DashboardPage() {
         </div>
 
         {/* Spending by head */}
-        <section className="card-surface p-5 space-y-4">
+        <section className="card-surface p-4 md:p-5 space-y-3.5 md:space-y-4">
           <h2 className="text-base font-semibold text-[var(--text)]">{t('spendingByHead')}</h2>
 
           {loading ? (
@@ -190,17 +190,19 @@ export function DashboardPage() {
               No allocations found for FY {selectedFy}.
             </p>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3.5 md:space-y-4">
               {headProgress.map((item) => (
                 <div key={item.economicCode} className="space-y-1.5">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="min-w-0 flex-1 break-words">
                       <span className="text-sm font-medium text-[var(--text)]">
                         {item.headName}
                       </span>{' '}
-                      {item.headNameBn && <span className="bn ml-1">{item.headNameBn}</span>}
+                      {item.headNameBn && (
+                        <span className="bn inline-block ml-0.5 break-words">{item.headNameBn}</span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <span className="text-sm font-semibold text-[var(--text)] tabular-nums">
                         {item.pct}%
                       </span>
@@ -231,20 +233,20 @@ export function DashboardPage() {
 
         {/* Recent spending */}
         <section className="card-surface overflow-hidden">
-          <div className="px-5 pt-5 pb-3 flex items-center justify-between">
+          <div className="px-4 md:px-5 pt-4 md:pt-5 pb-2.5 md:pb-3 flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('recentSpending')}</h2>
             <Link
               to="/spending"
-              className="text-xs font-medium text-[var(--accent)] hover:underline"
+              className="min-h-[36px] inline-flex items-center text-xs font-medium text-[var(--accent)] hover:underline shrink-0"
             >
               View all
             </Link>
           </div>
 
           {loading ? (
-            <p className="px-5 pb-5 text-sm text-[var(--muted)]">Loading recent spending…</p>
+            <p className="px-4 md:px-5 pb-4 md:pb-5 text-sm text-[var(--muted)]">Loading recent spending…</p>
           ) : recentSpendings.length === 0 ? (
-            <p className="px-5 pb-5 text-sm text-[var(--muted)]">
+            <p className="px-4 md:px-5 pb-4 md:pb-5 text-sm text-[var(--muted)]">
               No spending entries recorded in FY {selectedFy}.
             </p>
           ) : (
@@ -254,11 +256,11 @@ export function DashboardPage() {
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="py-2.5 px-5 font-medium">{t('date')}</th>
+                      <th className="sticky left-0 z-10 bg-[var(--card)] py-2.5 px-5 font-medium whitespace-nowrap">{t('date')}</th>
                       <th className="py-2.5 px-4 font-medium">{t('payee')}</th>
                       <th className="py-2.5 px-4 font-medium">{t('head')}</th>
-                      <th className="py-2.5 px-4 font-medium text-right">{t('gross')}</th>
-                      <th className="py-2.5 px-4 font-medium text-right">{t('net')}</th>
+                      <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">{t('gross')}</th>
+                      <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">{t('net')}</th>
                       <th className="py-2.5 px-5 font-medium">{t('status')}</th>
                     </tr>
                   </thead>
@@ -269,8 +271,8 @@ export function DashboardPage() {
                         headNameBn: s.headNameBn,
                       });
                       return (
-                        <tr key={s.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
-                          <td className="py-3 px-5 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                        <tr key={s.id} className="group hover:bg-[var(--surface-subtle)] transition-colors">
+                          <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-5 tabular-nums whitespace-nowrap text-[var(--muted)] transition-colors">
                             {formatDateDisplay(s.date)}
                           </td>
                           <td className="py-3 px-4 font-medium">{s.payee}</td>
@@ -293,7 +295,7 @@ export function DashboardPage() {
                 </table>
               </div>
 
-              {/* Mobile Compact List (Screenshot 9) */}
+              {/* Mobile Compact List */}
               <div className="sm:hidden divide-y divide-[var(--line)]">
                 {recentSpendings.map((s) => {
                   const head = getHead(s.economicCode, {
@@ -301,13 +303,13 @@ export function DashboardPage() {
                     headNameBn: s.headNameBn,
                   });
                   return (
-                    <div key={s.id} className="px-5 py-3 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
+                    <div key={s.id} className="px-4 py-2.5 flex items-center justify-between gap-2.5">
+                      <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-[var(--text)] truncate">
                           {head.headName}
                         </div>
                         <div className="text-xs text-[var(--muted)] truncate mt-0.5">
-                          {formatDateDisplay(s.date)} · {t(s.status)}
+                          {formatDateDisplay(s.date)} · {s.payee} · {t(s.status)}
                         </div>
                       </div>
                       <div className="text-right shrink-0">

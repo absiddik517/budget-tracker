@@ -41,21 +41,62 @@
   --surface-subtle: #1B2723;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background-color: var(--bg);
   color: var(--text);
   font-family: Inter, Nikosh, 'Noto Sans Bengali', sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-x: hidden;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
   padding: 0;
 }
 
+@media (min-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+}
+
+/* Prevent iOS / Android WebView zoom on input focus while keeping compact desktop inputs */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 .bn {
   font-family: Nikosh, 'Noto Sans Bengali', sans-serif;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.65;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tabular-nums {
@@ -74,6 +115,15 @@ body {
 
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Custom subtle scrollbars */
