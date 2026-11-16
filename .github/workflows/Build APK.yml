@@ -12,6 +12,7 @@ env:
   APP_NAME: Budget Tracker
   VERSION_NAME: 1.${{ github.run_number }}
   VERSION_CODE: ${{ github.run_number }}
+  NPM_CONFIG_LEGACY_PEER_DEPS: "true"
 
 jobs:
   build:
@@ -29,7 +30,7 @@ jobs:
           java-version: 17
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm install
 
       - name: Build web app
         run: npm run build
