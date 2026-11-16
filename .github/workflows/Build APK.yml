@@ -1,0 +1,129 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:{}
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: Budget Tracker
+  VERSION_NAME: 1.${{ github.run_number }}
+  VERSION_CODE: ${{ github.run_number }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build web app
+        run: npm run build
+
+      # ---------- 1. Generate logo ----------
+      - name: Generate logo
+        run: |
+          pip install pillow
+          mkdir -p assets
+          python - <<'PY'
+          from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+          S = 1024
+
+          # Background: teal -> green gradient
+          bg = ImageOps.colorize(
+              Image.linear_gradient("L").resize((S, S)),
+              black="#0F766E", white="#22C55E",
+          ).convert("RGBA")
+
+          # Foreground: rising bars + gold coin (kept inside adaptive-icon safe zone)
+          fg = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+          d = ImageDraw.Draw(fg)
+          base = 790
+          for i, h in enumerate([150, 260, 370]):
+              x = 292 + i * 160
+              d.rounded_rectangle([x, base - h, x + 120, base], radius=30, fill="#FFFFFF")
+          d.rounded_rectangle([262, base + 20, 762, base + 40], radius=10, fill=(255, 255, 255, 200))
+
+          cx, cy, r = 672, 320, 88
+          d.ellipse([cx - r, cy - r, cx + r, cy + r], fill="#FACC15", outline="#EAB308", width=10)
+          try:
+              font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 110)
+          except Exception:
+              font = ImageFont.load_default()
+          d.text((cx, cy), "$", font=font, fill="#854D0E", anchor="mm")
+
+          # Rounded full icon for legacy launchers
+          full = Image.alpha_composite(bg, fg)
+          mask = Image.new("L", (S, S), 0)
+          ImageDraw.Draw(mask).rounded_rectangle([0, 0, S, S], radius=220, fill=255)
+          full.putalpha(mask)
+
+          full.save("assets/icon-only.png")
+          fg.save("assets/icon-foreground.png")
+          bg.save("assets/icon-background.png")
+          full.save("logo.png")
+          PY
+
+      # ---------- Android project ----------
+      - name: Add Android platform if missing
+        run: |
+          if [ ! -d android ]; then
+            CORE=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
+            npm install @capacitor/android@$CORE
+            npx cap add android
+          fi
+
+      - name: Apply logo to Android app
+        run: npx -y @capacitor/assets generate --android --assetPath assets
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # ---------- 2. Version 1.<run number> ----------
+      - name: Set version
+        run: |
+          F=android/app/build.gradle
+          sed -E -i "s/versionCode[ =]+[0-9]+/versionCode $VERSION_CODE/" $F
+          sed -E -i "s/versionName[ =]+\"[^\"]*\"/versionName \"$VERSION_NAME\"/" $F
+          grep -nE "versionCode|versionName" $F
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "budget-tracker-$VERSION_NAME.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: budget-tracker-${{ env.VERSION_NAME }}
+          path: |
+            budget-tracker-${{ env.VERSION_NAME }}.apk
+            logo.png
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: ${{ env.APP_NAME }} ${{ env.VERSION_NAME }}
+          files: budget-tracker-${{ env.VERSION_NAME }}.apk
