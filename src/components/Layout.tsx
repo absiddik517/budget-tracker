@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   BarChart2,
+  BookOpen,
   LayoutGrid,
   LogOut,
   Menu,
@@ -38,6 +39,7 @@ const DESKTOP_NAV: NavItem[] = [
   { to: '/', labelKey: 'navDashboard', icon: LayoutGrid },
   { to: '/budgets', labelKey: 'navBudgets', icon: Wallet },
   { to: '/spending', labelKey: 'navSpending', icon: ReceiptText },
+  { to: '/economic-codes', labelKey: 'navEconomicCodes', icon: BookOpen },
   { to: '/vat-tax', labelKey: 'navVatTax', icon: Percent },
   { to: '/limits', labelKey: 'navLimits', icon: ShieldCheck },
   { to: '/reports', labelKey: 'navReports', icon: BarChart2 },
@@ -225,6 +227,7 @@ export function Layout({ title, actions, children }: LayoutProps) {
             onClick={() => setMoreOpen(true)}
             className={`flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${
               moreOpen ||
+              isRouteActive('/economic-codes') ||
               isRouteActive('/vat-tax') ||
               isRouteActive('/limits') ||
               isRouteActive('/users') ||
@@ -269,6 +272,14 @@ export function Layout({ title, actions, children }: LayoutProps) {
             </div>
 
             <div className="py-2 space-y-1">
+              <Link
+                to="/economic-codes"
+                onClick={() => setMoreOpen(false)}
+                className="min-h-[44px] flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+              >
+                <BookOpen className="w-5 h-5 text-[var(--muted)]" />
+                <span>{t('navEconomicCodes')}</span>
+              </Link>
               <Link
                 to="/vat-tax"
                 onClick={() => setMoreOpen(false)}

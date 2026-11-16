@@ -130,8 +130,20 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     { merge: true }
   );
 
-  // 2. Insert all 13 vatTaxRates for FY 2025-26
+  // 2. Insert all 13 vatTaxRates for FY 2025-26 and master economicCodes
   for (const r of SAMPLE_VAT_TAX_RATES_2025_26) {
+    batch.set(doc(db, 'economicCodes', r.economicCode), {
+      code: r.economicCode,
+      headName: r.description,
+      headNameBn: r.descriptionBn,
+      active: true,
+      special: r.economicCode === 'GENERAL-CONSTRUCTION',
+      createdAt: serverTimestamp(),
+      createdBy: actor.uid,
+      updatedAt: serverTimestamp(),
+      updatedBy: actor.uid,
+    });
+
     const id = `${fy}_${r.economicCode}`;
     batch.set(doc(db, 'vatTaxRates', id), {
       fiscalYear: fy,

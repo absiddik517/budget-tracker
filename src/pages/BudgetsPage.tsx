@@ -5,9 +5,11 @@ import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { ActivityList } from '../components/ActivityList';
+import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import {
@@ -22,12 +24,20 @@ import {
   canEditDeleteBudgets,
   canMarkBudgetExecuted,
 } from '../lib/permissions';
-import type { BudgetDoc, BudgetEntryType, DeductionRates } from '../types';
+import type { BudgetDoc, BudgetEntryType, DeductionRates, EconomicCodeDoc } from '../types';
+
+const DEFAULT_DEDUCTION_RATES: DeductionRates = {
+  basis: 'gross',
+  incomeTax: 5,
+  vat: [{ key: 'default', label: 'Standard', rate: 10 }],
+  serviceCharge: 0,
+};
 
 export function BudgetsPage() {
   const { userDoc } = useAuth();
   const { selectedFy, pushToast, t } = useApp();
   const { budgets, spendings, vatTaxRates, spendingLimits, loading } = useFyData(selectedFy);
+  const { getCodeEntry, getHead } = useEconomicCodes();
 
   const canCreate = userDoc ? canCreateBudgets(userDoc.role) : false;
   const canEditDelete = userDoc ? canEditDeleteBudgets(userDoc.role) : false;
@@ -44,35 +54,29 @@ export function BudgetsPage() {
   const [memoNo, setMemoNo] = useState('');
   const [memoDate, setMemoDate] = useState(todayYmd());
   const [economicCode, setEconomicCode] = useState('');
+  const [codeError, setCodeError] = useState('');
   const [headName, setHeadName] = useState('');
   const [headNameBn, setHeadNameBn] = useState('');
   const [amountStr, setAmountStr] = useState('');
   const [entryType, setEntryType] = useState<BudgetEntryType>('original');
   const [revisionOf, setRevisionOf] = useState<string>('');
-  const [deductionRates, setDeductionRates] = useState<DeductionRates>({
-    basis: 'gross',
-    incomeTax: 5,
-    vat: [{ key: 'default', label: 'Standard', rate: 10 }],
-    serviceCharge: 0,
-  });
+  const [deductionRates, setDeductionRates] = useState<DeductionRates>(DEFAULT_DEDUCTION_RATES);
   const [saving, setSaving] = useState(false);
-
-  // Edit Rates only modal (for Super Admin)
-  const [ratesOnlyOpen, setRatesOnlyOpen] = useState(false);
 
   const filteredBudgets = useMemo(() => {
     const q = search.trim().toLowerCase();
     return budgets.filter((b) => {
       if (statusFilter !== 'all' && b.status !== statusFilter) return false;
       if (!q) return true;
+      const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
       return (
         b.memoNo.toLowerCase().includes(q) ||
         b.economicCode.toLowerCase().includes(q) ||
-        b.headName.toLowerCase().includes(q) ||
-        b.headNameBn.toLowerCase().includes(q)
+        head.headName.toLowerCase().includes(q) ||
+        head.headNameBn.toLowerCase().includes(q)
       );
     });
-  }, [budgets, statusFilter, search]);
+  }, [budgets, statusFilter, search, getHead]);
 
   const pagedBudgets = useMemo(() => {
     const start = (page - 1) * 50;
@@ -117,6 +121,7 @@ export function BudgetsPage() {
     setMemoNo('');
     setMemoDate(todayYmd());
     setEconomicCode('');
+    setCodeError('');
     setHeadName('');
     setHeadNameBn('');
     setAmountStr('');
@@ -132,12 +137,14 @@ export function BudgetsPage() {
   };
 
   const openEditBudgetModal = (b: BudgetDoc) => {
+    const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
     setEditingBudget(b);
     setMemoNo(b.memoNo);
     setMemoDate(b.memoDate);
     setEconomicCode(b.economicCode);
-    setHeadName(b.headName);
-    setHeadNameBn(b.headNameBn);
+    setCodeError('');
+    setHeadName(head.headName);
+    setHeadNameBn(head.headNameBn);
     setAmountStr(formatPaisaInput(b.allocated));
     setEntryType(b.entryType);
     setRevisionOf(b.revisionOf || '');
@@ -145,16 +152,29 @@ export function BudgetsPage() {
     setFormOpen(true);
   };
 
-  const handleEconomicCodeChange = (val: string) => {
+  const handleEconomicCodeChange = (val: string, entry: EconomicCodeDoc | null) => {
     setEconomicCode(val);
+    setCodeError('');
+    if (entry) {
+      setHeadName(entry.headName);
+      setHeadNameBn(entry.headNameBn);
+    } else {
+      setHeadName('');
+      setHeadNameBn('');
+    }
     const match = vatTaxRates.find((r) => r.economicCode === val.trim());
     if (match) {
-      setHeadName(match.description);
-      setHeadNameBn(match.descriptionBn);
       setDeductionRates({
         basis: 'gross',
         incomeTax: match.incomeTax,
         vat: match.vat.map((v) => ({ ...v })),
+        serviceCharge: 0,
+      });
+    } else {
+      setDeductionRates({
+        basis: 'gross',
+        incomeTax: 5,
+        vat: [{ key: 'default', label: 'Standard', rate: 10 }],
         serviceCharge: 0,
       });
     }
@@ -162,11 +182,16 @@ export function BudgetsPage() {
 
   const handleRevisionTargetChange = (targetId: string) => {
     setRevisionOf(targetId);
+    setCodeError('');
     const target = budgets.find((b) => b.id === targetId);
     if (target) {
+      const head = getHead(target.economicCode, {
+        headName: target.headName,
+        headNameBn: target.headNameBn,
+      });
       setEconomicCode(target.economicCode);
-      setHeadName(target.headName);
-      setHeadNameBn(target.headNameBn);
+      setHeadName(head.headName);
+      setHeadNameBn(head.headNameBn);
       setDeductionRates(JSON.parse(JSON.stringify(target.deductionRates)) as DeductionRates);
     }
   };
@@ -180,6 +205,23 @@ export function BudgetsPage() {
       return;
     }
 
+    const code = economicCode.trim();
+    if (!editingBudget) {
+      const masterEntry = getCodeEntry(code);
+      if (!masterEntry) {
+        setCodeError('Select a valid economic code from Economic Codes.');
+        pushToast('error', 'Select a valid economic code.');
+        return;
+      }
+      if (masterEntry.special) {
+        setCodeError('GENERAL-CONSTRUCTION cannot be used on budgets.');
+        pushToast('error', 'GENERAL-CONSTRUCTION cannot be used on budgets.');
+        return;
+      }
+    }
+
+    const resolvedHead = getHead(code, { headName, headNameBn });
+
     setSaving(true);
     try {
       const actor = { uid: userDoc.id, name: userDoc.name };
@@ -189,8 +231,8 @@ export function BudgetsPage() {
           {
             memoNo,
             memoDate,
-            headName,
-            headNameBn,
+            headName: resolvedHead.headName,
+            headNameBn: resolvedHead.headNameBn,
             allocated: allocatedPaisa,
             deductionRates,
           },
@@ -203,9 +245,9 @@ export function BudgetsPage() {
             fiscalYear: selectedFy,
             memoNo,
             memoDate,
-            economicCode,
-            headName,
-            headNameBn,
+            economicCode: code,
+            headName: resolvedHead.headName,
+            headNameBn: resolvedHead.headNameBn,
             allocated: allocatedPaisa,
             entryType,
             revisionOf: entryType === 'revision' ? revisionOf : null,
@@ -339,6 +381,10 @@ export function BudgetsPage() {
                   ) : (
                     pagedBudgets.map((b) => {
                       const isSelected = selectedBudget?.id === b.id;
+                      const head = getHead(b.economicCode, {
+                        headName: b.headName,
+                        headNameBn: b.headNameBn,
+                      });
                       return (
                         <tr
                           key={b.id}
@@ -360,9 +406,9 @@ export function BudgetsPage() {
                           </td>
                           <td className="py-3 px-4 min-w-[190px]">
                             <div className="font-medium text-[var(--text)]">
-                              <span className="tabular-nums">{b.economicCode}</span> {b.headName}
+                              <span className="tabular-nums">{b.economicCode}</span> {head.headName}
                             </div>
-                            {b.headNameBn && <div className="bn">{b.headNameBn}</div>}
+                            {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                             {formatNumberIN(b.allocated)}
@@ -404,7 +450,13 @@ export function BudgetsPage() {
                         Deduction rates
                       </h2>
                       <p className="text-xs text-[var(--muted)] mt-0.5 tabular-nums">
-                        {selectedBudget.economicCode} · from Vat &amp; Tax Model
+                        {selectedBudget.economicCode} ·{' '}
+                        {
+                          getHead(selectedBudget.economicCode, {
+                            headName: selectedBudget.headName,
+                            headNameBn: selectedBudget.headNameBn,
+                          }).headName
+                        }
                       </p>
                     </div>
                     <StatusChip
@@ -624,11 +676,17 @@ export function BudgetsPage() {
                 <option value="">Select original budget…</option>
                 {budgets
                   .filter((b) => b.entryType === 'original')
-                  .map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.memoNo} · {b.economicCode} {b.headName} ({formatTaka(b.allocated)})
-                    </option>
-                  ))}
+                  .map((b) => {
+                    const head = getHead(b.economicCode, {
+                      headName: b.headName,
+                      headNameBn: b.headNameBn,
+                    });
+                    return (
+                      <option key={b.id} value={b.id}>
+                        {b.memoNo} · {b.economicCode} {head.headName} ({formatTaka(b.allocated)})
+                      </option>
+                    );
+                  })}
               </select>
             </div>
           )}
@@ -663,57 +721,30 @@ export function BudgetsPage() {
             </div>
           </div>
 
-          <div>
-            <label htmlFor="budget-code" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Economic code (7 digits, autocomplete from Vat &amp; Tax Model)
-            </label>
-            <input
-              id="budget-code"
-              type="text"
-              required
-              disabled={Boolean(editingBudget)}
-              list="vat-tax-codes"
-              value={economicCode}
-              onChange={(e) => handleEconomicCodeChange(e.target.value)}
-              placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums disabled:opacity-60"
-            />
-            <datalist id="vat-tax-codes">
-              {vatTaxRates.map((r) => (
-                <option key={r.id} value={r.economicCode}>
-                  {r.description} {r.descriptionBn}
-                </option>
-              ))}
-            </datalist>
-          </div>
+          <EconomicCodeSelect
+            label="Economic code"
+            value={economicCode}
+            onChange={handleEconomicCodeChange}
+            error={codeError}
+            disabled={Boolean(editingBudget) || (entryType === 'revision' && Boolean(revisionOf))}
+            includeInactive={Boolean(editingBudget)}
+            includeSpecial={false}
+            placeholder="Select economic code…"
+          />
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="budget-head" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                Head name (English)
-              </label>
-              <input
-                id="budget-head"
-                type="text"
-                required
-                value={headName}
-                onChange={(e) => setHeadName(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-              />
+          {economicCode && (
+            <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+              <div className="text-[11px] font-medium text-[var(--muted)]">
+                Head of expenditure (from Economic Codes)
+              </div>
+              <div className="text-sm font-medium text-[var(--text)] mt-0.5">
+                {headName || getHead(economicCode).headName}
+              </div>
+              {(headNameBn || getHead(economicCode).headNameBn) && (
+                <div className="bn mt-0.5">{headNameBn || getHead(economicCode).headNameBn}</div>
+              )}
             </div>
-            <div>
-              <label htmlFor="budget-head-bn" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                Head name (Bengali)
-              </label>
-              <input
-                id="budget-head-bn"
-                type="text"
-                value={headNameBn}
-                onChange={(e) => setHeadNameBn(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-              />
-            </div>
-          </div>
+          )}
 
           <div>
             <label htmlFor="budget-amount" className="block text-xs font-medium text-[var(--muted)] mb-1.5">

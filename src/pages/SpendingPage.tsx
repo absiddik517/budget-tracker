@@ -9,6 +9,7 @@ import { ActivityList } from '../components/ActivityList';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
 import { computeAvailable } from '../lib/computeAvailable';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
@@ -54,6 +55,7 @@ export function SpendingPage() {
   const { userDoc } = useAuth();
   const { selectedFy, pushToast, t } = useApp();
   const { budgets, spendings, spendingLimits, fyCodeTotals, loading } = useFyData(selectedFy);
+  const { getHead } = useEconomicCodes();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const canReview = userDoc ? canApproveRejectVoid(userDoc.role) : false;
@@ -130,15 +132,17 @@ export function SpendingPage() {
     return spendings.filter((s) => {
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
       if (!q) return true;
+      const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
       return (
         s.payee.toLowerCase().includes(q) ||
         s.billNo.toLowerCase().includes(q) ||
         (s.chequeNo || '').toLowerCase().includes(q) ||
-        s.headName.toLowerCase().includes(q) ||
+        head.headName.toLowerCase().includes(q) ||
+        head.headNameBn.toLowerCase().includes(q) ||
         s.economicCode.toLowerCase().includes(q)
       );
     });
-  }, [spendings, statusFilter, search]);
+  }, [spendings, statusFilter, search, getHead]);
 
   const pagedSpendings = useMemo(() => {
     const start = (page - 1) * 50;
@@ -312,12 +316,16 @@ export function SpendingPage() {
     setFormSaving(true);
     try {
       const actor = { uid: userDoc.id, name: userDoc.name };
+      const head = getHead(formBudget.economicCode, {
+        headName: formBudget.headName,
+        headNameBn: formBudget.headNameBn,
+      });
       const payload = {
         budgetId: formBudget.id,
         fiscalYear: selectedFy,
         economicCode: formBudget.economicCode,
-        headName: formBudget.headName,
-        headNameBn: formBudget.headNameBn,
+        headName: head.headName,
+        headNameBn: head.headNameBn,
         date: formDate,
         billNo: formBillNo,
         chequeNo: mode === 'editApproved' ? formChequeNo : null,
@@ -566,6 +574,10 @@ export function SpendingPage() {
                 ) : (
                   pagedSpendings.map((s) => {
                     const deductTotal = s.gross - s.netPayable;
+                    const head = getHead(s.economicCode, {
+                      headName: s.headName,
+                      headNameBn: s.headNameBn,
+                    });
                     return (
                       <tr
                         key={s.id}
@@ -585,8 +597,8 @@ export function SpendingPage() {
                         </td>
                         <td className="py-3 px-4 font-medium">{s.payee}</td>
                         <td className="py-3 px-4 min-w-[140px]">
-                          <div>{s.headName}</div>
-                          {s.headNameBn && <div className="bn">{s.headNameBn}</div>}
+                          <div>{head.headName}</div>
+                          {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                           {formatNumberIN(s.gross)}
@@ -644,11 +656,17 @@ export function SpendingPage() {
                 className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
               >
                 <option value="">Select active budget…</option>
-                {(editingSpending?.status === 'approved' ? budgets : activeBudgets).map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.economicCode} · {b.headName} ({b.memoNo} · Rem {formatTaka(b.remaining)})
-                  </option>
-                ))}
+                {(editingSpending?.status === 'approved' ? budgets : activeBudgets).map((b) => {
+                  const head = getHead(b.economicCode, {
+                    headName: b.headName,
+                    headNameBn: b.headNameBn,
+                  });
+                  return (
+                    <option key={b.id} value={b.id}>
+                      {b.economicCode} · {head.headName} ({b.memoNo} · Rem {formatTaka(b.remaining)})
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -956,9 +974,12 @@ export function SpendingPage() {
         title={selectedSpending ? `Bill ${selectedSpending.billNo} · ${selectedSpending.payee}` : ''}
         subtitle={
           selectedSpending
-            ? `${selectedSpending.economicCode} ${selectedSpending.headName} · ${formatDateDisplay(
-                selectedSpending.date
-              )}`
+            ? `${selectedSpending.economicCode} ${
+                getHead(selectedSpending.economicCode, {
+                  headName: selectedSpending.headName,
+                  headNameBn: selectedSpending.headNameBn,
+                }).headName
+              } · ${formatDateDisplay(selectedSpending.date)}`
             : ''
         }
         maxWidthClass="lg:max-w-xl"

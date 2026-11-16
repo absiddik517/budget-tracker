@@ -6,6 +6,7 @@ import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { formatNumberIN, formatTaka } from '../lib/money';
 import { canApproveRejectVoid } from '../lib/permissions';
@@ -30,6 +31,7 @@ export function DashboardPage() {
   const { userDoc } = useAuth();
   const { selectedFy, t } = useApp();
   const { budgets, spendings, spendingLimits, loading } = useFyData(selectedFy);
+  const { getHead } = useEconomicCodes();
 
   const canReview = userDoc ? canApproveRejectVoid(userDoc.role) : false;
 
@@ -59,6 +61,10 @@ export function DashboardPage() {
     >();
 
     for (const b of budgets) {
+      const resolved = getHead(b.economicCode, {
+        headName: b.headName,
+        headNameBn: b.headNameBn,
+      });
       const existing = map.get(b.economicCode);
       if (existing) {
         existing.allocated += b.allocated;
@@ -66,8 +72,8 @@ export function DashboardPage() {
       } else {
         map.set(b.economicCode, {
           economicCode: b.economicCode,
-          headName: b.headName,
-          headNameBn: b.headNameBn,
+          headName: resolved.headName,
+          headNameBn: resolved.headNameBn,
           allocated: b.allocated,
           spent: b.spent,
         });
@@ -99,7 +105,7 @@ export function DashboardPage() {
         };
       })
       .sort((a, b) => b.pct - a.pct);
-  }, [budgets, spendingLimits]);
+  }, [budgets, spendingLimits, getHead]);
 
   const recentSpendings = useMemo(() => spendings.slice(0, 5), [spendings]);
 
@@ -257,52 +263,64 @@ export function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--line)]">
-                    {recentSpendings.map((s) => (
-                      <tr key={s.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
-                        <td className="py-3 px-5 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                          {formatDateDisplay(s.date)}
-                        </td>
-                        <td className="py-3 px-4 font-medium">{s.payee}</td>
-                        <td className="py-3 px-4">{s.headName}</td>
-                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                          {formatNumberIN(s.gross)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                          {formatNumberIN(s.netPayable)}
-                        </td>
-                        <td className="py-3 px-5 whitespace-nowrap">
-                          <StatusChip variant={statusToChip(s.status)}>
-                            {t(s.status)}
-                          </StatusChip>
-                        </td>
-                      </tr>
-                    ))}
+                    {recentSpendings.map((s) => {
+                      const head = getHead(s.economicCode, {
+                        headName: s.headName,
+                        headNameBn: s.headNameBn,
+                      });
+                      return (
+                        <tr key={s.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
+                          <td className="py-3 px-5 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                            {formatDateDisplay(s.date)}
+                          </td>
+                          <td className="py-3 px-4 font-medium">{s.payee}</td>
+                          <td className="py-3 px-4">{head.headName}</td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                            {formatNumberIN(s.gross)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                            {formatNumberIN(s.netPayable)}
+                          </td>
+                          <td className="py-3 px-5 whitespace-nowrap">
+                            <StatusChip variant={statusToChip(s.status)}>
+                              {t(s.status)}
+                            </StatusChip>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
 
               {/* Mobile Compact List (Screenshot 9) */}
               <div className="sm:hidden divide-y divide-[var(--line)]">
-                {recentSpendings.map((s) => (
-                  <div key={s.id} className="px-5 py-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-[var(--text)] truncate">
-                        {s.headName}
+                {recentSpendings.map((s) => {
+                  const head = getHead(s.economicCode, {
+                    headName: s.headName,
+                    headNameBn: s.headNameBn,
+                  });
+                  return (
+                    <div key={s.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-[var(--text)] truncate">
+                          {head.headName}
+                        </div>
+                        <div className="text-xs text-[var(--muted)] truncate mt-0.5">
+                          {formatDateDisplay(s.date)} · {t(s.status)}
+                        </div>
                       </div>
-                      <div className="text-xs text-[var(--muted)] truncate mt-0.5">
-                        {formatDateDisplay(s.date)} · {t(s.status)}
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-semibold tabular-nums">
+                          {formatTaka(s.gross)}
+                        </div>
+                        <div className="text-xs text-[var(--muted)] tabular-nums mt-0.5">
+                          Net {formatNumberIN(s.netPayable)}
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-sm font-semibold tabular-nums">
-                        {formatTaka(s.gross)}
-                      </div>
-                      <div className="text-xs text-[var(--muted)] tabular-nums mt-0.5">
-                        Net {formatNumberIN(s.netPayable)}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}

@@ -1,7 +1,9 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
+  limit,
   query,
   runTransaction,
   serverTimestamp,
@@ -19,6 +21,7 @@ import type {
   BudgetStatus,
   DeductionRates,
   DeductionsApplied,
+  EconomicCodeDoc,
   FyCodeTotalDoc,
   OfficeSettings,
   Role,
@@ -71,6 +74,19 @@ export async function createBudgetTx(
     throw new Error('Select the original budget entry being revised.');
   }
 
+  // Validate economic code exists in master economicCodes collection
+  const masterRef = doc(db, 'economicCodes', economicCode);
+  const masterSnap = await getDoc(masterRef);
+  if (!masterSnap.exists()) {
+    throw new Error(`Economic code "${economicCode}" does not exist in Economic Codes.`);
+  }
+  const masterData = masterSnap.data() as Omit<EconomicCodeDoc, 'id'>;
+  if (masterData.special) {
+    throw new Error('GENERAL-CONSTRUCTION cannot be used directly for a budget allocation.');
+  }
+  const resolvedHeadName = masterData.headName || headName;
+  const resolvedHeadNameBn = masterData.headNameBn || headNameBn;
+
   // Check duplicate memoNo within the same FY (non-deleted)
   const dupSnap = await getDocs(
     query(
@@ -106,8 +122,8 @@ export async function createBudgetTx(
       memoNo,
       memoDate: input.memoDate,
       economicCode,
-      headName,
-      headNameBn,
+      headName: resolvedHeadName,
+      headNameBn: resolvedHeadNameBn,
       allocated: input.allocated,
       entryType: input.entryType,
       revisionOf: input.entryType === 'revision' ? input.revisionOf : null,
@@ -928,8 +944,16 @@ export async function upsertVatTaxRate(
   if (!isValidEconomicCode(code, true)) {
     throw new Error('Economic code must be 7 digits or GENERAL-CONSTRUCTION.');
   }
-  if (!input.description.trim()) throw new Error('Description is required.');
   if (input.vat.length === 0) throw new Error('At least one VAT rate entry is required.');
+
+  const masterSnap = await getDoc(doc(db, 'economicCodes', code));
+  if (!masterSnap.exists()) {
+    throw new Error(`Economic code "${code}" does not exist in Economic Codes.`);
+  }
+  const masterData = masterSnap.data() as Omit<EconomicCodeDoc, 'id'>;
+  const resolvedDesc = masterData.headName || input.description.trim();
+  const resolvedDescBn = masterData.headNameBn || input.descriptionBn.trim();
+  if (!resolvedDesc) throw new Error('Head name is required.');
 
   const docId = `${input.fiscalYear}_${code}`;
   const ref = doc(db, 'vatTaxRates', docId);
@@ -938,8 +962,8 @@ export async function upsertVatTaxRate(
   const payload = {
     fiscalYear: input.fiscalYear,
     economicCode: code,
-    description: input.description.trim(),
-    descriptionBn: input.descriptionBn.trim(),
+    description: resolvedDesc,
+    descriptionBn: resolvedDescBn,
     incomeTax: input.incomeTax,
     vat: input.vat,
     updatedAt: serverTimestamp(),
@@ -1008,9 +1032,19 @@ export async function createSpendingLimitTx(
   },
   actor: AuditActor
 ): Promise<string> {
-  if (!isValidEconomicCode(input.economicCode, false)) {
+  const code = input.economicCode.trim();
+  if (!isValidEconomicCode(code, false)) {
     throw new Error('Economic code must be 7 digits.');
   }
+  const masterSnap = await getDoc(doc(db, 'economicCodes', code));
+  if (!masterSnap.exists()) {
+    throw new Error(`Economic code "${code}" does not exist in Economic Codes.`);
+  }
+  const masterData = masterSnap.data() as Omit<EconomicCodeDoc, 'id'>;
+  if (masterData.special) {
+    throw new Error('GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+  }
+
   if (input.type === 'budget' && !input.budgetId) {
     throw new Error('Select a budget for a single-budget limit.');
   }
@@ -1028,9 +1062,9 @@ export async function createSpendingLimitTx(
     type: input.type,
     budgetId: input.type === 'budget' ? input.budgetId : null,
     fiscalYear: input.fiscalYear,
-    economicCode: input.economicCode.trim(),
-    headName: input.headName.trim(),
-    headNameBn: input.headNameBn.trim(),
+    economicCode: code,
+    headName: masterData.headName || input.headName.trim(),
+    headNameBn: masterData.headNameBn || input.headNameBn.trim(),
     rate: input.rate,
     unit: 'percent' as const,
     effectiveDate: input.effectiveDate,
@@ -1172,4 +1206,216 @@ export async function saveOfficeSettings(
     actor,
   });
   await batch.commit();
+}
+
+export async function upsertEconomicCode(
+  input: {
+    code: string;
+    headName: string;
+    headNameBn: string;
+    active: boolean;
+  },
+  actor: AuditActor
+): Promise<EconomicCodeDoc> {
+  const code = input.code.trim();
+  const isSpecial = code === 'GENERAL-CONSTRUCTION';
+  if (!isValidEconomicCode(code, true)) {
+    throw new Error('Economic code must be exactly 7 digits.');
+  }
+  const headName = input.headName.trim();
+  const headNameBn = input.headNameBn.trim();
+  if (!headName) throw new Error('Head of expenditure (English) is required.');
+
+  const ref = doc(db, 'economicCodes', code);
+  const existingSnap = await getDoc(ref);
+  const exists = existingSnap.exists();
+  const before = exists ? ({ id: existingSnap.id, ...existingSnap.data() } as Record<string, unknown>) : null;
+
+  const payload = {
+    code,
+    headName,
+    headNameBn,
+    active: input.active,
+    special: isSpecial,
+    updatedAt: serverTimestamp(),
+    updatedBy: actor.uid,
+    ...(exists ? {} : { createdAt: serverTimestamp(), createdBy: actor.uid }),
+  };
+
+  const batch = writeBatch(db);
+  batch.set(ref, payload, { merge: true });
+  writeAuditLogInBatch(batch, {
+    collection: 'economicCodes',
+    docId: code,
+    action: exists ? 'update' : 'create',
+    before,
+    after: { id: code, ...payload },
+    actor,
+  });
+  await batch.commit();
+
+  return {
+    id: code,
+    code,
+    headName,
+    headNameBn,
+    active: input.active,
+    special: isSpecial,
+  };
+}
+
+export async function setEconomicCodeActive(
+  entry: EconomicCodeDoc,
+  active: boolean,
+  actor: AuditActor
+): Promise<void> {
+  const ref = doc(db, 'economicCodes', entry.code);
+  const batch = writeBatch(db);
+  batch.update(ref, {
+    active,
+    updatedAt: serverTimestamp(),
+    updatedBy: actor.uid,
+  });
+  writeAuditLogInBatch(batch, {
+    collection: 'economicCodes',
+    docId: entry.code,
+    action: 'update',
+    before: entry as unknown as Record<string, unknown>,
+    after: { ...entry, active } as unknown as Record<string, unknown>,
+    actor,
+  });
+  await batch.commit();
+}
+
+export async function deleteEconomicCodeIfUnused(
+  entry: EconomicCodeDoc,
+  actor: AuditActor
+): Promise<void> {
+  const [budgetsSnap, ratesSnap, limitsSnap] = await Promise.all([
+    getDocs(query(collection(db, 'budgets'), where('economicCode', '==', entry.code))),
+    getDocs(query(collection(db, 'vatTaxRates'), where('economicCode', '==', entry.code), limit(1))),
+    getDocs(query(collection(db, 'spendingLimits'), where('economicCode', '==', entry.code), limit(1))),
+  ]);
+
+  const activeBudgetCount = budgetsSnap.docs.filter((d) => !d.data().deleted).length;
+  if (activeBudgetCount > 0 || !ratesSnap.empty || !limitsSnap.empty) {
+    throw new Error(
+      'This economic code is referenced by existing budgets, VAT/IT rates, or spending limits and cannot be deleted. Deactivate it instead.'
+    );
+  }
+
+  const ref = doc(db, 'economicCodes', entry.code);
+  const batch = writeBatch(db);
+  batch.delete(ref);
+  writeAuditLogInBatch(batch, {
+    collection: 'economicCodes',
+    docId: entry.code,
+    action: 'delete',
+    before: entry as unknown as Record<string, unknown>,
+    after: null,
+    actor,
+  });
+  await batch.commit();
+}
+
+export async function buildEconomicCodesFromExistingData(
+  actor: AuditActor
+): Promise<{ created: number; skipped: number }> {
+  const [existingSnap, budgetsSnap, ratesSnap, limitsSnap] = await Promise.all([
+    getDocs(collection(db, 'economicCodes')),
+    getDocs(collection(db, 'budgets')),
+    getDocs(collection(db, 'vatTaxRates')),
+    getDocs(collection(db, 'spendingLimits')),
+  ]);
+
+  const existingIds = new Set(existingSnap.docs.map((d) => d.id));
+  const collected = new Map<string, { headName: string; headNameBn: string; special: boolean }>();
+
+  // Seed GENERAL-CONSTRUCTION special entry
+  collected.set('GENERAL-CONSTRUCTION', {
+    headName: 'Construction materials or works',
+    headNameBn: 'নির্মাণ সামগ্রী বা পূর্ত কাজ',
+    special: true,
+  });
+
+  for (const d of ratesSnap.docs) {
+    const data = d.data();
+    const code = String(data.economicCode || '').trim();
+    if (!code) continue;
+    collected.set(code, {
+      headName: String(data.description || code).trim(),
+      headNameBn: String(data.descriptionBn || '').trim(),
+      special: code === 'GENERAL-CONSTRUCTION',
+    });
+  }
+
+  for (const d of budgetsSnap.docs) {
+    const data = d.data();
+    if (data.deleted) continue;
+    const code = String(data.economicCode || '').trim();
+    if (!code) continue;
+    const prev = collected.get(code);
+    collected.set(code, {
+      headName: String(data.headName || prev?.headName || code).trim(),
+      headNameBn: String(data.headNameBn || prev?.headNameBn || '').trim(),
+      special: code === 'GENERAL-CONSTRUCTION',
+    });
+  }
+
+  for (const d of limitsSnap.docs) {
+    const data = d.data();
+    const code = String(data.economicCode || '').trim();
+    if (!code) continue;
+    const prev = collected.get(code);
+    if (!prev) {
+      collected.set(code, {
+        headName: String(data.headName || code).trim(),
+        headNameBn: String(data.headNameBn || '').trim(),
+        special: code === 'GENERAL-CONSTRUCTION',
+      });
+    }
+  }
+
+  let created = 0;
+  let skipped = 0;
+  const entries = Array.from(collected.entries()).filter(([code]) => {
+    if (existingIds.has(code)) {
+      skipped++;
+      return false;
+    }
+    return isValidEconomicCode(code, true);
+  });
+
+  // Firestore writeBatch limit is 500 ops (2 ops per code: set + auditLog -> chunk by 200)
+  for (let i = 0; i < entries.length; i += 200) {
+    const chunk = entries.slice(i, i + 200);
+    const batch = writeBatch(db);
+    for (const [code, info] of chunk) {
+      const ref = doc(db, 'economicCodes', code);
+      const payload = {
+        code,
+        headName: info.headName,
+        headNameBn: info.headNameBn,
+        active: true,
+        special: info.special,
+        createdAt: serverTimestamp(),
+        createdBy: actor.uid,
+        updatedAt: serverTimestamp(),
+        updatedBy: actor.uid,
+      };
+      batch.set(ref, payload);
+      writeAuditLogInBatch(batch, {
+        collection: 'economicCodes',
+        docId: code,
+        action: 'create',
+        before: null,
+        after: { id: code, ...payload },
+        actor,
+      });
+      created++;
+    }
+    await batch.commit();
+  }
+
+  return { created, skipped };
 }

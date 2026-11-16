@@ -93,6 +93,13 @@ service cloud.firestore {
       allow create, update, delete: if isSuperAdmin();
     }
 
+    // Master Economic Codes
+    match /economicCodes/{code} {
+      allow read: if isActiveUser();
+      allow create, update: if isDdoOrSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
     // VAT & Tax Model
     match /vatTaxRates/{rateId} {
       allow read: if isActiveUser();

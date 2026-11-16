@@ -39,6 +39,15 @@ export interface OfficeSettings extends BaseAuditFields {
   language: LanguageCode;
 }
 
+export interface EconomicCodeDoc extends BaseAuditFields {
+  id: string; // same as code
+  code: string; // 7 digits or GENERAL-CONSTRUCTION
+  headName: string;
+  headNameBn: string;
+  active: boolean;
+  special: boolean; // true only for GENERAL-CONSTRUCTION
+}
+
 export interface VatVariant {
   key: string;
   label: string;

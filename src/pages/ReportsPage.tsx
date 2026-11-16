@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Layout } from '../components/Layout';
+import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { formatDateDisplay } from '../lib/dates';
 import { fromPaisa, formatNumberIN } from '../lib/money';
 
@@ -11,8 +13,10 @@ type ReportTab = 'allocations' | 'summary' | 'headSpending' | 'deductions';
 export function ReportsPage() {
   const { selectedFy, t } = useApp();
   const { budgets, spendings, loading } = useFyData(selectedFy);
+  const { getHead } = useEconomicCodes();
 
   const [tab, setTab] = useState<ReportTab>('allocations');
+  const [selectedCode, setSelectedCode] = useState('');
   const [budgetStatusFilter, setBudgetStatusFilter] = useState<'all' | 'active' | 'executed'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -20,9 +24,10 @@ export function ReportsPage() {
   const filteredBudgets = useMemo(() => {
     return budgets.filter((b) => {
       if (budgetStatusFilter !== 'all' && b.status !== budgetStatusFilter) return false;
+      if (selectedCode && b.economicCode !== selectedCode) return false;
       return true;
     });
-  }, [budgets, budgetStatusFilter]);
+  }, [budgets, budgetStatusFilter, selectedCode]);
 
   // 1. FY Allocations grouped by economic code (including revisions)
   const allocationsGrouped = useMemo(() => {
@@ -39,6 +44,7 @@ export function ReportsPage() {
       }
     >();
     for (const b of filteredBudgets) {
+      const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
       const existing = map.get(b.economicCode);
       if (existing) {
         existing.entries.push(b);
@@ -48,8 +54,8 @@ export function ReportsPage() {
       } else {
         map.set(b.economicCode, {
           economicCode: b.economicCode,
-          headName: b.headName,
-          headNameBn: b.headNameBn,
+          headName: head.headName,
+          headNameBn: head.headNameBn,
           entries: [b],
           allocated: b.allocated,
           spent: b.spent,
@@ -58,7 +64,7 @@ export function ReportsPage() {
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
-  }, [filteredBudgets]);
+  }, [filteredBudgets, getHead]);
 
   // 2. Budget Summary per head with totals
   const summaryRows = useMemo(() => {
@@ -85,11 +91,12 @@ export function ReportsPage() {
   const approvedSpendings = useMemo(() => {
     return spendings.filter((s) => {
       if (s.status !== 'approved') return false;
+      if (selectedCode && s.economicCode !== selectedCode) return false;
       if (fromDate && s.date < fromDate) return false;
       if (toDate && s.date > toDate) return false;
       return true;
     });
-  }, [spendings, fromDate, toDate]);
+  }, [spendings, selectedCode, fromDate, toDate]);
 
   const headWiseTotals = useMemo(() => {
     const map = new Map<
@@ -104,6 +111,7 @@ export function ReportsPage() {
       }
     >();
     for (const s of approvedSpendings) {
+      const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
       const ded = s.gross - s.netPayable;
       const cur = map.get(s.economicCode);
       if (cur) {
@@ -114,7 +122,7 @@ export function ReportsPage() {
       } else {
         map.set(s.economicCode, {
           economicCode: s.economicCode,
-          headName: s.headName,
+          headName: head.headName,
           count: 1,
           gross: s.gross,
           deductions: ded,
@@ -123,7 +131,7 @@ export function ReportsPage() {
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
-  }, [approvedSpendings]);
+  }, [approvedSpendings, getHead]);
 
   // 4. VAT / IT Deductions per head and overall
   const deductionRows = useMemo(() => {
@@ -140,7 +148,10 @@ export function ReportsPage() {
         netPayable: number;
       }
     >();
-    for (const s of spendings.filter((sp) => sp.status === 'approved')) {
+    for (const s of spendings.filter(
+      (sp) => sp.status === 'approved' && (!selectedCode || sp.economicCode === selectedCode)
+    )) {
+      const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
       const othersAmt = (s.deductions.others || []).reduce((acc, o) => acc + o.amount, 0);
       const cur = map.get(s.economicCode);
       if (cur) {
@@ -153,7 +164,7 @@ export function ReportsPage() {
       } else {
         map.set(s.economicCode, {
           economicCode: s.economicCode,
-          headName: s.headName,
+          headName: head.headName,
           gross: s.gross,
           vat: s.deductions.vat,
           it: s.deductions.it,
@@ -164,7 +175,7 @@ export function ReportsPage() {
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
-  }, [spendings]);
+  }, [spendings, selectedCode, getHead]);
 
   const deductionTotals = useMemo(() => {
     return deductionRows.reduce(
@@ -190,17 +201,20 @@ export function ReportsPage() {
 
     if (tab === 'allocations') {
       sheetName = 'FY Allocations';
-      rows = filteredBudgets.map((b) => ({
-        'Economic Code': b.economicCode,
-        Head: b.headName,
-        'Memo No': b.memoNo,
-        'Memo Date': formatDateDisplay(b.memoDate),
-        Type: b.entryType,
-        'Allocated (BDT)': fromPaisa(b.allocated),
-        'Spent (BDT)': fromPaisa(b.spent),
-        'Remaining (BDT)': fromPaisa(b.remaining),
-        Status: b.status,
-      }));
+      rows = filteredBudgets.map((b) => {
+        const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+        return {
+          'Economic Code': b.economicCode,
+          Head: head.headName,
+          'Memo No': b.memoNo,
+          'Memo Date': formatDateDisplay(b.memoDate),
+          Type: b.entryType,
+          'Allocated (BDT)': fromPaisa(b.allocated),
+          'Spent (BDT)': fromPaisa(b.spent),
+          'Remaining (BDT)': fromPaisa(b.remaining),
+          Status: b.status,
+        };
+      });
     } else if (tab === 'summary') {
       sheetName = 'Budget Summary';
       rows = summaryRows.map((r) => ({
@@ -212,16 +226,19 @@ export function ReportsPage() {
       }));
     } else if (tab === 'headSpending') {
       sheetName = 'Head-wise Spending';
-      rows = approvedSpendings.map((s) => ({
-        Date: formatDateDisplay(s.date),
-        Bill: s.billNo,
-        Cheque: s.chequeNo || '',
-        Payee: s.payee,
-        Head: `${s.economicCode} ${s.headName}`,
-        'Gross (BDT)': fromPaisa(s.gross),
-        'Deductions (BDT)': fromPaisa(s.gross - s.netPayable),
-        'Net (BDT)': fromPaisa(s.netPayable),
-      }));
+      rows = approvedSpendings.map((s) => {
+        const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
+        return {
+          Date: formatDateDisplay(s.date),
+          Bill: s.billNo,
+          Cheque: s.chequeNo || '',
+          Payee: s.payee,
+          Head: `${s.economicCode} ${head.headName}`,
+          'Gross (BDT)': fromPaisa(s.gross),
+          'Deductions (BDT)': fromPaisa(s.gross - s.netPayable),
+          'Net (BDT)': fromPaisa(s.netPayable),
+        };
+      });
     } else {
       sheetName = 'VAT IT Deductions';
       rows = deductionRows.map((r) => ({
@@ -297,6 +314,16 @@ export function ReportsPage() {
             FY {selectedFy}
           </span>
 
+          <div className="w-full sm:w-72">
+            <EconomicCodeSelect
+              value={selectedCode}
+              onChange={(code) => setSelectedCode(code)}
+              placeholder="All economic codes"
+              clearable
+              includeInactive
+            />
+          </div>
+
           {(tab === 'allocations' || tab === 'summary') && (
             <select
               value={budgetStatusFilter}
@@ -359,30 +386,36 @@ export function ReportsPage() {
                     </tr>
                   ) : (
                     allocationsGrouped.flatMap((group) => [
-                      ...group.entries.map((entry) => (
-                        <tr key={entry.id}>
-                          <td className="py-2.5 px-4">
-                            <span className="tabular-nums font-medium">{entry.economicCode}</span>{' '}
-                            {entry.headName}
-                          </td>
-                          <td className="py-2.5 px-4 whitespace-nowrap">{entry.memoNo}</td>
-                          <td className="py-2.5 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                            {formatDateDisplay(entry.memoDate)}
-                          </td>
-                          <td className="py-2.5 px-4 capitalize text-xs text-[var(--muted)]">
-                            {entry.entryType}
-                          </td>
-                          <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(entry.allocated)}
-                          </td>
-                          <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(entry.spent)}
-                          </td>
-                          <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(entry.remaining)}
-                          </td>
-                        </tr>
-                      )),
+                      ...group.entries.map((entry) => {
+                        const entryHead = getHead(entry.economicCode, {
+                          headName: entry.headName,
+                          headNameBn: entry.headNameBn,
+                        });
+                        return (
+                          <tr key={entry.id}>
+                            <td className="py-2.5 px-4">
+                              <span className="tabular-nums font-medium">{entry.economicCode}</span>{' '}
+                              {entryHead.headName}
+                            </td>
+                            <td className="py-2.5 px-4 whitespace-nowrap">{entry.memoNo}</td>
+                            <td className="py-2.5 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                              {formatDateDisplay(entry.memoDate)}
+                            </td>
+                            <td className="py-2.5 px-4 capitalize text-xs text-[var(--muted)]">
+                              {entry.entryType}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
+                              {formatNumberIN(entry.allocated)}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
+                              {formatNumberIN(entry.spent)}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
+                              {formatNumberIN(entry.remaining)}
+                            </td>
+                          </tr>
+                        );
+                      }),
                       group.entries.length > 1 ? (
                         <tr key={`${group.economicCode}_subtotal`} className="bg-[var(--surface-subtle)] font-semibold">
                           <td colSpan={4} className="py-2 px-4 text-xs">

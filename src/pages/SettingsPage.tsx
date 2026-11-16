@@ -8,7 +8,10 @@ import { useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
 import { db } from '../lib/firebase';
-import { saveOfficeSettings } from '../lib/firestoreOps';
+import {
+  buildEconomicCodesFromExistingData,
+  saveOfficeSettings,
+} from '../lib/firestoreOps';
 import { isValidFiscalYear } from '../lib/fy';
 import { canManageUsersSettings } from '../lib/permissions';
 import { loadSampleData } from '../lib/seedData';
@@ -28,6 +31,7 @@ export function SettingsPage() {
   const [newFyInput, setNewFyInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [migratingCodes, setMigratingCodes] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [activityModalOpen, setActivityModalOpen] = useState(false);
 
@@ -96,6 +100,28 @@ export function SettingsPage() {
       pushToast('error', err instanceof Error ? err.message : 'Failed to load sample data.');
     } finally {
       setSeeding(false);
+    }
+  };
+
+  const handleBuildEconomicCodes = async () => {
+    if (!userDoc || !isSuperAdmin) return;
+    setMigratingCodes(true);
+    try {
+      const res = await buildEconomicCodesFromExistingData({
+        uid: userDoc.id,
+        name: userDoc.name,
+      });
+      pushToast(
+        'success',
+        `Economic codes synced: ${res.created} created, ${res.skipped} already existed.`
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Failed to build economic codes.'
+      );
+    } finally {
+      setMigratingCodes(false);
     }
   };
 
@@ -317,6 +343,20 @@ export function SettingsPage() {
               >
                 <Database className="w-4 h-4" />
                 <span>{seeding ? 'Loading…' : t('loadSampleData')}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBuildEconomicCodes}
+                disabled={migratingCodes}
+                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
+              >
+                <Database className="w-4 h-4" />
+                <span>
+                  {migratingCodes
+                    ? 'Building codes…'
+                    : 'Build economic codes from existing data'}
+                </span>
               </button>
 
               <button

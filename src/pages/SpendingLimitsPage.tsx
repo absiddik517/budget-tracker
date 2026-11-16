@@ -3,19 +3,22 @@ import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
+import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { createSpendingLimitTx, withdrawSpendingLimit } from '../lib/firestoreOps';
 import { formatNumberIN, formatTaka } from '../lib/money';
 import { canManageLimits } from '../lib/permissions';
-import type { SpendingLimitDoc, SpendingLimitType } from '../types';
+import type { EconomicCodeDoc, SpendingLimitDoc, SpendingLimitType } from '../types';
 
 export function SpendingLimitsPage() {
   const { userDoc } = useAuth();
   const { selectedFy, pushToast, t } = useApp();
-  const { budgets, fyCodeTotals, spendingLimits, vatTaxRates, loading } = useFyData(selectedFy);
+  const { budgets, fyCodeTotals, spendingLimits, loading } = useFyData(selectedFy);
+  const { getCodeEntry, getHead } = useEconomicCodes();
 
   const canManage = userDoc ? canManageLimits(userDoc.role) : false;
 
@@ -26,6 +29,7 @@ export function SpendingLimitsPage() {
   // Add limit form state
   const [limitType, setLimitType] = useState<SpendingLimitType>('code');
   const [economicCode, setEconomicCode] = useState('');
+  const [codeError, setCodeError] = useState('');
   const [headName, setHeadName] = useState('');
   const [headNameBn, setHeadNameBn] = useState('');
   const [budgetId, setBudgetId] = useState('');
@@ -49,50 +53,28 @@ export function SpendingLimitsPage() {
     return filteredLimits.slice(start, start + 50);
   }, [filteredLimits, page]);
 
-  // Code options from budgets + vatTaxRates in FY
-  const codeOptions = useMemo(() => {
-    const map = new Map<string, { code: string; head: string; headBn: string }>();
-    for (const b of budgets) {
-      map.set(b.economicCode, {
-        code: b.economicCode,
-        head: b.headName,
-        headBn: b.headNameBn,
-      });
-    }
-    for (const r of vatTaxRates) {
-      if (/^\d{7}$/.test(r.economicCode) && !map.has(r.economicCode)) {
-        map.set(r.economicCode, {
-          code: r.economicCode,
-          head: r.description,
-          headBn: r.descriptionBn,
-        });
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
-  }, [budgets, vatTaxRates]);
-
-  const handleCodeChange = (val: string) => {
+  const handleCodeChange = (val: string, entry: EconomicCodeDoc | null) => {
     setEconomicCode(val);
-    const found = codeOptions.find((c) => c.code === val.trim());
-    if (found) {
-      setHeadName(found.head);
-      setHeadNameBn(found.headBn);
-    }
+    setCodeError('');
+    setHeadName(entry?.headName || '');
+    setHeadNameBn(entry?.headNameBn || '');
     if (limitType === 'budget') {
       const matchingBudget = budgets.find(
         (b) => b.economicCode === val.trim() && b.status === 'active'
       );
-      if (matchingBudget) setBudgetId(matchingBudget.id);
+      setBudgetId(matchingBudget ? matchingBudget.id : '');
     }
   };
 
   const handleSelectBudget = (id: string) => {
     setBudgetId(id);
+    setCodeError('');
     const b = budgets.find((item) => item.id === id);
     if (b) {
+      const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
       setEconomicCode(b.economicCode);
-      setHeadName(b.headName);
-      setHeadNameBn(b.headNameBn);
+      setHeadName(head.headName);
+      setHeadNameBn(head.headNameBn);
     }
   };
 
@@ -126,6 +108,7 @@ export function SpendingLimitsPage() {
   const resetForm = () => {
     setLimitType('code');
     setEconomicCode('');
+    setCodeError('');
     setHeadName('');
     setHeadNameBn('');
     setBudgetId('');
@@ -137,6 +120,19 @@ export function SpendingLimitsPage() {
   const handleSaveLimit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc || !canManage) return;
+    const code = economicCode.trim();
+    const masterEntry = getCodeEntry(code);
+    if (!masterEntry) {
+      setCodeError('Select a valid economic code from Economic Codes.');
+      pushToast('error', 'Select a valid economic code.');
+      return;
+    }
+    if (masterEntry.special) {
+      setCodeError('GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+      pushToast('error', 'GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+      return;
+    }
+
     setSaving(true);
     try {
       await createSpendingLimitTx(
@@ -144,9 +140,9 @@ export function SpendingLimitsPage() {
           type: limitType,
           budgetId: limitType === 'budget' ? budgetId : null,
           fiscalYear: selectedFy,
-          economicCode,
-          headName,
-          headNameBn,
+          economicCode: code,
+          headName: masterEntry.headName,
+          headNameBn: masterEntry.headNameBn,
           rate: parseFloat(rateStr) || 0,
           effectiveDate,
           refNo,
@@ -237,44 +233,28 @@ export function SpendingLimitsPage() {
         </div>
       </div>
 
-      <div>
-        <label htmlFor="limit-code" className="block text-xs font-medium text-[var(--muted)] mb-1">
-          Economic code
-        </label>
-        <input
-          id="limit-code"
-          type="text"
-          required
-          list="limit-code-list"
-          value={economicCode}
-          onChange={(e) => handleCodeChange(e.target.value)}
-          placeholder="3211106"
-          className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
-        />
-        <datalist id="limit-code-list">
-          {codeOptions.map((c) => (
-            <option key={c.code} value={c.code}>
-              {c.head} {c.headBn}
-            </option>
-          ))}
-        </datalist>
-      </div>
+      <EconomicCodeSelect
+        label="Economic code"
+        value={economicCode}
+        onChange={handleCodeChange}
+        error={codeError}
+        includeSpecial={false}
+        placeholder="Select economic code…"
+      />
 
-      <div>
-        <label htmlFor="limit-head" className="block text-xs font-medium text-[var(--muted)] mb-1">
-          Head (ব্যয়ের খাত)
-        </label>
-        <input
-          id="limit-head"
-          type="text"
-          required
-          value={headName}
-          onChange={(e) => setHeadName(e.target.value)}
-          placeholder="Entertainment"
-          className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-        />
-        {headNameBn && <div className="bn mt-1">{headNameBn}</div>}
-      </div>
+      {economicCode && (
+        <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+          <div className="text-[11px] font-medium text-[var(--muted)]">
+            Head of expenditure (from Economic Codes)
+          </div>
+          <div className="text-sm font-medium text-[var(--text)] mt-0.5">
+            {headName || getHead(economicCode).headName}
+          </div>
+          {(headNameBn || getHead(economicCode).headNameBn) && (
+            <div className="bn mt-0.5">{headNameBn || getHead(economicCode).headNameBn}</div>
+          )}
+        </div>
+      )}
 
       {limitType === 'budget' && (
         <div>
@@ -291,11 +271,17 @@ export function SpendingLimitsPage() {
             <option value="">Select budget…</option>
             {budgets
               .filter((b) => !economicCode.trim() || b.economicCode === economicCode.trim())
-              .map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.memoNo} · {b.economicCode} {b.headName} ({formatTaka(b.allocated)})
-                </option>
-              ))}
+              .map((b) => {
+                const head = getHead(b.economicCode, {
+                  headName: b.headName,
+                  headNameBn: b.headNameBn,
+                });
+                return (
+                  <option key={b.id} value={b.id}>
+                    {b.memoNo} · {b.economicCode} {head.headName} ({formatTaka(b.allocated)})
+                  </option>
+                );
+              })}
           </select>
         </div>
       )}
@@ -465,6 +451,10 @@ export function SpendingLimitsPage() {
                   ) : (
                     pagedLimits.map((l) => {
                       const stats = computeRowNumbers(l);
+                      const head = getHead(l.economicCode, {
+                        headName: l.headName,
+                        headNameBn: l.headNameBn,
+                      });
                       return (
                         <tr key={l.id} className="hover:bg-[var(--surface-subtle)] transition-colors">
                           <td className="py-3 px-4 whitespace-nowrap">
@@ -474,9 +464,9 @@ export function SpendingLimitsPage() {
                           </td>
                           <td className="py-3 px-4 min-w-[180px]">
                             <div className="font-medium text-[var(--text)]">
-                              <span className="tabular-nums">{l.economicCode}</span> {l.headName}
+                              <span className="tabular-nums">{l.economicCode}</span> {head.headName}
                             </div>
-                            {l.headNameBn && <div className="bn">{l.headNameBn}</div>}
+                            {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                           </td>
                           <td className="py-3 px-4 whitespace-nowrap text-xs text-[var(--muted)]">
                             {stats.budgetLabel}

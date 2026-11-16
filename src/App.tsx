@@ -8,6 +8,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { BudgetsPage } from './pages/BudgetsPage';
 import { SpendingPage } from './pages/SpendingPage';
+import { EconomicCodesPage } from './pages/EconomicCodesPage';
 import { VatTaxModelPage } from './pages/VatTaxModelPage';
 import { SpendingLimitsPage } from './pages/SpendingLimitsPage';
 import { ReportsPage } from './pages/ReportsPage';
@@ -46,6 +47,7 @@ function AppGate() {
       />
       <Route path="/budgets" element={<BudgetsPage />} />
       <Route path="/spending" element={<SpendingPage />} />
+      <Route path="/economic-codes" element={<EconomicCodesPage />} />
       <Route path="/vat-tax" element={<VatTaxModelPage />} />
       <Route path="/limits" element={<SpendingLimitsPage />} />
       <Route path="/reports" element={<ReportsPage />} />

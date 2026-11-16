@@ -3,18 +3,25 @@ import { Upload } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
+import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
-import { copyVatTaxRatesToFy, upsertVatTaxRate } from '../lib/firestoreOps';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
+import {
+  copyVatTaxRatesToFy,
+  upsertEconomicCode,
+  upsertVatTaxRate,
+} from '../lib/firestoreOps';
 import { getNextFiscalYear } from '../lib/fy';
 import { canManageRates } from '../lib/permissions';
-import type { VatTaxRateDoc, VatVariant } from '../types';
+import type { EconomicCodeDoc, VatTaxRateDoc, VatVariant } from '../types';
 
 export function VatTaxModelPage() {
   const { userDoc } = useAuth();
   const { selectedFy, pushToast, t } = useApp();
   const { vatTaxRates, loading } = useFyData(selectedFy);
+  const { getCodeEntry, getHead } = useEconomicCodes();
 
   const canEdit = userDoc ? canManageRates(userDoc.role) : false;
 
@@ -24,6 +31,7 @@ export function VatTaxModelPage() {
   const [copying, setCopying] = useState(false);
 
   const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState('');
   const [description, setDescription] = useState('');
   const [descriptionBn, setDescriptionBn] = useState('');
   const [incomeTax, setIncomeTax] = useState('0');
@@ -44,6 +52,7 @@ export function VatTaxModelPage() {
   const openCreateModal = () => {
     setEditingRate(null);
     setCode('');
+    setCodeError('');
     setDescription('');
     setDescriptionBn('');
     setIncomeTax('5');
@@ -58,10 +67,15 @@ export function VatTaxModelPage() {
 
   const openEditModal = (rate: VatTaxRateDoc) => {
     if (!canEdit) return;
+    const head = getHead(rate.economicCode, {
+      headName: rate.description,
+      headNameBn: rate.descriptionBn,
+    });
     setEditingRate(rate);
     setCode(rate.economicCode);
-    setDescription(rate.description);
-    setDescriptionBn(rate.descriptionBn);
+    setCodeError('');
+    setDescription(head.headName);
+    setDescriptionBn(head.headNameBn);
     setIncomeTax(String(rate.incomeTax));
     if (rate.vat.length > 1) {
       setHasVariants(true);
@@ -73,9 +87,24 @@ export function VatTaxModelPage() {
     setModalOpen(true);
   };
 
+  const handleCodeSelect = (val: string, entry: EconomicCodeDoc | null) => {
+    setCode(val);
+    setCodeError('');
+    setDescription(entry?.headName || '');
+    setDescriptionBn(entry?.headNameBn || '');
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc || !canEdit) return;
+    const trimmedCode = code.trim();
+    const entry = getCodeEntry(trimmedCode);
+    if (!entry) {
+      setCodeError('Select a valid economic code from Economic Codes.');
+      pushToast('error', 'Select a valid economic code.');
+      return;
+    }
+
     setSaving(true);
     try {
       const itNum = parseFloat(incomeTax) || 0;
@@ -90,9 +119,9 @@ export function VatTaxModelPage() {
       await upsertVatTaxRate(
         {
           fiscalYear: selectedFy,
-          economicCode: code,
-          description,
-          descriptionBn,
+          economicCode: trimmedCode,
+          description: entry.headName,
+          descriptionBn: entry.headNameBn,
           incomeTax: itNum,
           vat: vatArr,
         },
@@ -150,6 +179,7 @@ export function VatTaxModelPage() {
         return;
       }
 
+      const actor = { uid: userDoc.id, name: userDoc.name };
       let imported = 0;
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(',').map((c) => c.trim());
@@ -161,6 +191,18 @@ export function VatTaxModelPage() {
         const acVal = vacIdx >= 0 && cols[vacIdx] !== '' ? parseFloat(cols[vacIdx]) : NaN;
         const nonAcVal = vnacIdx >= 0 && cols[vnacIdx] !== '' ? parseFloat(cols[vnacIdx]) : NaN;
         const defaultVat = vIdx >= 0 ? parseFloat(cols[vIdx]) || 0 : 0;
+
+        if (!getCodeEntry(rowCode)) {
+          await upsertEconomicCode(
+            {
+              code: rowCode,
+              headName: rowDesc,
+              headNameBn: rowDescBn,
+              active: true,
+            },
+            actor
+          );
+        }
 
         const vatList: VatVariant[] =
           !Number.isNaN(acVal) && !Number.isNaN(nonAcVal)
@@ -180,7 +222,7 @@ export function VatTaxModelPage() {
             vat: vatList,
           },
           true,
-          { uid: userDoc.id, name: userDoc.name }
+          actor
         );
         imported++;
       }
@@ -261,6 +303,10 @@ export function VatTaxModelPage() {
                   </tr>
                 ) : (
                   pagedRates.map((rate) => {
+                    const head = getHead(rate.economicCode, {
+                      headName: rate.description,
+                      headNameBn: rate.descriptionBn,
+                    });
                     const vatStr =
                       rate.vat.length > 1
                         ? rate.vat.map((v) => `${v.rate}%`).join(' / ')
@@ -287,9 +333,9 @@ export function VatTaxModelPage() {
                         </td>
                         <td className="py-3 px-4">
                           <div className="font-medium text-[var(--text)]">
-                            {rate.description}{' '}
-                            {rate.descriptionBn && (
-                              <span className="bn ml-1">{rate.descriptionBn}</span>
+                            {head.headName}{' '}
+                            {head.headNameBn && (
+                              <span className="bn ml-1">{head.headNameBn}</span>
                             )}
                           </div>
                         </td>
@@ -330,51 +376,30 @@ export function VatTaxModelPage() {
         subtitle={`FY ${selectedFy}`}
       >
         <form onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label htmlFor="rate-code" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Economic code (7 digits or GENERAL-CONSTRUCTION)
-            </label>
-            <input
-              id="rate-code"
-              type="text"
-              required
-              disabled={Boolean(editingRate)}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums disabled:opacity-60"
-            />
-          </div>
+          <EconomicCodeSelect
+            label="Economic code (7 digits or GENERAL-CONSTRUCTION)"
+            value={code}
+            onChange={handleCodeSelect}
+            error={codeError}
+            disabled={Boolean(editingRate)}
+            includeInactive={Boolean(editingRate)}
+            includeSpecial={true}
+            placeholder="Select economic code…"
+          />
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="rate-desc" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                Description (English)
-              </label>
-              <input
-                id="rate-desc"
-                type="text"
-                required
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Entertainment"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-              />
+          {code && (
+            <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+              <div className="text-[11px] font-medium text-[var(--muted)]">
+                Head of expenditure (from Economic Codes)
+              </div>
+              <div className="text-sm font-medium text-[var(--text)] mt-0.5">
+                {description || getHead(code).headName}
+              </div>
+              {(descriptionBn || getHead(code).headNameBn) && (
+                <div className="bn mt-0.5">{descriptionBn || getHead(code).headNameBn}</div>
+              )}
             </div>
-            <div>
-              <label htmlFor="rate-desc-bn" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                Description (Bengali)
-              </label>
-              <input
-                id="rate-desc-bn"
-                type="text"
-                value={descriptionBn}
-                onChange={(e) => setDescriptionBn(e.target.value)}
-                placeholder="আপ্যায়ন ব্যয়"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-              />
-            </div>
-          </div>
+          )}
 
           <div>
             <label htmlFor="rate-it" className="block text-xs font-medium text-[var(--muted)] mb-1.5">

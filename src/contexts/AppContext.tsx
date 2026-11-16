@@ -1,15 +1,24 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getCurrentFiscalYear } from '../lib/fy';
 import { translate, type TranslationKey } from '../i18n';
 import { useAuth } from './AuthContext';
-import type { LanguageCode, OfficeSettings } from '../types';
+import type { EconomicCodeDoc, LanguageCode, OfficeSettings } from '../types';
 
 export interface ToastMessage {
   id: string;
   type: 'success' | 'error' | 'warning' | 'info';
   text: string;
+}
+
+export interface HeadLookupResult {
+  code: string;
+  headName: string;
+  headNameBn: string;
+  active: boolean;
+  special: boolean;
+  found: boolean;
 }
 
 interface AppContextValue {
@@ -22,6 +31,13 @@ interface AppContextValue {
   toasts: ToastMessage[];
   pushToast: (type: ToastMessage['type'], text: string) => void;
   dismissToast: (id: string) => void;
+  economicCodes: EconomicCodeDoc[];
+  economicCodesLoading: boolean;
+  getCodeEntry: (code: string) => EconomicCodeDoc | undefined;
+  getHead: (
+    code: string,
+    fallback?: { headName?: string; headNameBn?: string }
+  ) => HeadLookupResult;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -41,6 +57,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [officeSettings, setOfficeSettings] = useState<OfficeSettings>(defaultOfficeSettings);
   const [selectedFy, setSelectedFy] = useState<string>(defaultFy);
   const [fyInitializedFromServer, setFyInitializedFromServer] = useState(false);
+
+  const [economicCodes, setEconomicCodes] = useState<EconomicCodeDoc[]>([]);
+  const [economicCodesLoading, setEconomicCodesLoading] = useState(true);
 
   const [language, setLanguageState] = useState<LanguageCode>(() => {
     try {
@@ -86,6 +105,69 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => unsub();
   }, [accessState, fyInitializedFromServer]);
 
+  // Single Firestore listener for economicCodes across the entire app (cached offline)
+  useEffect(() => {
+    if (accessState !== 'active') {
+      setEconomicCodes([]);
+      setEconomicCodesLoading(false);
+      return;
+    }
+    setEconomicCodesLoading(true);
+    const unsub = onSnapshot(
+      collection(db, 'economicCodes'),
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as EconomicCodeDoc))
+          .sort((a, b) => a.code.localeCompare(b.code));
+        setEconomicCodes(list);
+        setEconomicCodesLoading(false);
+      },
+      () => {
+        setEconomicCodesLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [accessState]);
+
+  const economicCodeMap = useMemo(() => {
+    const map = new Map<string, EconomicCodeDoc>();
+    for (const item of economicCodes) {
+      map.set(item.code, item);
+    }
+    return map;
+  }, [economicCodes]);
+
+  const getCodeEntry = useCallback(
+    (code: string) => economicCodeMap.get(code.trim()),
+    [economicCodeMap]
+  );
+
+  const getHead = useCallback(
+    (code: string, fallback?: { headName?: string; headNameBn?: string }): HeadLookupResult => {
+      const trimmed = (code || '').trim();
+      const found = economicCodeMap.get(trimmed);
+      if (found) {
+        return {
+          code: found.code,
+          headName: found.headName,
+          headNameBn: found.headNameBn,
+          active: found.active,
+          special: found.special,
+          found: true,
+        };
+      }
+      return {
+        code: trimmed,
+        headName: fallback?.headName || trimmed,
+        headNameBn: fallback?.headNameBn || '',
+        active: true,
+        special: trimmed === 'GENERAL-CONSTRUCTION',
+        found: false,
+      };
+    },
+    [economicCodeMap]
+  );
+
   const setLanguage = useCallback((lang: LanguageCode) => {
     setLanguageState(lang);
     try {
@@ -124,6 +206,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         toasts,
         pushToast,
         dismissToast,
+        economicCodes,
+        economicCodesLoading,
+        getCodeEntry,
+        getHead,
       }}
     >
       {children}
