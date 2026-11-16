@@ -1,0 +1,6 @@
+{
+  "name": "Budget Tracker",
+  "description": "Government office budget allocation, spending with VAT/IT deductions, ministry spending cap enforcement, and financial reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

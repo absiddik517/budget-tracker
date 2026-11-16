@@ -1,0 +1,136 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@font-face {
+  font-family: 'Nikosh';
+  src: local('Nikosh'), url('/fonts/Nikosh.ttf') format('truetype');
+  font-display: swap;
+}
+
+:root {
+  --bg: #F3F6F4;
+  --card: #FFFFFF;
+  --text: #14201D;
+  --muted: #55655F;
+  --line: #DDE5E1;
+  --accent: #0F766E;
+  --accent-hover: #0D655E;
+  --accent-soft: #E4F1EE;
+  --on-accent: #FFFFFF;
+  --warn-bg: #FDF0D5;
+  --warn-text: #7A4B00;
+  --danger-bg: #FDE8E8;
+  --danger-text: #9B1C1C;
+  --surface-subtle: #EDF2EF;
+}
+
+.dark {
+  --bg: #0E1513;
+  --card: #16201D;
+  --text: #E6EEEB;
+  --muted: #9DB0A9;
+  --line: #26332F;
+  --accent: #2DD4BF;
+  --accent-hover: #5EEAD4;
+  --accent-soft: #1D2E2A;
+  --on-accent: #04201C;
+  --warn-bg: #3A2E12;
+  --warn-text: #F5D58A;
+  --danger-bg: #3B1A1A;
+  --danger-text: #FCA5A5;
+  --surface-subtle: #1B2723;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: Inter, Nikosh, 'Noto Sans Bengali', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  padding: 0;
+}
+
+.bn {
+  font-family: Nikosh, 'Noto Sans Bengali', sans-serif;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.card-surface {
+  background-color: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 9999px;
+}
+
+/* Print stylesheet for Reports PDF export */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11px !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .card-surface {
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th,
+  td {
+    border-bottom: 1px solid #e2e8f0 !important;
+    color: #000000 !important;
+  }
+}
+
+.print-only {
+  display: none;
+}

@@ -1,0 +1,31 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "auditLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "collection", "order": "ASCENDING" },
+        { "fieldPath": "docId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "budgets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fiscalYear", "order": "ASCENDING" },
+        { "fieldPath": "memoNo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "spendingLimits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fiscalYear", "order": "ASCENDING" },
+        { "fieldPath": "economicCode", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

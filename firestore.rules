@@ -1,0 +1,175 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(userPath(request.auth.uid));
+    }
+
+    function userData() {
+      return get(userPath(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
+      return userExists() && userData().status == 'active';
+    }
+
+    function role() {
+      return userData().role;
+    }
+
+    function isSuperAdmin() {
+      return isActiveUser() && role() == 'superAdmin';
+    }
+
+    function isDdo() {
+      return isActiveUser() && role() == 'ddo';
+    }
+
+    function isDdoOrSuperAdmin() {
+      return isActiveUser() && (role() == 'ddo' || role() == 'superAdmin');
+    }
+
+    function officeInitialized() {
+      return exists(/databases/$(database)/documents/settings/office);
+    }
+
+    function hasEmail() {
+      return isSignedIn() && request.auth.token.email != null;
+    }
+
+    function ownEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    // Users collection
+    match /users/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isActiveUser());
+      allow list: if isSuperAdmin() || (isSignedIn() && !officeInitialized());
+
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.status == 'active'
+        && (
+          (!officeInitialized() && request.resource.data.role == 'superAdmin')
+          || (
+            hasEmail()
+            && exists(/databases/$(database)/documents/invites/$(ownEmailLower()))
+            && request.resource.data.role == get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.role
+          )
+        );
+
+      allow update: if isSuperAdmin()
+        || (
+          isActiveUser()
+          && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt'])
+        );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // Invites collection (keyed by email lowercase)
+    match /invites/{emailLower} {
+      allow get: if isSuperAdmin()
+        || (hasEmail() && ownEmailLower() == emailLower);
+      allow list: if isSuperAdmin();
+      allow create, update: if isSuperAdmin();
+      allow delete: if isSuperAdmin()
+        || (hasEmail() && ownEmailLower() == emailLower);
+    }
+
+    // Office settings
+    match /settings/{docId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // VAT & Tax Model
+    match /vatTaxRates/{rateId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isDdoOrSuperAdmin();
+    }
+
+    // Spending Limits (Maximum Spending Rate)
+    match /spendingLimits/{limitId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isDdoOrSuperAdmin();
+    }
+
+    // Aggregated FY + Economic Code totals
+    match /fyCodeTotals/{totalId} {
+      allow read: if isActiveUser();
+      allow create, update: if isDdoOrSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Budgets (allocations and revisions)
+    match /budgets/{budgetId} {
+      allow read: if isActiveUser();
+      allow create: if isDdoOrSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (
+          isDdo()
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['spent', 'remaining', 'status', 'updatedAt', 'updatedBy'])
+        );
+      allow delete: if isSuperAdmin();
+    }
+
+    // Spendings
+    match /spendings/{spendingId} {
+      allow read: if isActiveUser();
+
+      allow create: if (
+          isSuperAdmin()
+          && request.resource.data.deleted == false
+        )
+        || (
+          isActiveUser()
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status in ['draft', 'submitted']
+          && request.resource.data.deleted == false
+        );
+
+      allow update: if isSuperAdmin()
+        || (
+          isActiveUser()
+          && resource.data.createdBy == request.auth.uid
+          && resource.data.status in ['draft', 'rejected']
+          && (
+            (request.resource.data.status in ['draft', 'submitted'] && request.resource.data.deleted == false)
+            || (request.resource.data.deleted == true && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'updatedAt', 'updatedBy']))
+          )
+        )
+        || (
+          isDdo()
+          && resource.data.status == 'submitted'
+          && request.resource.data.status in ['approved', 'rejected']
+        )
+        || (
+          isDdo()
+          && resource.data.status == 'approved'
+          && request.resource.data.status == 'voided'
+        );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // Immutable Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser()
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}
