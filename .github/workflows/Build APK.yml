@@ -22,12 +22,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Install dependencies
         run: npm install
@@ -81,8 +81,17 @@ jobs:
           PY
 
       # ---------- Android project ----------
-      - name: Add Android platform if missing
+      - name: Set up Capacitor and Android platform
         run: |
+          # Install Capacitor if the project doesn't have it yet
+          if [ ! -d node_modules/@capacitor/core ]; then
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+          fi
+          # Create config if missing (Vite builds to dist)
+          if ! ls capacitor.config.* >/dev/null 2>&1; then
+            npx cap init "$APP_NAME" com.absiddik.budgettracker --web-dir dist
+          fi
+          # Add Android platform if missing
           if [ ! -d android ]; then
             CORE=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
             npm install @capacitor/android@$CORE
