@@ -211,7 +211,7 @@ export const BillFormPreviewModal: React.FC<BillFormPreviewModalProps> = ({
               transform: `scale(${scale})`,
               transformOrigin: 'top left',
             }}
-            className="shadow-lg"
+            className="tr21-preview-sheet"
           >
             <BillForm data={formData} showSectionGuides={showSectionGuides} />
           </div>

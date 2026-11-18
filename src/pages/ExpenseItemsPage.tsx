@@ -296,7 +296,7 @@ export function ExpenseItemsPage() {
         const defaultDeductions: BillDeductionLine[] = [
           {
             id: 'it',
-            code: DEFAULT_IT_CODE,
+            code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
             name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
             rate: rates.incomeTax,
             amount: calcPercentageAmount(grossAmount, rates.incomeTax),
@@ -304,7 +304,7 @@ export function ExpenseItemsPage() {
           },
           {
             id: 'vat',
-            code: DEFAULT_VAT_CODE,
+            code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
             name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
             rate: variant.rate,
             amount: calcPercentageAmount(grossAmount, variant.rate),
@@ -641,7 +641,7 @@ export function ExpenseItemsPage() {
       initDeductions[code] = [
         {
           id: 'it',
-          code: DEFAULT_IT_CODE,
+          code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
           name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
           rate: r.incomeTax,
           amount: calcPercentageAmount(gross, r.incomeTax),
@@ -649,7 +649,7 @@ export function ExpenseItemsPage() {
         },
         {
           id: 'vat',
-          code: DEFAULT_VAT_CODE,
+          code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
           name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
           rate: firstVat.rate,
           amount: calcPercentageAmount(gross, firstVat.rate),

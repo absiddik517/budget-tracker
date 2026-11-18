@@ -215,19 +215,68 @@ body {
 .tr21-document {
   font-family: 'NikoshBAN', 'Nikosh', 'Noto Sans Bengali', sans-serif;
   color: #000000;
-  background: #ffffff;
+  background: transparent;
   line-height: 1.42;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tr21-preview-sheet .tr21-document {
+  gap: 18px;
+}
+
+.tr21-preview-sheet .tr21-page {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.tr21-page-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px;
+  color: #52525b;
+  font-family: Inter, 'NikoshBAN', 'Nikosh', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  user-select: none;
+}
+
+.dark .tr21-page-divider {
+  color: #a1a1aa;
+}
+
+.tr21-page-divider-line {
+  flex: 1;
+  border-top: 1.5px dashed #9ca3af;
+}
+
+.dark .tr21-page-divider-line {
+  border-top-color: #52525b;
+}
+
+[data-tr21-export-host="true"] .tr21-document {
+  display: block;
+  gap: 0;
+  background: #ffffff;
+}
+
+[data-tr21-export-host="true"] .tr21-page-divider,
+[data-tr21-export-host="true"] [data-no-export="true"] {
+  display: none !important;
 }
 
 .tr21-page {
   position: relative;
   width: 794px;
   min-height: 1122px;
-  padding: 36px 40px 32px 42px;
+  padding: 30px 40px 26px 40px;
   background: #ffffff;
   color: #000000;
   box-sizing: border-box;
   overflow-wrap: break-word;
+  display: flex;
+  flex-direction: column;
 }
 
 .tr21-page-2 {
@@ -287,13 +336,19 @@ body {
     background: #ffffff !important;
   }
 
+  body.tr21-printing .tr21-document {
+    display: block !important;
+    gap: 0 !important;
+    background: #ffffff !important;
+  }
+
   body.tr21-printing [data-no-export="true"] {
     display: none !important;
   }
 
   body.tr21-printing .tr21-page {
     width: 100% !important;
-    min-height: auto !important;
+    min-height: 277mm !important;
     padding: 0 !important;
     box-shadow: none !important;
     border: none !important;

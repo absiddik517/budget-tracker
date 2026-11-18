@@ -69,6 +69,7 @@ export async function exportTr21Pdf(
     'z-index: -1',
     'pointer-events: none',
   ].join(';');
+  host.setAttribute('data-tr21-export-host', 'true');
   document.body.appendChild(host);
 
   try {
@@ -231,6 +232,8 @@ export async function printTr21Form(
  * ============================================================================ */
 
 const FONT_BN = 'NikoshBAN';
+let activeDocFont = FONT_BN;
+let activeFontScale = 1;
 const CELL_BORDER: IBorderOptions = { style: BorderStyle.SINGLE, size: 6, color: '000000' };
 const NO_BORDER: IBorderOptions = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 const ALL_BORDERS: ITableCellBorders = {
@@ -250,16 +253,17 @@ function bnRun(
   text: string,
   opts?: { bold?: boolean; size?: number; underline?: boolean; color?: string }
 ): TextRun {
+  const scaledSize = Math.max(12, Math.round((opts?.size ?? 20) * activeFontScale));
   return new TextRun({
     text,
     font: {
-      name: FONT_BN,
-      ascii: FONT_BN,
-      hAnsi: FONT_BN,
-      cs: FONT_BN,
-      eastAsia: FONT_BN,
+      name: activeDocFont,
+      ascii: activeDocFont,
+      hAnsi: activeDocFont,
+      cs: activeDocFont,
+      eastAsia: activeDocFont,
     },
-    size: opts?.size ?? 20, // half-points (20 = 10pt)
+    size: scaledSize, // half-points (20 = 10pt)
     bold: opts?.bold,
     color: opts?.color ?? '000000',
     underline: opts?.underline ? { type: UnderlineType.SINGLE } : undefined,
@@ -330,6 +334,9 @@ export async function exportTr21Docx(
   data: Tr21FormData,
   billNoForFile: string
 ): Promise<SaveAndShareOutcome> {
+  activeDocFont = data.fontFamily || FONT_BN;
+  activeFontScale = (data.fontSize && Number.isFinite(data.fontSize) ? data.fontSize : 11) / 11;
+  try {
   const docChildren: Array<Paragraph | Table> = [];
 
   if (data.isDraft) {
@@ -344,76 +351,29 @@ export async function exportTr21Docx(
     );
   }
 
-  // [P1-S1] Page 1 Header Table (Top-left form number | Center Title & Office)
-  docChildren.push(
-    new Table({
-      width: { size: 10700, type: WidthType.DXA },
-      borders: NO_BORDERS,
-      rows: [
-        new TableRow({
-          children: [
-            plainCell(
-              [
-                bnPara('টি.আর.ফরম নং-২১', { size: 17, spaceAfter: 10 }),
-                bnPara('(এস.আর ১৮৩ দ্রষ্টব্য)', { size: 17, spaceAfter: 0 }),
-              ],
-              2200
-            ),
-            plainCell(
-              [
-                bnPara('ক্রয়, সরবরাহ ও সেবা বাবদ ব্যয়ের বিল', {
-                  align: AlignmentType.CENTER,
-                  bold: true,
-                  size: 28,
-                  spaceAfter: 30,
-                }),
-                bnPara(`দপ্তর ঃ ${data.officeName}`, {
-                  align: AlignmentType.CENTER,
-                  size: 22,
-                  spaceAfter: 0,
-                }),
-              ],
-              6500
-            ),
-            plainCell([bnPara('', { size: 17 })], 2000),
-          ],
-        }),
-      ],
-    })
-  );
-
-  // [P1-S2] Institutional Code 13 Boxes + Token + Date row
-  const codeCells: TableCell[] = [
-    plainCell([bnPara('প্রাতিষ্ঠানিক / অপারেশন কোড *', { size: 19, spaceAfter: 0 })], 2850),
-    ...data.institutionalCodeBoxes.map((digit) =>
-      borderedCell([bnPara(digit, { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], {
-        width: 315,
-        vAlign: VerticalAlign.CENTER,
-        margins: { top: 30, bottom: 30, left: 20, right: 20 },
-      })
-    ),
-    plainCell(
-      [
-        bnPara(data.tokenNoBn ? `টোকেন নং ${data.tokenNoBn}` : 'টোকেন নং', {
-          align: AlignmentType.CENTER,
-          size: 19,
-          spaceAfter: 0,
-        }),
-      ],
-      2200
-    ),
-    plainCell([bnPara('তারিখ', { align: AlignmentType.RIGHT, size: 19, spaceAfter: 0 })], 1555),
+  // [P1-S1] Page 1 Header Table (Top-left form no | Center title, ministry, office, address | Right mobile)
+  const centerHeaderParas: Paragraph[] = [
+    bnPara('ক্রয়, সরবরাহ ও সেবা বাবদ ব্যয়ের বিল', {
+      align: AlignmentType.CENTER,
+      bold: true,
+      size: 26,
+      spaceAfter: 20,
+    }),
   ];
-
-  docChildren.push(
-    new Table({
-      width: { size: 10700, type: WidthType.DXA },
-      borders: NO_BORDERS,
-      rows: [new TableRow({ children: codeCells })],
-    })
+  if (data.ministryName) {
+    centerHeaderParas.push(
+      bnPara(data.ministryName, { align: AlignmentType.CENTER, size: 21, spaceAfter: 10 })
+    );
+  }
+  centerHeaderParas.push(
+    bnPara(data.officeName, { align: AlignmentType.CENTER, size: 21, spaceAfter: 10 })
   );
+  if (data.officeAddress) {
+    centerHeaderParas.push(
+      bnPara(data.officeAddress, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })
+    );
+  }
 
-  // Voucher No & Bill Date row
   docChildren.push(
     new Table({
       width: { size: 10700, type: WidthType.DXA },
@@ -421,24 +381,22 @@ export async function exportTr21Docx(
       rows: [
         new TableRow({
           children: [
+            plainCell(
+              [
+                bnPara('টি.আর ফরম নং ২১', { size: 18, spaceAfter: 10 }),
+                bnPara('(এস, আর ১৮৩ দ্রষ্টব্য)', { size: 18, spaceAfter: 0 }),
+              ],
+              2400
+            ),
+            plainCell(centerHeaderParas, 5600),
             plainCell(
               [
                 bnPara(
-                  `ভাউচার নং - ${data.voucherNoBn || '...........'}   (${data.fyShortBn})`,
-                  { size: 20, spaceAfter: 40 }
+                  data.officeMobileNoBn ? `মোবাইল নং: ${data.officeMobileNoBn}` : '',
+                  { align: AlignmentType.RIGHT, bold: true, size: 18, spaceAfter: 0 }
                 ),
               ],
-              6200
-            ),
-            plainCell(
-              [
-                bnPara(`তারিখ - ${data.billDateShortBn}`, {
-                  align: AlignmentType.RIGHT,
-                  size: 20,
-                  spaceAfter: 40,
-                }),
-              ],
-              4500
+              2700
             ),
           ],
         }),
@@ -446,116 +404,209 @@ export async function exportTr21Docx(
     })
   );
 
-  // [P1-S3] Main Table Part 1 (অর্থনৈতিক কোড | বিবরণ | টাকার পরিমাণ | পয়সা + মোট টাকা ক)
-  const C1 = 1700;
-  const C2 = 6200;
-  const C3 = 1900;
-  const C4 = 900;
+  // [P1-S2] Grouped Code Boxes (1 - 4 - 4 - 4) + Token / Voucher / Dates
+  const codeRowCells: TableCell[] = [
+    plainCell([bnPara('কোড নং', { size: 20, spaceAfter: 0 })], 1950),
+  ];
+  data.institutionalCodeGroups.forEach((group, gIdx) => {
+    if (gIdx > 0) {
+      codeRowCells.push(
+        plainCell([bnPara('-', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], 240)
+      );
+    }
+    group.forEach((digit) => {
+      codeRowCells.push(
+        borderedCell(
+          [bnPara(digit, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })],
+          {
+            width: 340,
+            vAlign: VerticalAlign.CENTER,
+            margins: { top: 30, bottom: 30, left: 20, right: 20 },
+          }
+        )
+      );
+    });
+  });
+  codeRowCells.push(plainCell([bnPara('', { spaceAfter: 0 })], 3610));
+
+  docChildren.push(
+    new Table({
+      width: { size: 10700, type: WidthType.DXA },
+      borders: NO_BORDERS,
+      rows: [new TableRow({ children: codeRowCells })],
+    })
+  );
+
+  docChildren.push(
+    new Table({
+      width: { size: 10700, type: WidthType.DXA },
+      borders: NO_BORDERS,
+      rows: [
+        new TableRow({
+          children: [
+            plainCell(
+              [
+                bnPara(`টোকেন নং: ${data.tokenNoBn || '................'}`, {
+                  size: 20,
+                  spaceAfter: 30,
+                }),
+              ],
+              3000
+            ),
+            plainCell([bnPara('তারিখ: ................', { size: 20, spaceAfter: 30 })], 2500),
+            plainCell(
+              [
+                bnPara(`ভাউচার নং: ${data.voucherNoBn || '..........'}`, {
+                  size: 20,
+                  spaceAfter: 30,
+                }),
+              ],
+              2400
+            ),
+            plainCell(
+              [
+                bnPara(`তারিখ: ${data.billDateShortBn}`, {
+                  align: AlignmentType.RIGHT,
+                  size: 20,
+                  spaceAfter: 30,
+                }),
+              ],
+              2800
+            ),
+          ],
+        }),
+      ],
+    })
+  );
+
+  // [P1-S3] Main Table (অর্থনৈতিক কোড | সরবরাহকৃত দ্রব্যের বিবরণ | পরিমাণ (টাকা | পয়সা))
+  const C1 = 1850;
+  const C2 = 5750;
+  const C3 = 2150;
+  const C4 = 950;
 
   const supplierParts: string[] = [];
   if (data.supplier?.name?.trim()) supplierParts.push(`সরবরাহকারী: ${data.supplier.name.trim()}`);
   if (data.supplier?.address?.trim()) supplierParts.push(`ঠিকানা: ${data.supplier.address.trim()}`);
   if (data.supplier?.tinBin?.trim()) supplierParts.push(`টিআইএন/বিআইএন: ${data.supplier.tinBin.trim()}`);
-
-  const introParagraphs: Paragraph[] = [
-    bnPara(data.introText, { align: AlignmentType.BOTH, size: 20, spaceAfter: 40 }),
-  ];
-  if (supplierParts.length > 0) {
-    introParagraphs.push(bnPara(supplierParts.join(' · '), { size: 19, spaceAfter: 40 }));
-  }
+  const supplierLine = supplierParts.join(' · ');
 
   const mainRows: TableRow[] = [
-    // Table Header
+    // Header Row 1
     new TableRow({
       tableHeader: true,
       children: [
-        borderedCell([bnPara('অর্থনৈতিক কোড', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], { width: C1 }),
-        borderedCell([bnPara('বিবরণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], { width: C2 }),
-        borderedCell([bnPara('টাকার পরিমাণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], { width: C3 }),
-        borderedCell([bnPara('পয়সা', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], { width: C4 }),
+        borderedCell(
+          [bnPara('অর্থনৈতিক কোড', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C1, verticalMerge: VerticalMergeType.RESTART, vAlign: VerticalAlign.CENTER }
+        ),
+        borderedCell(
+          [bnPara('সরবরাহকৃত দ্রব্যের বিবরণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C2, verticalMerge: VerticalMergeType.RESTART, vAlign: VerticalAlign.CENTER }
+        ),
+        borderedCell(
+          [bnPara('পরিমাণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C3 + C4, columnSpan: 2, vAlign: VerticalAlign.CENTER }
+        ),
       ],
     }),
-    // Intro Row
+    // Header Row 2
     new TableRow({
+      tableHeader: true,
       children: [
-        borderedCell([bnPara(data.economicCodeBn, { align: AlignmentType.CENTER, size: 21, spaceAfter: 0 })], {
+        borderedCell([bnPara('', { spaceAfter: 0 })], {
           width: C1,
-          verticalMerge: VerticalMergeType.RESTART,
-          vAlign: VerticalAlign.CENTER,
+          verticalMerge: VerticalMergeType.CONTINUE,
         }),
-        borderedCell(introParagraphs, {
+        borderedCell([bnPara('', { spaceAfter: 0 })], {
           width: C2,
-          borders: { bottom: NO_BORDER },
+          verticalMerge: VerticalMergeType.CONTINUE,
         }),
-        borderedCell([bnPara('', { spaceAfter: 0 })], {
-          width: C3,
-          borders: { bottom: NO_BORDER },
-        }),
-        borderedCell([bnPara('', { spaceAfter: 0 })], {
-          width: C4,
-          borders: { bottom: NO_BORDER },
-        }),
+        borderedCell(
+          [bnPara('টাকা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })],
+          { width: C3 }
+        ),
+        borderedCell(
+          [bnPara('পয়সা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })],
+          { width: C4 }
+        ),
       ],
     }),
   ];
 
   // Item Rows
-  const itemsToRender = data.items.length > 0 ? data.items : [];
-  if (itemsToRender.length === 0) {
+  const codeCellContent = [
+    bnPara(data.economicCodeBn, { bold: true, size: 20, spaceAfter: 15 }),
+    ...(data.headNameBn ? [bnPara(data.headNameBn, { size: 19, spaceAfter: 0 })] : []),
+  ];
+
+  if (data.items.length === 0) {
     mainRows.push(
       new TableRow({
         children: [
-          borderedCell([bnPara('', { spaceAfter: 0 })], {
-            width: C1,
-            verticalMerge: VerticalMergeType.CONTINUE,
-          }),
-          borderedCell([bnPara(' ', { spaceAfter: 0 })], {
+          borderedCell(codeCellContent, { width: C1, verticalMerge: VerticalMergeType.RESTART }),
+          borderedCell([bnPara(data.purposeText, { size: 20, spaceAfter: 40 })], {
             width: C2,
-            borders: { top: NO_BORDER },
+            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
           }),
-          borderedCell([bnPara(data.gross.takaStr, { align: AlignmentType.RIGHT, spaceAfter: 0 })], {
+          borderedCell([bnPara(data.gross.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
             width: C3,
-            borders: { top: NO_BORDER },
+            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
           }),
-          borderedCell([bnPara(data.gross.paisaStr, { align: AlignmentType.CENTER, spaceAfter: 0 })], {
+          borderedCell([bnPara(data.gross.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
             width: C4,
-            borders: { top: NO_BORDER },
+            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
           }),
         ],
       })
     );
   } else {
-    itemsToRender.forEach((it, idx) => {
-      const isLast = idx === itemsToRender.length - 1;
+    data.items.forEach((it, idx) => {
+      const isFirst = idx === 0;
+      const isLast = idx === data.items.length - 1 && !supplierLine;
       mainRows.push(
         new TableRow({
           children: [
-            borderedCell([bnPara('', { spaceAfter: 0 })], {
-              width: C1,
-              verticalMerge: VerticalMergeType.CONTINUE,
-            }),
+            isFirst
+              ? borderedCell(codeCellContent, {
+                  width: C1,
+                  verticalMerge: VerticalMergeType.RESTART,
+                })
+              : borderedCell([bnPara('', { spaceAfter: 0 })], {
+                  width: C1,
+                  verticalMerge: VerticalMergeType.CONTINUE,
+                }),
             borderedCell(
               [
-                bnPara(`${it.indexBn}) ${it.description}`, {
+                bnPara(`${it.indexBn}। ${it.description}`, {
                   size: 20,
-                  indentLeft: 160,
-                  spaceAfter: isLast ? 60 : 20,
+                  spaceAfter: isLast ? 120 : 10,
                 }),
               ],
               {
                 width: C2,
-                borders: { top: NO_BORDER, bottom: isLast ? CELL_BORDER : NO_BORDER },
+                borders: {
+                  top: isFirst ? CELL_BORDER : NO_BORDER,
+                  bottom: isLast ? CELL_BORDER : NO_BORDER,
+                },
+                margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 90, right: 90 },
               }
             ),
             borderedCell([bnPara(it.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
               width: C3,
-              vAlign: VerticalAlign.BOTTOM,
-              borders: { top: NO_BORDER, bottom: isLast ? CELL_BORDER : NO_BORDER },
+              borders: {
+                top: isFirst ? CELL_BORDER : NO_BORDER,
+                bottom: isLast ? CELL_BORDER : NO_BORDER,
+              },
+              margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 80, right: 80 },
             }),
             borderedCell([bnPara(it.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
               width: C4,
-              vAlign: VerticalAlign.BOTTOM,
-              borders: { top: NO_BORDER, bottom: isLast ? CELL_BORDER : NO_BORDER },
+              borders: {
+                top: isFirst ? CELL_BORDER : NO_BORDER,
+                bottom: isLast ? CELL_BORDER : NO_BORDER,
+              },
+              margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 40, right: 40 },
             }),
           ],
         })
@@ -563,17 +614,51 @@ export async function exportTr21Docx(
     });
   }
 
+  if (supplierLine) {
+    mainRows.push(
+      new TableRow({
+        children: [
+          borderedCell([bnPara('', { spaceAfter: 0 })], {
+            width: C1,
+            verticalMerge: VerticalMergeType.CONTINUE,
+          }),
+          borderedCell([bnPara(supplierLine, { size: 18, spaceAfter: 40 })], {
+            width: C2,
+            borders: { top: NO_BORDER, bottom: CELL_BORDER },
+          }),
+          borderedCell([bnPara('', { spaceAfter: 0 })], {
+            width: C3,
+            borders: { top: NO_BORDER, bottom: CELL_BORDER },
+          }),
+          borderedCell([bnPara('', { spaceAfter: 0 })], {
+            width: C4,
+            borders: { top: NO_BORDER, bottom: CELL_BORDER },
+          }),
+        ],
+      })
+    );
+  }
+
   // Gross Total Row
   mainRows.push(
     new TableRow({
       children: [
         borderedCell([bnPara('', { spaceAfter: 0 })], { width: C1 }),
-        borderedCell([bnPara('মোট টাকা (ক)', { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })], { width: C2 }),
-        borderedCell([bnPara(data.gross.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })], { width: C3 }),
-        borderedCell([bnPara(data.gross.paisaStr, { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })], { width: C4 }),
+        borderedCell(
+          [bnPara('মোট টাকা (ক)', { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C2 }
+        ),
+        borderedCell(
+          [bnPara(data.gross.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C3 }
+        ),
+        borderedCell(
+          [bnPara(data.gross.paisaStr, { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          { width: C4 }
+        ),
       ],
     }),
-    // [P1-S4] Deductions Sub-header, Lines, Total Deduction & Net Payable
+    // [P1-S4] Deductions Sub-header
     new TableRow({
       children: [
         borderedCell([bnPara('কর্তন ও পরিশোধ', { bold: true, size: 20, spaceAfter: 0 })], {
@@ -584,33 +669,23 @@ export async function exportTr21Docx(
     })
   );
 
-  // Deduction Rows
+  // Deduction Rows with Unicode ballot box ☐
   data.deductions.forEach((d) => {
     mainRows.push(
       new TableRow({
         children: [
-          borderedCell([bnPara(d.codeBn, { size: 20, spaceAfter: 0 })], { width: C1 }),
+          borderedCell([bnPara(`☐  ${d.codeBn}`, { size: 20, spaceAfter: 0 })], { width: C1 }),
           borderedCell([bnPara(d.label, { size: 20, spaceAfter: 0 })], { width: C2 }),
-          borderedCell([bnPara(d.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], { width: C3 }),
-          borderedCell([bnPara(d.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], { width: C4 }),
+          borderedCell([bnPara(d.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
+            width: C3,
+          }),
+          borderedCell([bnPara(d.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
+            width: C4,
+          }),
         ],
       })
     );
   });
-
-  // 2 Blank Rows
-  for (let i = 0; i < data.blankDeductionRowsCount; i++) {
-    mainRows.push(
-      new TableRow({
-        children: [
-          borderedCell([bnPara(' ', { size: 18, spaceAfter: 0 })], { width: C1 }),
-          borderedCell([bnPara(' ', { size: 18, spaceAfter: 0 })], { width: C2 }),
-          borderedCell([bnPara(' ', { size: 18, spaceAfter: 0 })], { width: C3 }),
-          borderedCell([bnPara(' ', { size: 18, spaceAfter: 0 })], { width: C4 }),
-        ],
-      })
-    );
-  }
 
   // Total Deduction + Net Payable + Words
   mainRows.push(
@@ -619,9 +694,8 @@ export async function exportTr21Docx(
         borderedCell([bnPara('', { spaceAfter: 0 })], { width: C1 }),
         borderedCell(
           [
-            bnPara('কর্তন ও পরিশোধ বাবদ মোট আদায় (খ)', {
+            bnPara('কর্তন ও পরিশোধ বাবদ মোট আদায় (খ):', {
               align: AlignmentType.RIGHT,
-              bold: true,
               size: 20,
               spaceAfter: 0,
             }),
@@ -629,19 +703,21 @@ export async function exportTr21Docx(
           { width: C2 }
         ),
         borderedCell(
-          [bnPara(data.totalDeduction.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })],
+          [bnPara(data.totalDeduction.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })],
           { width: C3 }
         ),
         borderedCell(
-          [bnPara(data.totalDeduction.paisaStr, { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          [bnPara(data.totalDeduction.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })],
           { width: C4 }
         ),
       ],
     }),
     new TableRow({
       children: [
-        borderedCell([bnPara(data.netPayableCodeBn, { bold: true, size: 20, spaceAfter: 0 })], { width: C1 }),
-        borderedCell([bnPara('প্রদেয় বিল (ক-খ)', { bold: true, size: 20, spaceAfter: 0 })], { width: C2 }),
+        borderedCell([bnPara(`☐  ${data.netPayableCodeBn}`, { size: 20, spaceAfter: 0 })], {
+          width: C1,
+        }),
+        borderedCell([bnPara('প্রদেয় বিল (ক-খ)', { size: 20, spaceAfter: 0 })], { width: C2 }),
         borderedCell(
           [bnPara(data.netPayable.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 20, spaceAfter: 0 })],
           { width: C3 }
@@ -654,7 +730,7 @@ export async function exportTr21Docx(
     }),
     new TableRow({
       children: [
-        borderedCell([bnPara(`টাকা (কথায়): ${data.netPayableInWords}।`, { size: 20, spaceAfter: 0 })], {
+        borderedCell([bnPara(`নেট বিল (কথায়): ${data.netPayableInWords}।`, { size: 20, spaceAfter: 0 })], {
           width: 10700,
           columnSpan: 4,
         }),
@@ -669,23 +745,80 @@ export async function exportTr21Docx(
     })
   );
 
-  // [P1-S5] Page 1 Clauses (1 to 10)
-  docChildren.push(bnPara('', { size: 12, spaceAfter: 40 }));
-  for (const clause of data.page1Clauses) {
-    const lines = clause.text.split('\n');
-    lines.forEach((line, idx) => {
-      const prefix = idx === 0 ? `${clause.numberBn}. ` : '';
-      const isSub = /^\([ক-ঙ]\)/.test(line.trim());
-      docChildren.push(
-        bnPara(`${prefix}${line}`, {
-          align: AlignmentType.BOTH,
-          size: 18,
-          indentLeft: isSub ? 360 : idx > 0 ? 180 : 0,
-          spaceAfter: idx === lines.length - 1 ? 35 : 15,
-        })
-      );
-    });
-  }
+  const pushClauseParagraphs = (
+    clauses: Tr21FormData['page1Clauses'],
+    paragraphSpaceAfter: number
+  ) => {
+    for (const clause of clauses) {
+      const isPayeeClause =
+        clause.id === '7' ||
+        clause.id === '12' ||
+        clause.text.includes('যাহার নামে ইস্যু করা হইবে') ||
+        clause.text.includes('যার নামে চেক ইস্যু করা হবে');
+      if (isPayeeClause) {
+        const colonIdx = clause.text.indexOf(':');
+        const prefix = colonIdx >= 0 ? clause.text.slice(0, colonIdx + 1) : clause.text;
+        const payeeVal =
+          data.payeeText || (colonIdx >= 0 ? clause.text.slice(colonIdx + 1).trim() : '');
+        docChildren.push(
+          new Paragraph({
+            spacing: { before: 40, after: 120, line: 260 },
+            children: [
+              bnRun(`${clause.numberBn}। ${prefix} `, { size: 20 }),
+              bnRun(payeeVal || '........................................................', {
+                size: 20,
+                bold: Boolean(payeeVal),
+              }),
+            ],
+          })
+        );
+      } else {
+        const lines = clause.text.split('\n');
+        lines.forEach((line, idx) => {
+          const prefix = idx === 0 ? `${clause.numberBn}। ` : '';
+          const isSub = /^\([ক-ঙ]\)/.test(line.trim());
+          docChildren.push(
+            bnPara(`${prefix}${line}`, {
+              align: AlignmentType.BOTH,
+              size: 19,
+              indentLeft: isSub ? 460 : 0,
+              spaceAfter: idx === lines.length - 1 ? paragraphSpaceAfter : 18,
+            })
+          );
+        });
+      }
+    }
+  };
+
+  // [P1-S5] Page 1 Clauses
+  docChildren.push(bnPara('', { size: 10, spaceAfter: 30 }));
+  pushClauseParagraphs(data.page1Clauses, 35);
+
+  // Page 1 Footer
+  docChildren.push(
+    new Table({
+      width: { size: 10700, type: WidthType.DXA },
+      borders: {
+        top: CELL_BORDER,
+        bottom: NO_BORDER,
+        left: NO_BORDER,
+        right: NO_BORDER,
+        insideHorizontal: NO_BORDER,
+        insideVertical: NO_BORDER,
+      },
+      rows: [
+        new TableRow({
+          children: [
+            plainCell([bnPara(data.footerLeftText, { size: 18, spaceAfter: 0 })], 8000),
+            plainCell(
+              [bnPara('Page 1 of 2', { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+              2700
+            ),
+          ],
+        }),
+      ],
+    })
+  );
 
   // Page Break -> Page 2
   docChildren.push(new Paragraph({ children: [new PageBreak()] }));
@@ -702,44 +835,8 @@ export async function exportTr21Docx(
     );
   }
 
-  // [P2-S1] Page 2 Clauses (11 and 12)
-  for (const clause of data.page2Clauses) {
-    const isPayeeClause =
-      clause.id === '12' || clause.text.includes('যার নামে চেক ইস্যু করা হবে');
-    if (isPayeeClause) {
-      const colonIdx = clause.text.indexOf(':');
-      const prefix = colonIdx >= 0 ? clause.text.slice(0, colonIdx + 1) : clause.text;
-      const payeeVal =
-        data.payeeText || (colonIdx >= 0 ? clause.text.slice(colonIdx + 1).trim() : '');
-      docChildren.push(
-        new Paragraph({
-          spacing: { before: 40, after: 100, line: 260 },
-          children: [
-            bnRun(`${clause.numberBn}. ${prefix} `, { size: 20 }),
-            bnRun(payeeVal ? `${payeeVal}।` : '........................................................', {
-              size: 20,
-              bold: Boolean(payeeVal),
-              underline: Boolean(payeeVal),
-            }),
-          ],
-        })
-      );
-    } else {
-      const lines = clause.text.split('\n');
-      lines.forEach((line, idx) => {
-        const prefix = idx === 0 ? `${clause.numberBn}. ` : '';
-        const isSub = /^\([ক-ঙ]\)/.test(line.trim());
-        docChildren.push(
-          bnPara(`${prefix}${line}`, {
-            align: AlignmentType.BOTH,
-            size: 19,
-            indentLeft: isSub ? 360 : 0,
-            spaceAfter: idx === lines.length - 1 ? 45 : 20,
-          })
-        );
-      });
-    }
-  }
+  // [P2-S1] Page 2 Clauses
+  pushClauseParagraphs(data.page2Clauses, 45);
 
   // [P2-S2] Signature Block (2 Columns)
   docChildren.push(
@@ -751,27 +848,70 @@ export async function exportTr21Docx(
           children: [
             plainCell(
               [
-                bnPara('* নিয়ন্ত্রণকারী/প্রতিস্বাক্ষরকারী কর্মকর্তার স্বাক্ষর', { size: 20, spaceAfter: 200 }),
-                bnPara('নাম ....................................... পদবি ......................', { size: 20, spaceAfter: 180 }),
-                bnPara('সিল', { size: 20, spaceAfter: 140 }),
-                bnPara('স্থান ................................. তারিখ ..................', { size: 20, spaceAfter: 40 }),
+                bnPara('* নিয়ন্ত্রণকারী/প্রতিস্বাক্ষরকারী কর্মকর্তার স্বাক্ষর', {
+                  bold: true,
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('......................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('নাম..................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('পদবী................................................................', {
+                  size: 19,
+                  spaceAfter: 160,
+                }),
+                bnPara('সীল..................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('স্থান................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('তারিখ..............................................................', {
+                  size: 19,
+                  spaceAfter: 40,
+                }),
               ],
               5350
             ),
             plainCell(
               [
-                bnPara('বুঝে পেয়েছি ........................................................', { size: 20, spaceAfter: 120 }),
-                bnPara('আয়ন কর্মকর্তার স্বাক্ষর', { size: 20, spaceAfter: 40 }),
-                bnPara('নাম ....................................................................', { size: 20, spaceAfter: 40 }),
-                bnPara('পদবি ...................................................................', { size: 20, spaceAfter: 160 }),
-                bnPara('সিল', { size: 20, spaceAfter: 100 }),
+                bnPara('বুঝিয়া পাইয়াছি ...................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('আয়ন ব্যয়ন কর্মকর্তার স্বাক্ষর.....................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('নাম...................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
+                bnPara('পদবী.................................................................', {
+                  size: 19,
+                  spaceAfter: 160,
+                }),
+                bnPara('সীল...................................................................', {
+                  size: 19,
+                  spaceAfter: 30,
+                }),
                 bnPara(
                   data.placeName
                     ? `স্থান ${data.placeName}`
-                    : 'স্থান ...................................................................',
-                  { size: 20, spaceAfter: 40 }
+                    : 'স্থান..................................................................',
+                  { size: 19, spaceAfter: 30 }
                 ),
-                bnPara('তারিখ ..................................................................', { size: 20, spaceAfter: 40 }),
+                bnPara('তারিখ...............................................................', {
+                  size: 19,
+                  spaceAfter: 40,
+                }),
               ],
               5350
             ),
@@ -781,24 +921,29 @@ export async function exportTr21Docx(
     })
   );
 
-  docChildren.push(bnPara('', { size: 14, spaceAfter: 80 }));
+  docChildren.push(bnPara('', { size: 12, spaceAfter: 60 }));
 
-  // [P2-S3] Side-by-side Allocation & Expense Accounting Tables inside a 3-column layout wrapper
+  // [P2-S3] Side-by-side 2-Column Allocation & Expense Accounting Tables
   const allocTable = new Table({
     width: { size: 5150, type: WidthType.DXA },
     rows: [
       new TableRow({
         children: [
-          borderedCell([bnPara('বরাদ্দের হিসাব', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara('টাকা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara('পয়সা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('বরাদ্দের হিসাব', { bold: true, size: 19, spaceAfter: 0 })], {
+            width: 3750,
+          }),
+          borderedCell([bnPara('টাকা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], {
+            width: 1400,
+          }),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('১। শেষ বিলের টাকার অঙ্ক', { size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.allocationSummary.lastBillAmount.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.allocationSummary.lastBillAmount.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('১। শেষ বিলের টাকার অংক', { size: 18, spaceAfter: 0 })], { width: 3750 }),
+          borderedCell(
+            [bnPara(data.allocationSummary.lastBillAmount.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
@@ -806,14 +951,16 @@ export async function exportTr21Docx(
           borderedCell(
             [
               bnPara(
-                `২। এ যাবত অতিরিক্ত বরাদ্দ (পত্র নং ${data.allocationSummary.additionalRefNo || '....................'})`,
+                `২। এ যাবত অতিরিক্ত বরাদ্দ (পত্র নং ${data.allocationSummary.additionalRefNo || '........'})`,
                 { size: 18, spaceAfter: 0 }
               ),
             ],
-            { width: 2950 }
+            { width: 3750 }
           ),
-          borderedCell([bnPara(data.allocationSummary.additionalAllocation.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.allocationSummary.additionalAllocation.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell(
+            [bnPara(data.allocationSummary.additionalAllocation.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
@@ -821,21 +968,25 @@ export async function exportTr21Docx(
           borderedCell(
             [
               bnPara(
-                `৩। এ যাবত যে অঙ্কের বরাদ্দ কমানো হয়েছে। (পত্র নং ${data.allocationSummary.reducedRefNo || '...................'})`,
+                `৩। এ যাবত যে অংকের বরাদ্দ কমানো হইয়াছে। (পত্র নং ${data.allocationSummary.reducedRefNo || '........'})`,
                 { size: 18, spaceAfter: 0 }
               ),
             ],
-            { width: 2950 }
+            { width: 3750 }
           ),
-          borderedCell([bnPara(data.allocationSummary.reducedAllocation.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.allocationSummary.reducedAllocation.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell(
+            [bnPara(data.allocationSummary.reducedAllocation.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('৪। নিট মোট', { bold: true, size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.allocationSummary.netTotalAllocation.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.allocationSummary.netTotalAllocation.paisaStr, { align: AlignmentType.CENTER, bold: true, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('৪। নীট মোট', { bold: true, size: 18, spaceAfter: 0 })], { width: 3750 }),
+          borderedCell(
+            [bnPara(data.allocationSummary.netTotalAllocation.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
     ],
@@ -846,37 +997,52 @@ export async function exportTr21Docx(
     rows: [
       new TableRow({
         children: [
-          borderedCell([bnPara('ব্যয়ের হিসাব', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara('টাকা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara('পয়সা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('ব্যয়ের হিসাব', { bold: true, size: 19, spaceAfter: 0 })], {
+            width: 3750,
+          }),
+          borderedCell([bnPara('টাকা', { align: AlignmentType.CENTER, bold: true, size: 19, spaceAfter: 0 })], {
+            width: 1400,
+          }),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('গত বিলের মোট জের (+)', { size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.expenseSummary.previousTotal.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.expenseSummary.previousTotal.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('গত বিলের মোট জের (+)', { size: 18, spaceAfter: 0 })], { width: 3750 }),
+          borderedCell(
+            [bnPara(data.expenseSummary.previousTotal.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('এই বিলের মোট (+)', { size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.expenseSummary.currentBillTotal.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.expenseSummary.currentBillTotal.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('এই বিলের মোট (+)', { size: 18, spaceAfter: 0 })], { width: 3750 }),
+          borderedCell(
+            [bnPara(data.expenseSummary.currentBillTotal.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('সংযুক্ত-পূর্তকর্মের বিলের টাকা', { size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.expenseSummary.attachedWorksAmount.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.expenseSummary.attachedWorksAmount.paisaStr, { align: AlignmentType.CENTER, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('সংযুক্ত পূর্তকর্মের বিলের টাকা', { size: 18, spaceAfter: 0 })], {
+            width: 3750,
+          }),
+          borderedCell(
+            [bnPara(data.expenseSummary.attachedWorksAmount.takaStr, { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
       new TableRow({
         children: [
-          borderedCell([bnPara('মোট (পরবর্তী বিলে জের টেনে নেওয়া হবে।', { bold: true, size: 18, spaceAfter: 0 })], { width: 2950 }),
-          borderedCell([bnPara(data.expenseSummary.cumulativeTotal.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 18, spaceAfter: 0 })], { width: 1450 }),
-          borderedCell([bnPara(data.expenseSummary.cumulativeTotal.paisaStr, { align: AlignmentType.CENTER, bold: true, size: 18, spaceAfter: 0 })], { width: 750 }),
+          borderedCell([bnPara('মোট (পরবর্তী বিলের জের টানিয়া)', { bold: true, size: 18, spaceAfter: 0 })], {
+            width: 3750,
+          }),
+          borderedCell(
+            [bnPara(data.expenseSummary.cumulativeTotal.takaStr, { align: AlignmentType.RIGHT, bold: true, size: 18, spaceAfter: 0 })],
+            { width: 1400 }
+          ),
         ],
       }),
     ],
@@ -908,19 +1074,19 @@ export async function exportTr21Docx(
     })
   );
 
-  // [P2-S4] Accounting Office Block (হিসাবরক্ষণ অফিসের ব্যবহারের জন্য) & Cheque Issuer Signature
+  // [P2-S4] Accounting Office Block (হিসাবরক্ষণ অফিসে ব্যবহারের জন্য)
   docChildren.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      border: { top: CELL_BORDER },
-      spacing: { before: 220, after: 40 },
-      children: [bnRun('হিসাবরক্ষণ অফিসের ব্যবহারের জন্য', { bold: true, size: 20 })],
+      border: { bottom: CELL_BORDER },
+      spacing: { before: 120, after: 80 },
+      children: [bnRun('হিসাবরক্ষণ অফিসে ব্যবহারের জন্য', { bold: true, size: 20 })],
     })
   );
   docChildren.push(
     bnPara(
-      'প্রদানের জন্য পাস করা হল, টাকা ....................................... কথায়.......................................................................',
-      { size: 19, spaceAfter: 240 }
+      'প্রদানের জন্য পাস করা হইল টাকা .................................. কথায় .....................................................................',
+      { size: 19, spaceAfter: 480 }
     )
   );
 
@@ -933,33 +1099,28 @@ export async function exportTr21Docx(
           children: [
             plainCell(
               [
-                bnPara('_____________________________', { size: 18, spaceAfter: 20 }),
-                bnPara('অডিটর (স্বাক্ষর)', { size: 19, spaceAfter: 20 }),
-                bnPara('নাম .......................................', { size: 19, spaceAfter: 20 }),
-                bnPara('তাং.......................................', { size: 19, spaceAfter: 180 }),
-                bnPara('সিল', { size: 19, spaceAfter: 20 }),
+                bnPara('অডিটর (স্বাক্ষর)', { bold: true, size: 19, spaceAfter: 20 }),
+                bnPara('নাম...................................', { size: 19, spaceAfter: 20 }),
+                bnPara('তাং ..................................', { size: 19, spaceAfter: 20 }),
               ],
               3550
             ),
             plainCell(
               [
-                bnPara('_____________________________', { size: 18, spaceAfter: 20 }),
                 bnPara('সুপার (স্বাক্ষর)', { size: 19, spaceAfter: 20 }),
-                bnPara('নাম .......................................', { size: 19, spaceAfter: 20 }),
-                bnPara('তাং.......................................', { size: 19, spaceAfter: 180 }),
-                bnPara('সিল', { size: 19, spaceAfter: 180 }),
-                bnPara('চেক নং ..............................', { size: 19, spaceAfter: 20 }),
+                bnPara('নাম...................................', { size: 19, spaceAfter: 20 }),
+                bnPara('তাং...................................', { size: 19, spaceAfter: 20 }),
+                bnPara('চেক নং...............................', { size: 19, spaceAfter: 20 }),
               ],
               3550
             ),
             plainCell(
               [
-                bnPara('___________________________________', { size: 18, spaceAfter: 20 }),
-                bnPara('নিরীক্ষা ও হিসাবরক্ষণ অফিসার (স্বাক্ষর)', { size: 19, spaceAfter: 20 }),
-                bnPara('নাম .......................................', { size: 19, spaceAfter: 20 }),
-                bnPara('তাং.......................................', { size: 19, spaceAfter: 180 }),
-                bnPara('সিল', { size: 19, spaceAfter: 180 }),
-                bnPara('তারিখ...................................', { size: 19, spaceAfter: 20 }),
+                bnPara('হিসাবরক্ষণ অফিসার (স্বাক্ষর)', { bold: true, size: 19, spaceAfter: 20 }),
+                bnPara('নাম...................................', { size: 19, spaceAfter: 20 }),
+                bnPara('তাং...................................', { size: 19, spaceAfter: 260 }),
+                bnPara('চেক প্রদানকারীর স্বাক্ষর...............', { size: 19, spaceAfter: 20 }),
+                bnPara('নাম...................................', { size: 19, spaceAfter: 20 }),
               ],
               3600
             ),
@@ -969,24 +1130,39 @@ export async function exportTr21Docx(
     })
   );
 
-  // Cheque Issuer Signature (bottom right)
+  // [P2-S5] Bottom Liability Note + Page 2 Footer
+  docChildren.push(
+    new Paragraph({
+      border: { top: CELL_BORDER },
+      spacing: { before: 320, after: 30 },
+      children: [bnRun('* কেবল মাত্র প্রযোজ্য ক্ষেত্রে।', { size: 18 })],
+    })
+  );
+  docChildren.push(
+    bnPara(
+      'বিঃ দ্রঃ ইহা স্পষ্টভাবে রাখিতে হইবে যে, বরাদ্দের অতিরিক্ত ব্যয়ের জন্য আয়ন কর্মকর্তা ব্যক্তিগতভাবে দায়ী থাকিবেন। বরাদ্দের অতিরিক্ত ব্যয়ের বিপরীতে যদি তিনি অতিরিক্ত বরাদ্দ মঞ্জুর করাইতে না পারেন, তবে অতিরিক্ত ব্যয়িত অর্থ তাহার ব্যক্তিগত ভাতাদি হইতে আদায় করা হইবে।',
+      { align: AlignmentType.BOTH, size: 18, spaceAfter: 220 }
+    )
+  );
+
   docChildren.push(
     new Table({
       width: { size: 10700, type: WidthType.DXA },
-      borders: NO_BORDERS,
+      borders: {
+        top: CELL_BORDER,
+        bottom: NO_BORDER,
+        left: NO_BORDER,
+        right: NO_BORDER,
+        insideHorizontal: NO_BORDER,
+        insideVertical: NO_BORDER,
+      },
       rows: [
         new TableRow({
           children: [
-            plainCell([bnPara('', { spaceAfter: 0 })], 7100),
+            plainCell([bnPara(data.footerLeftText, { size: 18, spaceAfter: 0 })], 8000),
             plainCell(
-              [
-                bnPara('_____________________________', { align: AlignmentType.CENTER, size: 18, spaceBefore: 240, spaceAfter: 20 }),
-                bnPara('চেক প্রদানকারীর স্বাক্ষর', { align: AlignmentType.CENTER, size: 19, spaceAfter: 20 }),
-                bnPara('নাম .......................................', { size: 19, spaceAfter: 20 }),
-                bnPara('তাং .......................................', { size: 19, spaceAfter: 20 }),
-                bnPara('সিল', { size: 19, spaceAfter: 0 }),
-              ],
-              3600
+              [bnPara('Page 2 of 2', { align: AlignmentType.RIGHT, size: 18, spaceAfter: 0 })],
+              2700
             ),
           ],
         }),
@@ -999,8 +1175,8 @@ export async function exportTr21Docx(
       default: {
         document: {
           run: {
-            font: FONT_BN,
-            size: 20,
+            font: activeDocFont,
+            size: Math.max(12, Math.round(20 * activeFontScale)),
             color: '000000',
           },
         },
@@ -1015,10 +1191,10 @@ export async function exportTr21Docx(
               height: 16838, // A4 Portrait 297mm
             },
             margin: {
-              top: 567,
-              right: 567,
-              bottom: 567,
-              left: 620,
+              top: 520,
+              right: 540,
+              bottom: 500,
+              left: 560,
             },
           },
         },
@@ -1034,4 +1210,8 @@ export async function exportTr21Docx(
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     title: `টি.আর. ফরম নং-২১ (${billNoForFile})`,
   });
+  } finally {
+    activeDocFont = FONT_BN;
+    activeFontScale = 1;
+  }
 }

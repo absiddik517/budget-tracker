@@ -13,6 +13,7 @@ import { EconomicCodesPage } from './pages/EconomicCodesPage';
 import { VatTaxModelPage } from './pages/VatTaxModelPage';
 import { SpendingLimitsPage } from './pages/SpendingLimitsPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { Tr21SetupPage } from './pages/Tr21SetupPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -54,6 +55,7 @@ function AppGate() {
       <Route path="/vat-tax" element={<VatTaxModelPage />} />
       <Route path="/limits" element={<SpendingLimitsPage />} />
       <Route path="/reports" element={<ReportsPage />} />
+      <Route path="/tr21-setup" element={<Tr21SetupPage />} />
       <Route
         path="/users"
         element={

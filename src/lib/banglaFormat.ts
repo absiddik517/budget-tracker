@@ -147,7 +147,7 @@ export function formatBanglaGroupedInt(takaInt: number): string {
  */
 export function splitPaisaForTr21(
   paisa: number,
-  options?: { blankWhenZero?: boolean; showZeroPaisa?: boolean }
+  options?: { blankWhenZero?: boolean; showZeroPaisa?: boolean; noComma?: boolean }
 ): { takaStr: string; paisaStr: string } {
   const safe = Number.isFinite(paisa) ? Math.round(paisa) : 0;
   if (safe === 0 && options?.blankWhenZero) {
@@ -158,7 +158,10 @@ export function splitPaisaForTr21(
   const takaInt = Math.floor(abs / 100);
   const remPaisa = abs % 100;
 
-  const takaStr = `${sign}${formatBanglaGroupedInt(takaInt)}/-`;
+  const takaDigits = options?.noComma
+    ? toBanglaDigits(takaInt)
+    : formatBanglaGroupedInt(takaInt);
+  const takaStr = `${sign}${takaDigits}/-`;
   let paisaStr = '';
   if (remPaisa > 0) {
     paisaStr = toBanglaDigits(String(remPaisa).padStart(2, '0'));
@@ -261,6 +264,16 @@ export function formatBanglaShortDate(ymd?: string | null): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
   if (!m) return toBanglaDigits(ymd);
   return `${toBanglaDigits(m[3])}/${toBanglaDigits(m[2])}/${toBanglaDigits(m[1])} খ্রি.`;
+}
+
+/**
+ * Formats YYYY-MM-DD as "২১/০৯/২০২৬" (plain DD/MM/YYYY without খ্রি.)
+ */
+export function formatBanglaPlainDate(ymd?: string | null): string {
+  if (!ymd) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return toBanglaDigits(ymd);
+  return `${toBanglaDigits(m[3])}/${toBanglaDigits(m[2])}/${toBanglaDigits(m[1])}`;
 }
 
 /**

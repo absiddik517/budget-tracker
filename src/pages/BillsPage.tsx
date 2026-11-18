@@ -193,7 +193,7 @@ export function BillsPage() {
         : [
             {
               id: 'it',
-              code: DEFAULT_IT_CODE,
+              code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
               name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
               rate: selectedBill.itRate,
               amount: selectedBill.itAmount,
@@ -201,7 +201,7 @@ export function BillsPage() {
             },
             {
               id: 'vat',
-              code: DEFAULT_VAT_CODE,
+              code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
               name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
               rate: selectedBill.vatRate,
               amount: selectedBill.vatAmount,
@@ -211,7 +211,13 @@ export function BillsPage() {
     );
     setReasonMode(null);
     setReasonText('');
-  }, [selectedBill, officeSettings.defaultPayeeText, officeSettings.defaultNetPayableCode]);
+  }, [
+    selectedBill,
+    officeSettings.defaultPayeeText,
+    officeSettings.defaultNetPayableCode,
+    officeSettings.defaultItCode,
+    officeSettings.defaultVatCode,
+  ]);
 
   const filteredBills = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -567,7 +573,7 @@ export function BillsPage() {
         : [
             {
               id: 'it',
-              code: DEFAULT_IT_CODE,
+              code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
               name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
               rate: selectedBillRates.incomeTax,
               amount: calcPercentageAmount(selectedBill.grossAmount, selectedBillRates.incomeTax),
@@ -575,7 +581,7 @@ export function BillsPage() {
             },
             {
               id: 'vat',
-              code: DEFAULT_VAT_CODE,
+              code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
               name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
               rate: variant.rate,
               amount: calcPercentageAmount(selectedBill.grossAmount, variant.rate),
@@ -1371,14 +1377,14 @@ export function BillsPage() {
                     : [
                         {
                           id: 'vat',
-                          code: DEFAULT_VAT_CODE,
+                          code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
                           name: `ভ্যাট${selectedBill.vatVariantLabel ? ` · ${selectedBill.vatVariantLabel}` : ''}`,
                           rate: selectedBill.vatRate,
                           amount: selectedBill.vatAmount,
                         },
                         {
                           id: 'it',
-                          code: DEFAULT_IT_CODE,
+                          code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
                           name: 'আয়কর / IT',
                           rate: selectedBill.itRate,
                           amount: selectedBill.itAmount,

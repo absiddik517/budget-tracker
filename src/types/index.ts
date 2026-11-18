@@ -45,10 +45,18 @@ export interface OfficeSettings extends BaseAuditFields {
   activeFiscalYear: string;
   fiscalYears: string[];
   language: LanguageCode;
+  ministryName?: string;
+  officeMobileNo?: string;
   institutionalCode?: string;
   defaultPayeeText?: string;
   placeName?: string;
   defaultNetPayableCode?: string;
+  defaultItCode?: string;
+  defaultVatCode?: string;
+  defaultSecurityCode?: string;
+  tr21FooterText?: string;
+  tr21FontFamily?: string;
+  tr21FontSize?: number;
   tr21Clauses?: CertificationClause[];
 }
 

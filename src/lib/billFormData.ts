@@ -1,6 +1,6 @@
 import {
   formatBanglaLongDate,
-  formatBanglaShortDate,
+  formatBanglaPlainDate,
   formatFyShortBn,
   paisaToBanglaWords,
   splitPaisaForTr21,
@@ -9,8 +9,13 @@ import {
 import {
   DEFAULT_IT_CODE,
   DEFAULT_NET_PAYABLE_CODE,
+  DEFAULT_SECURITY_CODE,
+  DEFAULT_TR21_FOOTER_TEXT,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
+  resolveTr21FontCss,
+  resolveTr21FontFamily,
+  resolveTr21FontSize,
 } from './tr21Defaults';
 import type {
   BillDeductionLine,
@@ -54,10 +59,14 @@ export interface Tr21FormData {
   fiscalYear: string;
   fyBn: string;
   fyShortBn: string;
+  ministryName: string;
   officeName: string;
+  officeAddress: string;
+  officeMobileNoBn: string;
   placeName: string;
   institutionalCodeRaw: string;
   institutionalCodeBoxes: string[]; // always 13 boxes
+  institutionalCodeGroups: [string[], string[], string[], string[]]; // 1 - 4 - 4 - 4
   tokenNoBn: string;
   voucherNoBn: string;
   billDateYmd: string;
@@ -83,6 +92,10 @@ export interface Tr21FormData {
   payeeText: string;
   page1Clauses: CertificationClause[];
   page2Clauses: CertificationClause[];
+  footerLeftText: string;
+  fontFamily: string;
+  fontFamilyCss: string;
+  fontSize: number;
   allocationSummary: {
     lastBillAmount: Tr21AmountCell;
     additionalAllocation: Tr21AmountCell;
@@ -99,12 +112,8 @@ export interface Tr21FormData {
   };
 }
 
-function emptyCell(): Tr21AmountCell {
-  return { amountPaisa: null, takaStr: '', paisaStr: '' };
-}
-
 function cellFromPaisa(paisa: number, blankWhenZero = false): Tr21AmountCell {
-  const split = splitPaisaForTr21(paisa, { blankWhenZero });
+  const split = splitPaisaForTr21(paisa, { blankWhenZero, noComma: true });
   return {
     amountPaisa: blankWhenZero && paisa === 0 ? null : paisa,
     takaStr: split.takaStr,
@@ -115,6 +124,21 @@ function cellFromPaisa(paisa: number, blankWhenZero = false): Tr21AmountCell {
 export function sanitizeBillFileSegment(bill: Pick<BillDoc, 'id' | 'billNo' | 'status'>): string {
   const raw = bill.billNo?.trim() || `draft-${bill.id.slice(0, 8)}`;
   return raw.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'bill';
+}
+
+function formatDeductionLabel(d: BillDeductionLine): string {
+  if (d.kind === 'security' || d.id === 'security') {
+    if (d.amount === 0) {
+      return `${d.name || 'ঠিকাদার নিরাপত্তা জমা'}: (০ টাকা)`;
+    }
+    const hasRate = typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate > 0;
+    return hasRate
+      ? `${d.name || 'ঠিকাদার নিরাপত্তা জমা'}: (${toBanglaDigits(d.rate!)}% হারে)`
+      : d.name || 'ঠিকাদার নিরাপত্তা জমা';
+  }
+  const hasRate = typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate > 0;
+  const cleanName = (d.name || '').replace(/:+$/, '');
+  return hasRate ? `${cleanName}: (${toBanglaDigits(d.rate!)}% হারে)` : cleanName;
 }
 
 export function buildTr21FormData(params: {
@@ -129,13 +153,27 @@ export function buildTr21FormData(params: {
 }): Tr21FormData {
   const { bill, officeSettings, budgets, allBillsInFy, getHead } = params;
 
-  const officeName = (officeSettings.officeName || '').trim() || 'জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো';
+  const ministryName = (officeSettings.ministryName || '').trim();
+  const officeName = (officeSettings.officeName || '').trim() || 'উপজেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো';
+  const officeAddress = (officeSettings.address || '').trim();
+  const officeMobileNoBn = officeSettings.officeMobileNo
+    ? toBanglaDigits(officeSettings.officeMobileNo.trim())
+    : '';
   const placeName = (officeSettings.placeName || '').trim();
+  const footerLeftText =
+    (officeSettings.tr21FooterText || '').trim() || DEFAULT_TR21_FOOTER_TEXT;
+
   const institutionalCodeRaw = (officeSettings.institutionalCode || '').replace(/\s+/g, '');
   const institutionalCodeBoxes = Array.from({ length: 13 }, (_, idx) => {
     const ch = institutionalCodeRaw[idx];
     return ch ? toBanglaDigits(ch) : '';
   });
+  const institutionalCodeGroups: [string[], string[], string[], string[]] = [
+    institutionalCodeBoxes.slice(0, 1),
+    institutionalCodeBoxes.slice(1, 5),
+    institutionalCodeBoxes.slice(5, 9),
+    institutionalCodeBoxes.slice(9, 13),
+  ];
 
   const head = getHead(bill.economicCode, {
     headName: bill.headName,
@@ -160,7 +198,7 @@ export function buildTr21FormData(params: {
   const fyBn = toBanglaDigits(bill.fiscalYear);
   const fyShortBn = formatFyShortBn(bill.fiscalYear);
   const billDateYmd = bill.billDate || bill.date;
-  const billDateShortBn = formatBanglaShortDate(billDateYmd);
+  const billDateShortBn = formatBanglaPlainDate(billDateYmd);
 
   // Extract sequential suffix from billNo if format is YYYY-YY/NNN, else show full billNo in Bangla
   const rawBillNo = (bill.billNo || '').trim();
@@ -185,7 +223,7 @@ export function buildTr21FormData(params: {
   const introText = `${officeName}-এর অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${purposeText}`;
 
   const items: Tr21ItemRow[] = (bill.items || []).map((item, idx) => {
-    const split = splitPaisaForTr21(item.amount);
+    const split = splitPaisaForTr21(item.amount, { noComma: true });
     const emp = item.responsibleEmployee?.name
       ? item.responsibleEmployee.designation
         ? `${item.responsibleEmployee.name} (${item.responsibleEmployee.designation})`
@@ -204,13 +242,17 @@ export function buildTr21FormData(params: {
   const computedGross =
     items.length > 0 ? items.reduce((sum, it) => sum + it.amountPaisa, 0) : bill.grossAmount;
 
-  const rawDeductions: BillDeductionLine[] =
+  const itDefaultCode = officeSettings.defaultItCode || DEFAULT_IT_CODE;
+  const vatDefaultCode = officeSettings.defaultVatCode || DEFAULT_VAT_CODE;
+  const securityDefaultCode = officeSettings.defaultSecurityCode || DEFAULT_SECURITY_CODE;
+
+  const baseDeductions: BillDeductionLine[] =
     Array.isArray(bill.deductions) && bill.deductions.length > 0
-      ? bill.deductions
+      ? [...bill.deductions]
       : [
           {
             id: 'it',
-            code: DEFAULT_IT_CODE,
+            code: itDefaultCode,
             name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
             rate: bill.itRate,
             amount: bill.itAmount,
@@ -218,7 +260,7 @@ export function buildTr21FormData(params: {
           },
           {
             id: 'vat',
-            code: DEFAULT_VAT_CODE,
+            code: vatDefaultCode,
             name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
             rate: bill.vatRate,
             amount: bill.vatAmount,
@@ -226,15 +268,25 @@ export function buildTr21FormData(params: {
           },
         ];
 
-  const deductions: Tr21DeductionRow[] = rawDeductions.map((d) => {
-    const hasRate = typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate > 0;
-    const rateLabel = hasRate ? ` (${toBanglaDigits(d.rate!)}%)` : '';
-    const split = splitPaisaForTr21(d.amount, { blankWhenZero: d.amount === 0 });
+  const hasSecurityRow = baseDeductions.some((d) => d.kind === 'security' || d.id === 'security');
+  if (!hasSecurityRow) {
+    baseDeductions.push({
+      id: 'security',
+      code: securityDefaultCode,
+      name: 'ঠিকাদার নিরাপত্তা জমা',
+      rate: 0,
+      amount: 0,
+      kind: 'security',
+    });
+  }
+
+  const deductions: Tr21DeductionRow[] = baseDeductions.map((d) => {
+    const split = splitPaisaForTr21(d.amount, { noComma: true });
     return {
       id: d.id,
       code: d.code,
       codeBn: toBanglaDigits(d.code),
-      label: `${d.name}${rateLabel}`,
+      label: formatDeductionLabel(d),
       rate: d.rate ?? null,
       amountPaisa: d.amount,
       takaStr: split.takaStr,
@@ -298,10 +350,14 @@ export function buildTr21FormData(params: {
     fiscalYear: bill.fiscalYear,
     fyBn,
     fyShortBn,
+    ministryName,
     officeName,
+    officeAddress,
+    officeMobileNoBn,
     placeName,
     institutionalCodeRaw,
     institutionalCodeBoxes,
+    institutionalCodeGroups,
     tokenNoBn: bill.tokenNo ? toBanglaDigits(bill.tokenNo.trim()) : '',
     voucherNoBn,
     billDateYmd,
@@ -318,7 +374,7 @@ export function buildTr21FormData(params: {
     items,
     gross: cellFromPaisa(computedGross),
     deductions,
-    blankDeductionRowsCount: 2,
+    blankDeductionRowsCount: 0,
     totalDeduction: cellFromPaisa(totalDeductionPaisa),
     netPayableCode,
     netPayableCodeBn: toBanglaDigits(netPayableCode),
@@ -327,19 +383,24 @@ export function buildTr21FormData(params: {
     payeeText,
     page1Clauses: allClauses.filter((c) => c.page === 1),
     page2Clauses: allClauses.filter((c) => c.page === 2),
+    footerLeftText,
+    fontFamily: resolveTr21FontFamily(officeSettings.tr21FontFamily),
+    fontFamilyCss: resolveTr21FontCss(officeSettings.tr21FontFamily),
+    fontSize: resolveTr21FontSize(officeSettings.tr21FontSize),
     allocationSummary: {
-      lastBillAmount: latestPriorBill ? cellFromPaisa(latestPriorBill.grossAmount) : emptyCell(),
-      additionalAllocation:
-        additionalAllocTotal > 0 ? cellFromPaisa(additionalAllocTotal) : emptyCell(),
+      lastBillAmount: latestPriorBill
+        ? cellFromPaisa(latestPriorBill.grossAmount)
+        : cellFromPaisa(0),
+      additionalAllocation: cellFromPaisa(additionalAllocTotal),
       additionalRefNo,
-      reducedAllocation: reducedAllocTotal > 0 ? cellFromPaisa(reducedAllocTotal) : emptyCell(),
+      reducedAllocation: cellFromPaisa(reducedAllocTotal),
       reducedRefNo,
-      netTotalAllocation: codeBudgets.length > 0 ? cellFromPaisa(netAllocTotal) : emptyCell(),
+      netTotalAllocation: codeBudgets.length > 0 ? cellFromPaisa(netAllocTotal) : cellFromPaisa(0),
     },
     expenseSummary: {
       previousTotal: cellFromPaisa(spentExclThis),
       currentBillTotal: cellFromPaisa(computedGross),
-      attachedWorksAmount: emptyCell(),
+      attachedWorksAmount: cellFromPaisa(0),
       cumulativeTotal: cellFromPaisa(spentExclThis + computedGross),
     },
   };

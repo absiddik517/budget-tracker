@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Copy,
   ExternalLink,
+  FileSpreadsheet,
   LayoutGrid,
   LogOut,
   Menu,
@@ -50,6 +51,7 @@ const DESKTOP_NAV: NavItem[] = [
   { to: '/vat-tax', labelKey: 'navVatTax', icon: Percent },
   { to: '/limits', labelKey: 'navLimits', icon: ShieldCheck },
   { to: '/reports', labelKey: 'navReports', icon: BarChart2 },
+  { to: '/tr21-setup', labelKey: 'navTr21Setup', icon: FileSpreadsheet },
   { to: '/users', labelKey: 'navUsers', icon: Users, superAdminOnly: true },
   { to: '/settings', labelKey: 'navSettings', icon: Settings },
 ];
@@ -323,6 +325,7 @@ export function Layout({ title, actions, children }: LayoutProps) {
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
                 moreOpen ||
                 isRouteActive('/reports') ||
+                isRouteActive('/tr21-setup') ||
                 isRouteActive('/economic-codes') ||
                 isRouteActive('/vat-tax') ||
                 isRouteActive('/limits') ||
@@ -411,6 +414,14 @@ export function Layout({ title, actions, children }: LayoutProps) {
                   <span>{t('navUsers')}</span>
                 </Link>
               )}
+              <Link
+                to="/tr21-setup"
+                onClick={() => setMoreOpen(false)}
+                className="min-h-[44px] flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+              >
+                <FileSpreadsheet className="w-5 h-5 text-[var(--muted)] shrink-0" />
+                <span>{t('navTr21Setup')}</span>
+              </Link>
               <Link
                 to="/settings"
                 onClick={() => setMoreOpen(false)}

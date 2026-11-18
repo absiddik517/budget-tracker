@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { Download, Database, History, RefreshCw, RotateCcw } from 'lucide-react';
+import { ArrowRight, Download, Database, FileSpreadsheet, History, RefreshCw } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
-import { toBanglaDigits } from '../lib/banglaFormat';
 import { db } from '../lib/firebase';
 import {
   buildEconomicCodesFromExistingData,
@@ -20,13 +20,8 @@ import {
 import { isValidFiscalYear } from '../lib/fy';
 import { canManageUsersSettings } from '../lib/permissions';
 import { loadSampleData } from '../lib/seedData';
-import {
-  cloneDefaultTr21Clauses,
-  DEFAULT_NET_PAYABLE_CODE,
-  resolveTr21Clauses,
-} from '../lib/tr21Defaults';
 import { saveAndShareFile } from '../utils/saveFile';
-import type { CertificationClause, LanguageCode, ThemeMode } from '../types';
+import type { LanguageCode, ThemeMode } from '../types';
 
 export function SettingsPage() {
   const { userDoc, needsOfficeSetup, clearOfficeSetupFlag } = useAuth();
@@ -37,19 +32,6 @@ export function SettingsPage() {
 
   const [officeName, setOfficeName] = useState(officeSettings.officeName);
   const [address, setAddress] = useState(officeSettings.address);
-  const [institutionalCode, setInstitutionalCode] = useState(
-    officeSettings.institutionalCode || ''
-  );
-  const [defaultPayeeText, setDefaultPayeeText] = useState(
-    officeSettings.defaultPayeeText || ''
-  );
-  const [placeName, setPlaceName] = useState(officeSettings.placeName || '');
-  const [defaultNetPayableCode, setDefaultNetPayableCode] = useState(
-    officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE
-  );
-  const [tr21Clauses, setTr21Clauses] = useState<CertificationClause[]>(() =>
-    resolveTr21Clauses(officeSettings.tr21Clauses)
-  );
   const [activeFiscalYear, setActiveFiscalYear] = useState(officeSettings.activeFiscalYear);
   const [fiscalYears, setFiscalYears] = useState<string[]>(officeSettings.fiscalYears);
   const [newFyInput, setNewFyInput] = useState('');
@@ -73,11 +55,6 @@ export function SettingsPage() {
   useEffect(() => {
     setOfficeName(officeSettings.officeName);
     setAddress(officeSettings.address);
-    setInstitutionalCode(officeSettings.institutionalCode || '');
-    setDefaultPayeeText(officeSettings.defaultPayeeText || '');
-    setPlaceName(officeSettings.placeName || '');
-    setDefaultNetPayableCode(officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE);
-    setTr21Clauses(resolveTr21Clauses(officeSettings.tr21Clauses));
     setActiveFiscalYear(officeSettings.activeFiscalYear);
     setFiscalYears(officeSettings.fiscalYears);
   }, [officeSettings]);
@@ -108,11 +85,6 @@ export function SettingsPage() {
         {
           officeName: officeName.trim(),
           address: address.trim(),
-          institutionalCode: institutionalCode.replace(/\D+/g, '').slice(0, 13),
-          defaultPayeeText: defaultPayeeText.trim(),
-          placeName: placeName.trim(),
-          defaultNetPayableCode: defaultNetPayableCode.trim() || DEFAULT_NET_PAYABLE_CODE,
-          tr21Clauses,
           activeFiscalYear,
           fiscalYears: mergedFys,
           language,
@@ -311,93 +283,23 @@ export function SettingsPage() {
               />
             </div>
 
-            <div>
-              <label
-                htmlFor="institutional-code"
-                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+            <div className="pt-2 border-t border-[var(--line)] flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-[var(--text)]">
+                  টি.আর. ফরম নং-২১ কনফিগারেশন
+                </div>
+                <div className="text-xs text-[var(--muted)]">
+                  প্রাতিষ্ঠানিক কোড, প্রাপক, হিসাব কোড ও ১–১২ প্রত্যয়ন ধারা আলাদা পেইজে সেটআপ করুন।
+                </div>
+              </div>
+              <Link
+                to="/tr21-setup"
+                className="min-h-[40px] px-3.5 rounded-lg border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
-                প্রাতিষ্ঠানিক / অপারেশন কোড (সর্বোচ্চ ১৩ ডিজিট · টি.আর. ফরম ২১)
-              </label>
-              <input
-                id="institutional-code"
-                type="text"
-                inputMode="numeric"
-                maxLength={13}
-                value={institutionalCode}
-                onChange={(e) =>
-                  setInstitutionalCode(e.target.value.replace(/\D+/g, '').slice(0, 13))
-                }
-                placeholder="যেমন: 120001417"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              />
-              <div className="flex flex-wrap gap-0.5 mt-2">
-                {Array.from({ length: 13 }, (_, idx) => {
-                  const ch = institutionalCode[idx];
-                  return (
-                    <span
-                      key={idx}
-                      className="w-6 h-6 inline-flex items-center justify-center border border-[var(--line)] rounded text-xs font-semibold bg-[var(--surface-subtle)]"
-                    >
-                      {ch ? toBanglaDigits(ch) : ''}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="default-payee"
-                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-              >
-                ডিফল্ট চেক প্রাপক (যার নামে চেক ইস্যু করা হবে)
-              </label>
-              <input
-                id="default-payee"
-                type="text"
-                value={defaultPayeeText}
-                onChange={(e) => setDefaultPayeeText(e.target.value)}
-                placeholder="সহকারী পরিচালক, জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো, ময়মনসিংহ"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="place-name"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                >
-                  স্থান (Place Name)
-                </label>
-                <input
-                  id="place-name"
-                  type="text"
-                  value={placeName}
-                  onChange={(e) => setPlaceName(e.target.value)}
-                  placeholder="ময়মনসিংহ"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="net-payable-code"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                >
-                  ডিফল্ট প্রদেয় কোড (ক-খ)
-                </label>
-                <input
-                  id="net-payable-code"
-                  type="text"
-                  inputMode="numeric"
-                  value={defaultNetPayableCode}
-                  onChange={(e) =>
-                    setDefaultNetPayableCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
-                  }
-                  placeholder="8172108"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                />
-              </div>
+                <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                <span>টি.আর. ফরম ২১ সেটআপ</span>
+                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+              </Link>
             </div>
           </section>
         )}
@@ -558,78 +460,7 @@ export function SettingsPage() {
           </section>
         )}
 
-        {/* Certification Clauses Editor for T.R. Form No. 21 (Super Admin only) */}
-        {isSuperAdmin && (
-          <section className="lg:col-span-2 card-surface p-4 md:p-5 space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1">
-                <h2 className="text-base font-semibold text-[var(--text)]">
-                  ফর্মের প্রত্যয়ন ধারা (টি.আর. ফরম নং-২১)
-                </h2>
-                <p className="text-xs text-[var(--muted)]">
-                  প্রতিটি ধারার লেখা সম্পাদনা বা প্রয়োজনে চালু/বন্ধ করুন। ১২ নং ধারায়{' '}
-                  <code className="font-mono">{'{{payeeText}}'}</code> রাখলে বিলের প্রাপকের নাম স্বয়ংক্রিয়ভাবে বসবে। পরিবর্তন শেষে উপরের{' '}
-                  <strong>{t('saveChanges')}</strong> বাটনে ক্লিক করুন।
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTr21Clauses(cloneDefaultTr21Clauses())}
-                className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-1.5 shrink-0"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>ডিফল্ট পুনরুদ্ধার</span>
-              </button>
-            </div>
-
-            <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
-              {tr21Clauses.map((clause, idx) => (
-                <div
-                  key={clause.id}
-                  className={`p-3 rounded-xl border transition-colors space-y-2 ${
-                    clause.enabled
-                      ? 'border-[var(--line)] bg-[var(--card)]'
-                      : 'border-[var(--line)]/60 bg-[var(--surface-subtle)] opacity-70'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text)]">
-                      <span>ধারা {clause.numberBn}.</span>
-                      <span className="px-2 py-0.5 rounded bg-[var(--surface-subtle)] text-[11px] text-[var(--muted)] font-medium">
-                        পাতা {clause.page === 1 ? '১' : '২'}
-                      </span>
-                    </div>
-                    <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-medium select-none">
-                      <input
-                        type="checkbox"
-                        checked={clause.enabled}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setTr21Clauses((prev) =>
-                            prev.map((c, cIdx) => (cIdx === idx ? { ...c, enabled: checked } : c))
-                          );
-                        }}
-                        className="w-4 h-4 accent-[var(--accent)]"
-                      />
-                      <span>{clause.enabled ? 'চালু' : 'বন্ধ'}</span>
-                    </label>
-                  </div>
-                  <textarea
-                    rows={clause.text.includes('\n') ? 3 : 2}
-                    value={clause.text}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setTr21Clauses((prev) =>
-                        prev.map((c, cIdx) => (cIdx === idx ? { ...c, text: val } : c))
-                      );
-                    }}
-                    className="w-full p-2.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                  />
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+        {/* Certification Clauses Editor moved to dedicated /tr21-setup page */}
 
         {/* Legacy Spendings -> Bills + Expense Items Migration (Super Admin only) */}
         {isSuperAdmin && (

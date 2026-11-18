@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   formatBanglaGroupedInt,
   formatBanglaLongDate,
+  formatBanglaPlainDate,
   formatBanglaShortDate,
   formatFyShortBn,
   integerToBanglaWords,
@@ -33,9 +34,11 @@ assert.equal(paisaToBanglaWords(0), 'শূন্য টাকা মাত্�
 assert.deepEqual(splitPaisaForTr21(5470000), { takaStr: '৫৪,৭০০/-', paisaStr: '' });
 assert.deepEqual(splitPaisaForTr21(5470050), { takaStr: '৫৪,৭০০/-', paisaStr: '৫০' });
 assert.deepEqual(splitPaisaForTr21(0, { blankWhenZero: true }), { takaStr: '', paisaStr: '' });
+assert.deepEqual(splitPaisaForTr21(2400000, { noComma: true }), { takaStr: '২৪০০০/-', paisaStr: '' });
 
 assert.equal(formatBanglaLongDate('2025-10-23'), '২৩ অক্টোবর ২০২৫');
 assert.equal(formatBanglaShortDate('2025-12-15'), '১৫/১২/২০২৫ খ্রি.');
+assert.equal(formatBanglaPlainDate('2026-09-21'), '২১/০৯/২০২৬');
 assert.equal(formatFyShortBn('2025-26'), '২৫-২৬');
 
 console.log('All banglaFormat tests passed!');

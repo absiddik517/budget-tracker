@@ -4,7 +4,18 @@ import { db } from '../lib/firebase';
 import { getCurrentFiscalYear } from '../lib/fy';
 import { translate, type TranslationKey } from '../i18n';
 import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
-import { DEFAULT_NET_PAYABLE_CODE, resolveTr21Clauses } from '../lib/tr21Defaults';
+import {
+  DEFAULT_IT_CODE,
+  DEFAULT_NET_PAYABLE_CODE,
+  DEFAULT_SECURITY_CODE,
+  DEFAULT_TR21_FONT_FAMILY,
+  DEFAULT_TR21_FONT_SIZE,
+  DEFAULT_TR21_FOOTER_TEXT,
+  DEFAULT_VAT_CODE,
+  resolveTr21Clauses,
+  resolveTr21FontFamily,
+  resolveTr21FontSize,
+} from '../lib/tr21Defaults';
 import { useAuth } from './AuthContext';
 import type { EconomicCodeDoc, LanguageCode, OfficeSettings } from '../types';
 
@@ -56,9 +67,17 @@ const defaultOfficeSettings: OfficeSettings = {
   fiscalYears: [defaultFy],
   language: 'en',
   institutionalCode: '',
+  ministryName: '',
+  officeMobileNo: '',
   defaultPayeeText: '',
   placeName: '',
   defaultNetPayableCode: DEFAULT_NET_PAYABLE_CODE,
+  defaultItCode: DEFAULT_IT_CODE,
+  defaultVatCode: DEFAULT_VAT_CODE,
+  defaultSecurityCode: DEFAULT_SECURITY_CODE,
+  tr21FooterText: DEFAULT_TR21_FOOTER_TEXT,
+  tr21FontFamily: DEFAULT_TR21_FONT_FAMILY,
+  tr21FontSize: DEFAULT_TR21_FONT_SIZE,
   tr21Clauses: resolveTr21Clauses(null),
 };
 
@@ -115,9 +134,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             fiscalYears,
             language: data.language || 'en',
             institutionalCode: data.institutionalCode || '',
+            ministryName: data.ministryName || '',
+            officeMobileNo: data.officeMobileNo || '',
             defaultPayeeText: data.defaultPayeeText || '',
             placeName: data.placeName || '',
             defaultNetPayableCode: data.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE,
+            defaultItCode: data.defaultItCode || DEFAULT_IT_CODE,
+            defaultVatCode: data.defaultVatCode || DEFAULT_VAT_CODE,
+            defaultSecurityCode: data.defaultSecurityCode || DEFAULT_SECURITY_CODE,
+            tr21FooterText: data.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT,
+            tr21FontFamily: resolveTr21FontFamily(data.tr21FontFamily),
+            tr21FontSize: resolveTr21FontSize(data.tr21FontSize),
             tr21Clauses: resolveTr21Clauses(data.tr21Clauses),
           });
           if (!fyInitializedFromServer) {
