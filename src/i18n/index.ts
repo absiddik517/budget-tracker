@@ -68,7 +68,7 @@ const en = {
   memoNo: 'Memo No',
   billNo: 'Bill No',
   date: 'Date',
-  head: 'Head',
+  head: 'ব্যয়ের খাত',
   allocated: 'Allocated',
   spent: 'Spent',
   status: 'Status',

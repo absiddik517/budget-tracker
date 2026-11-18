@@ -36,7 +36,7 @@ import {
   type DraftBillGroupInput,
 } from '../lib/firestoreOps';
 import {
-  calcPercentageAmount,
+  computeGrossedUpBill,
   formatNumberIN,
   formatPaisaInput,
   formatTaka,
@@ -204,31 +204,6 @@ export function ExpenseItemsPage() {
     [filteredItems]
   );
 
-  const allFilteredListedSelected =
-    selectableFilteredItems.length > 0 &&
-    selectableFilteredItems.every((i) => selectedIds.has(i.id));
-
-  const toggleSelectAllFiltered = () => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (allFilteredListedSelected) {
-        for (const item of selectableFilteredItems) next.delete(item.id);
-      } else {
-        for (const item of selectableFilteredItems) next.add(item.id);
-      }
-      return next;
-    });
-  };
-
-  const toggleSelectOne = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
   const selectedItems = useMemo(
     () => expenseItems.filter((i) => selectedIds.has(i.id) && i.status === 'listed'),
     [expenseItems, selectedIds]
@@ -243,6 +218,97 @@ export function ExpenseItemsPage() {
     () => new Set(selectedItems.map((i) => i.economicCode)).size,
     [selectedItems]
   );
+
+  const selectedEconomicCode = useMemo(() => {
+    if (selectedItems.length === 0) return null;
+    const codes = Array.from(new Set(selectedItems.map((i) => i.economicCode)));
+    return codes.length === 1 ? codes[0] : null;
+  }, [selectedItems]);
+
+  const selectablePoolForToggle = useMemo(
+    () =>
+      selectedEconomicCode
+        ? selectableFilteredItems.filter((i) => i.economicCode === selectedEconomicCode)
+        : selectableFilteredItems,
+    [selectableFilteredItems, selectedEconomicCode]
+  );
+
+  const allFilteredListedSelected =
+    selectablePoolForToggle.length > 0 &&
+    selectablePoolForToggle.every((i) => selectedIds.has(i.id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredListedSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const item of selectablePoolForToggle) next.delete(item.id);
+        return next;
+      });
+      return;
+    }
+
+    if (selectedEconomicCode) {
+      if (selectablePoolForToggle.length === 0) {
+        pushToast(
+          'error',
+          `ফিল্টার তালিকায় কোড ${selectedEconomicCode}-এর কোনো তালিকাভুক্ত খরচ নেই।`
+        );
+        return;
+      }
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const item of selectablePoolForToggle) next.add(item.id);
+        return next;
+      });
+      return;
+    }
+
+    const distinctFilteredCodes = new Set(selectableFilteredItems.map((i) => i.economicCode));
+    if (distinctFilteredCodes.size > 1) {
+      pushToast(
+        'error',
+        'একটি বিলে শুধু একই কোডের খরচ নেওয়া যাবে। সব নির্বাচন করতে আগে অর্থনৈতিক কোড ফিল্টার করুন।'
+      );
+      return;
+    }
+
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const item of selectableFilteredItems) next.add(item.id);
+      return next;
+    });
+  };
+
+  const toggleSelectOne = (id: string) => {
+    const target = expenseItems.find((i) => i.id === id);
+    if (!target) return;
+
+    if (selectedIds.has(id)) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+
+    if (
+      selectedItems.length > 0 &&
+      selectedItems.some((it) => it.economicCode !== target.economicCode)
+    ) {
+      pushToast(
+        'error',
+        'একটি বিলে শুধুমাত্র একই অর্থনৈতিক কোডের খরচ যুক্ত করা যাবে। একাধিক কোডের খরচ নেওয়া যাবে না।'
+      );
+      return;
+    }
+
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
 
   // Helper to resolve VAT/IT rates for a given code in active FY
   const resolveCodeRates = (economicCode: string) => {
@@ -291,7 +357,7 @@ export function ExpenseItemsPage() {
         const chosenKey = selectedVariantByCode[economicCode];
         const variant: VatVariant =
           rates.vat.find((v) => v.key === chosenKey) || rates.vat[0];
-        const grossAmount = items.reduce((sum, i) => sum + i.amount, 0);
+        const expenseTotal = items.reduce((sum, i) => sum + i.amount, 0);
 
         const defaultDeductions: BillDeductionLine[] = [
           {
@@ -299,7 +365,7 @@ export function ExpenseItemsPage() {
             code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
             name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
             rate: rates.incomeTax,
-            amount: calcPercentageAmount(grossAmount, rates.incomeTax),
+            amount: 0,
             kind: 'it',
           },
           {
@@ -307,23 +373,48 @@ export function ExpenseItemsPage() {
             code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
             name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
             rate: variant.rate,
-            amount: calcPercentageAmount(grossAmount, variant.rate),
+            amount: 0,
             kind: 'vat',
           },
         ];
 
         const customList = deductionsByCode[economicCode];
-        const deductions =
+        const inputDeductions =
           Array.isArray(customList) && customList.length > 0 ? customList : defaultDeductions;
 
-        const vatAmount = deductions
-          .filter((d) => d.kind === 'vat')
-          .reduce((s, d) => s + d.amount, 0);
-        const itAmount = deductions
-          .filter((d) => d.kind === 'it')
-          .reduce((s, d) => s + d.amount, 0);
-        const totalDeduction = deductions.reduce((s, d) => s + d.amount, 0);
-        const netPayable = grossAmount - totalDeduction;
+        let rateError = '';
+        let grossAmount = expenseTotal;
+        let deductions = inputDeductions;
+        let vatAmount = 0;
+        let itAmount = 0;
+        let totalDeduction = 0;
+        let netPayable = expenseTotal;
+        let effectiveVatRate = variant.rate;
+        let effectiveItRate = rates.incomeTax;
+        let totalPercentRate = 0;
+
+        try {
+          const calc = computeGrossedUpBill({
+            expenseTotalPaisa: expenseTotal,
+            vatRate: variant.rate,
+            itRate: rates.incomeTax,
+            customDeductions: inputDeductions,
+            defaultItCode: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+            defaultVatCode: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+          });
+          grossAmount = calc.grossAmount;
+          deductions = calc.deductions;
+          vatAmount = calc.vatAmount;
+          itAmount = calc.itAmount;
+          totalDeduction = calc.totalDeduction;
+          netPayable = calc.netPayable;
+          effectiveVatRate = calc.effectiveVatRate;
+          effectiveItRate = calc.effectiveItRate;
+          totalPercentRate = calc.totalPercentRate;
+        } catch (err) {
+          rateError =
+            err instanceof Error ? err.message : 'মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।';
+        }
 
         const fyTotal = fyCodeTotals.find((f) => f.economicCode === economicCode);
         const avail = computeCodeAvailable({
@@ -346,14 +437,17 @@ export function ExpenseItemsPage() {
           items,
           vatVariants: rates.vat,
           selectedVariant: variant,
-          vatRate: variant.rate,
-          itRate: rates.incomeTax,
+          vatRate: effectiveVatRate,
+          itRate: effectiveItRate,
+          totalPercentRate,
+          expenseTotal,
           grossAmount,
           deductions,
           vatAmount,
           itAmount,
           totalDeduction,
           netPayable,
+          rateError,
           avail,
           hasActiveBudget,
         };
@@ -369,6 +463,8 @@ export function ExpenseItemsPage() {
     spendingLimits,
     selectedFy,
     billDate,
+    officeSettings.defaultItCode,
+    officeSettings.defaultVatCode,
   ]);
 
   // Multi-row Entry Modal helpers & live Stage 1 checks
@@ -405,7 +501,7 @@ export function ExpenseItemsPage() {
         totalsByCode.set(code, {
           amount: (prev?.amount || 0) + validAmt,
           date: prev?.date || r.date || todayYmd(),
-          headName: head.headName,
+          headName: head.displayName,
         });
       }
     }
@@ -609,6 +705,13 @@ export function ExpenseItemsPage() {
   // Bill preparation submit / save draft
   const openPrepareModal = () => {
     if (selectedItems.length === 0) return;
+    if (selectedDistinctCodeCount > 1) {
+      pushToast(
+        'error',
+        'একটি বিলে শুধুমাত্র একই অর্থনৈতিক কোডের খরচ যুক্ত করা যাবে। একাধিক কোডের খরচ নেওয়া যাবে না।'
+      );
+      return;
+    }
     setBillDate(todayYmd());
     setTokenNoInput('');
     setPayeeTextInput(officeSettings.defaultPayeeText || '');
@@ -637,25 +740,36 @@ export function ExpenseItemsPage() {
       const headBn = head.headNameBn || head.headName;
       initPurposes[code] = `${headBn} বাবদ ব্যয়ের বিল।`;
 
-      const gross = items.reduce((s, it) => s + it.amount, 0);
-      initDeductions[code] = [
-        {
-          id: 'it',
-          code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
-          name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
-          rate: r.incomeTax,
-          amount: calcPercentageAmount(gross, r.incomeTax),
-          kind: 'it',
-        },
-        {
-          id: 'vat',
-          code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
-          name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
-          rate: firstVat.rate,
-          amount: calcPercentageAmount(gross, firstVat.rate),
-          kind: 'vat',
-        },
-      ];
+      const expenseTotal = items.reduce((s, it) => s + it.amount, 0);
+      try {
+        const calc = computeGrossedUpBill({
+          expenseTotalPaisa: expenseTotal,
+          vatRate: firstVat.rate,
+          itRate: r.incomeTax,
+          defaultItCode: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+          defaultVatCode: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+        });
+        initDeductions[code] = calc.deductions;
+      } catch {
+        initDeductions[code] = [
+          {
+            id: 'it',
+            code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+            name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
+            rate: r.incomeTax,
+            amount: 0,
+            kind: 'it',
+          },
+          {
+            id: 'vat',
+            code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+            name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
+            rate: firstVat.rate,
+            amount: 0,
+            kind: 'vat',
+          },
+        ];
+      }
     });
 
     setSelectedVariantByCode(initVariants);
@@ -666,6 +780,18 @@ export function ExpenseItemsPage() {
 
   const handleCreateBills = async (mode: 'draft' | 'submit') => {
     if (!userDoc || billPreviewGroups.length === 0) return;
+    if (billPreviewGroups.length > 1) {
+      pushToast(
+        'error',
+        'একটি বিলে শুধুমাত্র একই অর্থনৈতিক কোডের খরচ যুক্ত করা যাবে।'
+      );
+      return;
+    }
+    const invalidRateGroup = billPreviewGroups.find((g) => Boolean(g.rateError));
+    if (invalidRateGroup) {
+      pushToast('error', invalidRateGroup.rateError);
+      return;
+    }
     if (mode === 'submit' && !isOnline) {
       pushToast(
         'error',
@@ -774,8 +900,7 @@ export function ExpenseItemsPage() {
         return {
           Date: formatDateDisplay(item.date),
           'Economic Code': item.economicCode,
-          Head: head.headName,
-          'Head (Bangla)': head.headNameBn,
+          'ব্যয়ের খাত': head.displayName,
           Description: item.description,
           'Responsible Employee': item.responsibleEmployee.name,
           Designation: item.responsibleEmployee.designation,
@@ -945,6 +1070,9 @@ export function ExpenseItemsPage() {
                 });
                 const isListed = item.status === 'listed';
                 const checked = selectedIds.has(item.id);
+                const diffCode = Boolean(
+                  selectedEconomicCode && item.economicCode !== selectedEconomicCode && !checked
+                );
                 return (
                   <div
                     key={item.id}
@@ -957,13 +1085,22 @@ export function ExpenseItemsPage() {
                         <button
                           type="button"
                           onClick={() => toggleSelectOne(item.id)}
+                          title={
+                            diffCode
+                              ? 'অন্য অর্থনৈতিক কোড — একটি বিলে শুধু একই কোডের খরচ যুক্ত করা যাবে'
+                              : undefined
+                          }
                           aria-label={`Select ${item.description}`}
-                          className="min-h-[44px] min-w-[44px] -ml-1.5 -mt-1.5 inline-flex items-center justify-center rounded-lg text-[var(--accent)] shrink-0"
+                          className={`min-h-[44px] min-w-[44px] -ml-1.5 -mt-1.5 inline-flex items-center justify-center rounded-lg shrink-0 ${
+                            diffCode
+                              ? 'text-[var(--muted)]/40 cursor-not-allowed'
+                              : 'text-[var(--accent)]'
+                          }`}
                         >
                           {checked ? (
                             <CheckSquare className="w-5 h-5" />
                           ) : (
-                            <Square className="w-5 h-5 text-[var(--muted)]" />
+                            <Square className={`w-5 h-5 ${diffCode ? 'text-[var(--muted)]/40' : 'text-[var(--muted)]'}`} />
                           )}
                         </button>
                       ) : (
@@ -982,8 +1119,7 @@ export function ExpenseItemsPage() {
                           <span className="tabular-nums font-semibold text-[var(--text)]">
                             {item.economicCode}
                           </span>{' '}
-                          {head.headName}
-                          {head.headNameBn && <span className="bn ml-1">· {head.headNameBn}</span>}
+                          <span className="bn">{head.displayName}</span>
                         </div>
 
                         <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-[var(--line)]/60 text-xs">
@@ -1091,6 +1227,9 @@ export function ExpenseItemsPage() {
                     });
                     const isListed = item.status === 'listed';
                     const checked = selectedIds.has(item.id);
+                    const diffCode = Boolean(
+                      selectedEconomicCode && item.economicCode !== selectedEconomicCode && !checked
+                    );
                     return (
                       <tr
                         key={item.id}
@@ -1103,8 +1242,15 @@ export function ExpenseItemsPage() {
                             <button
                               type="button"
                               onClick={() => toggleSelectOne(item.id)}
+                              title={
+                                diffCode
+                                  ? 'অন্য অর্থনৈতিক কোড — একটি বিলে শুধু একই কোডের খরচ যুক্ত করা যাবে'
+                                  : undefined
+                              }
                               aria-label={`Select ${item.description}`}
-                              className="inline-flex items-center justify-center p-1 rounded"
+                              className={`inline-flex items-center justify-center p-1 rounded ${
+                                diffCode ? 'opacity-40 cursor-not-allowed' : ''
+                              }`}
                             >
                               {checked ? (
                                 <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
@@ -1119,9 +1265,9 @@ export function ExpenseItemsPage() {
                         </td>
                         <td className="py-3 px-3 min-w-[180px]">
                           <div className="font-medium text-[var(--text)]">
-                            <span className="tabular-nums">{item.economicCode}</span> {head.headName}
+                            <span className="tabular-nums">{item.economicCode}</span>{' '}
+                            <span className="bn">{head.displayName}</span>
                           </div>
-                          {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                         </td>
                         <td className="py-3 px-3 bn max-w-[240px] break-words">
                           {item.description}
@@ -1184,10 +1330,18 @@ export function ExpenseItemsPage() {
         <div className="sticky bottom-2 z-20 mt-3 card-surface border-2 border-[var(--accent)] p-3 md:p-4 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="min-w-0">
             <div className="text-sm font-bold text-[var(--text)] tabular-nums">
-              {selectedItems.length}টি খরচ নির্বাচিত · মোট {formatTaka(selectedTotalPaisa)}
+              {selectedItems.length}টি খরচ নির্বাচিত · মূল খরচ {formatTaka(selectedTotalPaisa)}
             </div>
-            <div className="text-xs text-[var(--muted)]">
-              {selectedDistinctCodeCount}টি অর্থনৈতিক কোডের জন্য {selectedDistinctCodeCount}টি বিল প্রস্তুত হবে
+            <div
+              className={`text-xs ${
+                selectedDistinctCodeCount > 1
+                  ? 'text-[var(--danger-text)] font-semibold'
+                  : 'text-[var(--muted)]'
+              }`}
+            >
+              {selectedDistinctCodeCount > 1
+                ? 'একাধিক অর্থনৈতিক কোড নির্বাচিত হয়েছে — একটি বিলে শুধু একই কোডের খরচ নেওয়া যাবে।'
+                : `কোড ${selectedEconomicCode} এর জন্য ১টি বিল প্রস্তুত হবে (কর্তন যোগ করে মোট বিল হিসাব হবে)`}
             </div>
           </div>
 
@@ -1201,8 +1355,9 @@ export function ExpenseItemsPage() {
             </button>
             <button
               type="button"
+              disabled={selectedDistinctCodeCount > 1}
               onClick={openPrepareModal}
-              className="min-h-[44px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5"
+              className="min-h-[44px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <ReceiptText className="w-4 h-4 shrink-0" />
               <span>{t('prepareBill')}</span>
@@ -1216,7 +1371,7 @@ export function ExpenseItemsPage() {
         open={entryModalOpen}
         onClose={() => setEntryModalOpen(false)}
         title="নতুন খরচ যোগ করুন (খরচ তালিকা)"
-        subtitle={`FY ${selectedFy} · এখানে VAT/IT কাটা হবে না — শুধু মোট খরচ লিখুন`}
+        subtitle={`FY ${selectedFy} · এখানে শুধু মূল খরচ লিখুন (বিল করার সময় ভ্যাট/ট্যাক্স যোগ করে মোট বিল হিসাব হবে)`}
         fullScreenOnMobile
         maxWidthClass="md:max-w-3xl"
         footer={
@@ -1365,7 +1520,7 @@ export function ExpenseItemsPage() {
 
                     <div>
                       <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                        পরিমাণ (৳ · VAT/IT ছাড়া)
+                        পরিমাণ (৳ · মূল খরচ)
                       </label>
                       <input
                         type="number"
@@ -1499,9 +1654,9 @@ export function ExpenseItemsPage() {
             }}
             includeSpecial={false}
           />
-          {editHeadName && (
-            <div className="text-xs text-[var(--muted)]">
-              {editHeadName} {editHeadNameBn && <span className="bn">· {editHeadNameBn}</span>}
+          {editCode && (
+            <div className="text-xs text-[var(--muted)] bn">
+              {getHead(editCode, { headName: editHeadName, headNameBn: editHeadNameBn }).displayName}
             </div>
           )}
 
@@ -1598,7 +1753,11 @@ export function ExpenseItemsPage() {
         open={prepareOpen}
         onClose={() => setPrepareOpen(false)}
         title="বিল প্রস্তুত ও প্রিভিউ"
-        subtitle={`${billPreviewGroups.length}টি অর্থনৈতিক কোডের জন্য ${billPreviewGroups.length}টি বিল তৈরি হবে`}
+        subtitle={
+          billPreviewGroups[0]
+            ? `কোড ${billPreviewGroups[0].economicCode} · একই কোডের খরচের জন্য ১টি বিল তৈরি হবে`
+            : 'একটি অর্থনৈতিক কোডের বিল তৈরি হবে'
+        }
         fullScreenOnMobile
         maxWidthClass="md:max-w-3xl"
         footer={
@@ -1616,7 +1775,11 @@ export function ExpenseItemsPage() {
               </button>
               <button
                 type="button"
-                disabled={Boolean(preparingAction)}
+                disabled={
+                  Boolean(preparingAction) ||
+                  billPreviewGroups.length !== 1 ||
+                  billPreviewGroups.some((g) => Boolean(g.rateError))
+                }
                 onClick={() => handleCreateBills('draft')}
                 className="min-h-[44px] px-4 rounded-lg border border-[var(--accent)] text-[var(--accent)] text-sm font-semibold disabled:opacity-60"
               >
@@ -1624,7 +1787,12 @@ export function ExpenseItemsPage() {
               </button>
               <button
                 type="button"
-                disabled={Boolean(preparingAction) || !isOnline}
+                disabled={
+                  Boolean(preparingAction) ||
+                  !isOnline ||
+                  billPreviewGroups.length !== 1 ||
+                  billPreviewGroups.some((g) => Boolean(g.rateError))
+                }
                 onClick={() => handleCreateBills('submit')}
                 className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
               >
@@ -1751,10 +1919,9 @@ export function ExpenseItemsPage() {
                     <div className="text-xs font-bold text-[var(--accent)] tabular-nums">
                       বিল #{idx + 1} · কোড {group.economicCode}
                     </div>
-                    <div className="text-sm font-semibold text-[var(--text)]">
-                      {group.headName}
+                    <div className="text-sm font-semibold text-[var(--text)] bn">
+                      {group.headNameBn || group.headName}
                     </div>
-                    {group.headNameBn && <div className="bn">{group.headNameBn}</div>}
                   </div>
                   <div className="text-right text-xs">
                     <div className="text-[var(--muted)]">উপলব্ধ বাজেট</div>
@@ -1822,7 +1989,6 @@ export function ExpenseItemsPage() {
                                     ? {
                                         ...d,
                                         rate: v.rate,
-                                        amount: calcPercentageAmount(group.grossAmount, v.rate),
                                       }
                                     : d
                                 )
@@ -1967,10 +2133,6 @@ export function ExpenseItemsPage() {
                                     ? {
                                         ...row,
                                         rate: nextRate,
-                                        amount:
-                                          nextRate !== null && Number.isFinite(nextRate)
-                                            ? calcPercentageAmount(group.grossAmount, nextRate)
-                                            : row.amount,
                                       }
                                     : row
                                 )
@@ -1994,6 +2156,7 @@ export function ExpenseItemsPage() {
                                   idx2 === dIdx
                                     ? {
                                         ...row,
+                                        rate: null,
                                         amount: Number.isFinite(nextPaisa) && nextPaisa >= 0 ? nextPaisa : 0,
                                       }
                                     : row
@@ -2026,32 +2189,55 @@ export function ExpenseItemsPage() {
                   </div>
                 </div>
 
+                {group.rateError && (
+                  <div className="p-2.5 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{group.rateError}</span>
+                  </div>
+                )}
+
                 {/* VAT/IT Financial Breakdown */}
-                <div className="p-3 rounded-lg bg-[var(--surface-subtle)] grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-                  <div>
-                    <div className="text-[var(--muted)]">মোট বিল (Gross)</div>
-                    <div className="font-bold tabular-nums">{formatTaka(group.grossAmount)}</div>
-                  </div>
-                  <div>
-                    <div className="text-[var(--muted)]">ভ্যাট ({group.vatRate}%)</div>
-                    <div className="font-semibold tabular-nums">{formatTaka(group.vatAmount)}</div>
-                  </div>
-                  <div>
-                    <div className="text-[var(--muted)]">আয়কর ({group.itRate}%)</div>
-                    <div className="font-semibold tabular-nums">{formatTaka(group.itAmount)}</div>
-                  </div>
-                  <div>
-                    <div className="text-[var(--muted)]">মোট কর্তন</div>
-                    <div className="font-semibold tabular-nums">
-                      {formatTaka(group.totalDeduction)}
+                <div className="p-3 rounded-lg bg-[var(--surface-subtle)] space-y-2 text-xs">
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+                    <div>
+                      <div className="text-[var(--muted)]">মূল খরচ</div>
+                      <div className="font-semibold tabular-nums">
+                        {formatTaka(group.expenseTotal)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[var(--muted)]">মোট বিল (Gross)</div>
+                      <div className="font-bold text-[var(--text)] tabular-nums">
+                        {formatTaka(group.grossAmount)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[var(--muted)]">ভ্যাট ({group.vatRate}%)</div>
+                      <div className="font-semibold tabular-nums">{formatTaka(group.vatAmount)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[var(--muted)]">আয়কর ({group.itRate}%)</div>
+                      <div className="font-semibold tabular-nums">{formatTaka(group.itAmount)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[var(--muted)]">মোট কর্তন</div>
+                      <div className="font-semibold tabular-nums">
+                        {formatTaka(group.totalDeduction)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[var(--muted)]">নিট প্রদেয়</div>
+                      <div className="font-bold text-[var(--accent)] tabular-nums">
+                        {formatTaka(group.netPayable)}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-[var(--muted)]">নিট প্রদেয়</div>
-                    <div className="font-bold text-[var(--accent)] tabular-nums">
-                      {formatTaka(group.netPayable)}
+                  {group.totalPercentRate > 0 && !group.rateError && (
+                    <div className="text-[11px] text-[var(--muted)] tabular-nums border-t border-[var(--line)]/60 pt-1.5">
+                      হিসাব: ({formatNumberIN(group.expenseTotal)} × 100) / (100 −{' '}
+                      {group.totalPercentRate}%) = {formatTaka(group.grossAmount)}
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             );

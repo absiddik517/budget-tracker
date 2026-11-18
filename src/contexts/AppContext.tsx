@@ -29,6 +29,7 @@ export interface HeadLookupResult {
   code: string;
   headName: string;
   headNameBn: string;
+  displayName: string;
   active: boolean;
   special: boolean;
   found: boolean;
@@ -214,6 +215,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           code: found.code,
           headName: found.headName,
           headNameBn: found.headNameBn,
+          displayName: found.headNameBn || found.headName || found.code,
           active: found.active,
           special: found.special,
           found: true,
@@ -223,6 +225,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         code: trimmed,
         headName: fallback?.headName || trimmed,
         headNameBn: fallback?.headNameBn || '',
+        displayName: fallback?.headNameBn || fallback?.headName || trimmed,
         active: true,
         special: trimmed === 'GENERAL-CONSTRUCTION',
         found: false,

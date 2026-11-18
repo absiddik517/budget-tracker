@@ -258,7 +258,7 @@ export function ReportsPage() {
           const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
           return {
             'Economic Code': b.economicCode,
-            Head: head.headName,
+            'ব্যয়ের খাত': head.displayName,
             'Memo No': b.memoNo,
             'Memo Date': formatDateDisplay(b.memoDate),
             Type: b.entryType,
@@ -272,7 +272,7 @@ export function ReportsPage() {
       } else if (tab === 'summary') {
         sheetName = 'Budget Summary';
         rows = summaryRows.map((r) => ({
-          Head: `${r.economicCode} ${r.headName}`,
+          'ব্যয়ের খাত': `${r.economicCode} ${r.headNameBn || r.headName}`,
           'Allocated (BDT)': fromPaisa(r.allocated),
           'Approved Spent (BDT)': fromPaisa(r.approvedSpent),
           'Pending (BDT)': fromPaisa(r.pendingAmount),
@@ -286,7 +286,7 @@ export function ReportsPage() {
           return {
             Date: formatDateDisplay(b.date),
             'Bill No': b.billNo || 'Draft',
-            Head: `${b.economicCode} ${head.headName}`,
+            'ব্যয়ের খাত': `${b.economicCode} ${head.displayName}`,
             'Items Count': b.items.length,
             'Gross (BDT)': fromPaisa(b.grossAmount),
             'VAT (BDT)': fromPaisa(b.vatAmount),
@@ -304,7 +304,7 @@ export function ReportsPage() {
           });
           return {
             Date: formatDateDisplay(item.date),
-            Head: `${item.economicCode} ${head.headName}`,
+            'ব্যয়ের খাত': `${item.economicCode} ${head.displayName}`,
             Description: item.description,
             'Responsible Employee': item.responsibleEmployee.name,
             Designation: item.responsibleEmployee.designation,
@@ -315,7 +315,7 @@ export function ReportsPage() {
       } else {
         sheetName = 'VAT IT Deductions';
         rows = deductionRows.map((r) => ({
-          Head: `${r.economicCode} ${r.headName}`,
+          'ব্যয়ের খাত': `${r.economicCode} ${r.headNameBn || r.headName}`,
           'Gross (BDT)': fromPaisa(r.gross),
           'VAT (BDT)': fromPaisa(r.vat),
           'Income Tax (BDT)': fromPaisa(r.it),
@@ -478,12 +478,9 @@ export function ReportsPage() {
                         <div className="text-xs font-bold tabular-nums text-[var(--accent)]">
                           {group.economicCode}
                         </div>
-                        <div className="text-sm font-semibold text-[var(--text)] break-words">
-                          {group.headName}
+                        <div className="text-sm font-semibold text-[var(--text)] bn break-words">
+                          {group.headNameBn || group.headName}
                         </div>
-                        {group.headNameBn && (
-                          <div className="bn mt-0.5 break-words">{group.headNameBn}</div>
-                        )}
                       </div>
 
                       <div className="space-y-2">
@@ -571,7 +568,7 @@ export function ReportsPage() {
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                       <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                        Head
+                        ব্যয়ের খাত
                       </th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Memo No</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
@@ -613,7 +610,7 @@ export function ReportsPage() {
                                 <span className="tabular-nums font-medium">
                                   {entry.economicCode}
                                 </span>{' '}
-                                {entryHead.headName}
+                                <span className="bn">{entryHead.displayName}</span>
                               </td>
                               <td className="py-2.5 px-4 whitespace-nowrap">{entry.memoNo}</td>
                               <td className="py-2.5 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
@@ -643,7 +640,8 @@ export function ReportsPage() {
                             className="bg-[var(--surface-subtle)] font-semibold"
                           >
                             <td colSpan={4} className="py-2 px-4 text-xs">
-                              Subtotal · {group.economicCode} {group.headName}
+                              Subtotal · {group.economicCode}{' '}
+                              <span className="bn">{group.headNameBn || group.headName}</span>
                             </td>
                             <td className="py-2 px-4 text-right tabular-nums text-xs">
                               {formatNumberIN(group.allocated)}
@@ -714,11 +712,8 @@ export function ReportsPage() {
                         <div className="min-w-0 flex-1">
                           <div className="text-sm font-medium text-[var(--text)] break-words">
                             <span className="tabular-nums font-semibold">{r.economicCode}</span>{' '}
-                            {r.headName}
+                            <span className="bn">{r.headNameBn || r.headName}</span>
                           </div>
-                          {r.headNameBn && (
-                            <div className="bn mt-0.5 break-words">{r.headNameBn}</div>
-                          )}
                         </div>
                         <span className="text-xs font-semibold tabular-nums text-[var(--accent)] shrink-0">
                           {r.usedPct}%
@@ -760,7 +755,7 @@ export function ReportsPage() {
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                       <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                        Head
+                        ব্যয়ের খাত
                       </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
                         Allocated
@@ -781,8 +776,8 @@ export function ReportsPage() {
                     {summaryRows.map((r) => (
                       <tr key={r.economicCode}>
                         <td className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                          <span className="tabular-nums">{r.economicCode}</span> {r.headName}
-                          {r.headNameBn && <span className="bn ml-1.5">{r.headNameBn}</span>}
+                          <span className="tabular-nums">{r.economicCode}</span>{' '}
+                          <span className="bn">{r.headNameBn || r.headName}</span>
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                           {formatNumberIN(r.allocated)}
@@ -838,7 +833,7 @@ export function ReportsPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="text-sm font-medium text-[var(--text)] min-w-0 flex-1 break-words">
                           <span className="tabular-nums font-semibold">{h.economicCode}</span>{' '}
-                          {h.headName}
+                          <span className="bn">{h.headNameBn || h.headName}</span>
                         </div>
                         <span className="text-xs text-[var(--muted)] tabular-nums shrink-0">
                           {h.count} {h.count === 1 ? 'bill' : 'bills'}
@@ -874,7 +869,7 @@ export function ReportsPage() {
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                       <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                        Head
+                        ব্যয়ের খাত
                       </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
                         Approved Bills
@@ -902,7 +897,8 @@ export function ReportsPage() {
                       headWiseTotals.map((h) => (
                         <tr key={h.economicCode}>
                           <td className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                            <span className="tabular-nums">{h.economicCode}</span> {h.headName}
+                            <span className="tabular-nums">{h.economicCode}</span>{' '}
+                            <span className="bn">{h.headNameBn || h.headName}</span>
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums">{h.count}</td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
@@ -946,7 +942,7 @@ export function ReportsPage() {
                           <span className="tabular-nums font-medium text-[var(--text)]">
                             {item.economicCode}
                           </span>{' '}
-                          {head.headName}
+                          <span className="bn">{head.displayName}</span>
                         </div>
                         <div className="flex justify-between pt-1 border-t border-[var(--line)]/60">
                           <span className="text-[var(--muted)]">
@@ -967,7 +963,7 @@ export function ReportsPage() {
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
-                      <th className="py-3 px-4 font-medium">Head</th>
+                      <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
                       <th className="py-3 px-4 font-medium">Description</th>
                       <th className="py-3 px-4 font-medium">Responsible</th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Amount</th>
@@ -997,7 +993,7 @@ export function ReportsPage() {
                             </td>
                             <td className="py-3 px-4">
                               <span className="tabular-nums font-medium">{item.economicCode}</span>{' '}
-                              {head.headName}
+                              <span className="bn">{head.displayName}</span>
                             </td>
                             <td className="py-3 px-4 bn">{item.description}</td>
                             <td className="py-3 px-4 bn">{item.responsibleEmployee.name}</td>
@@ -1065,7 +1061,7 @@ export function ReportsPage() {
                     <div key={r.economicCode} className="p-3.5 space-y-2">
                       <div className="text-sm font-medium text-[var(--text)] break-words">
                         <span className="tabular-nums font-semibold">{r.economicCode}</span>{' '}
-                        {r.headName}
+                        <span className="bn">{r.headNameBn || r.headName}</span>
                       </div>
                       <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-[var(--line)]/60">
                         <div className="min-w-0">
@@ -1109,7 +1105,7 @@ export function ReportsPage() {
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                       <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                        Head
+                        ব্যয়ের খাত
                       </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Gross</th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">VAT</th>
@@ -1128,7 +1124,8 @@ export function ReportsPage() {
                     {deductionRows.map((r) => (
                       <tr key={r.economicCode}>
                         <td className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
-                          <span className="tabular-nums">{r.economicCode}</span> {r.headName}
+                          <span className="tabular-nums">{r.economicCode}</span>{' '}
+                          <span className="bn">{r.headNameBn || r.headName}</span>
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums">
                           {formatNumberIN(r.gross)}

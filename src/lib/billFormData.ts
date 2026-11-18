@@ -222,8 +222,22 @@ export function buildTr21FormData(params: {
 
   const introText = `${officeName}-এর অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${purposeText}`;
 
-  const items: Tr21ItemRow[] = (bill.items || []).map((item, idx) => {
-    const split = splitPaisaForTr21(item.amount, { noComma: true });
+  const rawItems = bill.items || [];
+  const rawItemsSum = rawItems.reduce((sum, item) => sum + item.amount, 0);
+  const computedGross = bill.grossAmount > 0 ? bill.grossAmount : rawItemsSum;
+
+  let allocatedItemGross = 0;
+  const items: Tr21ItemRow[] = rawItems.map((item, idx) => {
+    let displayAmount = item.amount;
+    if (rawItemsSum > 0 && computedGross !== rawItemsSum) {
+      if (idx === rawItems.length - 1) {
+        displayAmount = Math.max(0, computedGross - allocatedItemGross);
+      } else {
+        displayAmount = Math.round((item.amount * computedGross) / rawItemsSum);
+        allocatedItemGross += displayAmount;
+      }
+    }
+    const split = splitPaisaForTr21(displayAmount, { noComma: true });
     const emp = item.responsibleEmployee?.name
       ? item.responsibleEmployee.designation
         ? `${item.responsibleEmployee.name} (${item.responsibleEmployee.designation})`
@@ -233,14 +247,11 @@ export function buildTr21FormData(params: {
       indexBn: toBanglaDigits(idx + 1),
       description: item.description,
       responsibleText: emp,
-      amountPaisa: item.amount,
+      amountPaisa: displayAmount,
       takaStr: split.takaStr,
       paisaStr: split.paisaStr,
     };
   });
-
-  const computedGross =
-    items.length > 0 ? items.reduce((sum, it) => sum + it.amountPaisa, 0) : bill.grossAmount;
 
   const itDefaultCode = officeSettings.defaultItCode || DEFAULT_IT_CODE;
   const vatDefaultCode = officeSettings.defaultVatCode || DEFAULT_VAT_CODE;

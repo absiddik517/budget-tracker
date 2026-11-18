@@ -257,14 +257,11 @@ export function SpendingLimitsPage() {
       {economicCode && (
         <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
           <div className="text-[11px] font-medium text-[var(--muted)]">
-            Head of expenditure (from Economic Codes)
+            ব্যয়ের খাত
           </div>
-          <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
-            {headName || getHead(economicCode).headName}
+          <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
+            {getHead(economicCode, { headName, headNameBn }).displayName}
           </div>
-          {(headNameBn || getHead(economicCode).headNameBn) && (
-            <div className="bn mt-0.5 break-words">{headNameBn || getHead(economicCode).headNameBn}</div>
-          )}
         </div>
       )}
 
@@ -290,7 +287,7 @@ export function SpendingLimitsPage() {
                 });
                 return (
                   <option key={b.id} value={b.id}>
-                    {b.memoNo} · {b.economicCode} {head.headName} ({formatTaka(b.allocated)})
+                    {b.memoNo} · {b.economicCode} {head.displayName} ({formatTaka(b.allocated)})
                   </option>
                 );
               })}
@@ -463,11 +460,8 @@ export function SpendingLimitsPage() {
                           </div>
                           <div className="text-sm font-medium text-[var(--text)] mt-1.5 break-words">
                             <span className="tabular-nums font-semibold">{l.economicCode}</span>{' '}
-                            {head.headName}
+                            <span className="bn">{head.displayName}</span>
                           </div>
-                          {head.headNameBn && (
-                            <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
-                          )}
                         </div>
                         <StatusChip variant={l.status === 'active' ? 'active' : 'withdrawn'}>
                           {l.status === 'active' ? t('active') : t('withdrawn')}
@@ -518,7 +512,7 @@ export function SpendingLimitsPage() {
                 <thead>
                   <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                     <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Type</th>
-                    <th className="py-3 px-4 font-medium">Code · Head</th>
+                    <th className="py-3 px-4 font-medium">কোড · ব্যয়ের খাত</th>
                     <th className="py-3 px-4 font-medium">Budget</th>
                     <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Rate</th>
                     <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Cap</th>
@@ -558,9 +552,9 @@ export function SpendingLimitsPage() {
                           </td>
                           <td className="py-3 px-4 min-w-[180px]">
                             <div className="font-medium text-[var(--text)]">
-                              <span className="tabular-nums">{l.economicCode}</span> {head.headName}
+                              <span className="tabular-nums">{l.economicCode}</span>{' '}
+                              <span className="bn">{head.displayName}</span>
                             </div>
-                            {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                           </td>
                           <td className="py-3 px-4 whitespace-nowrap text-xs text-[var(--muted)]">
                             {stats.budgetLabel}

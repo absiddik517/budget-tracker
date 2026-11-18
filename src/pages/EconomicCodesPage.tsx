@@ -137,7 +137,6 @@ export function EconomicCodesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<EconomicCodeDoc | null>(null);
   const [codeInput, setCodeInput] = useState('');
-  const [headNameInput, setHeadNameInput] = useState('');
   const [headNameBnInput, setHeadNameBnInput] = useState('');
   const [activeInput, setActiveInput] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -166,7 +165,6 @@ export function EconomicCodesPage() {
   const openCreateModal = () => {
     setEditingEntry(null);
     setCodeInput('');
-    setHeadNameInput('');
     setHeadNameBnInput('');
     setActiveInput(true);
     setModalOpen(true);
@@ -176,8 +174,7 @@ export function EconomicCodesPage() {
     if (!canEdit) return;
     setEditingEntry(entry);
     setCodeInput(entry.code);
-    setHeadNameInput(entry.headName);
-    setHeadNameBnInput(entry.headNameBn);
+    setHeadNameBnInput(entry.headNameBn || entry.headName);
     setActiveInput(entry.active);
     setModalOpen(true);
   };
@@ -195,7 +192,7 @@ export function EconomicCodesPage() {
       await upsertEconomicCode(
         {
           code: trimmedCode,
-          headName: headNameInput,
+          headName: headNameBnInput,
           headNameBn: headNameBnInput,
           active: activeInput,
         },
@@ -251,10 +248,10 @@ export function EconomicCodesPage() {
       }
       const headers = parseCsvLine(lines[0]);
       const cIdx = headers.indexOf('code');
-      const enIdx = headers.indexOf('headName');
       const bnIdx = headers.indexOf('headNameBn');
-      if (cIdx === -1 || enIdx === -1) {
-        pushToast('error', 'CSV must include columns: code, headName, headNameBn.');
+      const enIdx = headers.indexOf('headName');
+      if (cIdx === -1 || (bnIdx === -1 && enIdx === -1)) {
+        pushToast('error', 'CSV must include columns: code, headNameBn.');
         return;
       }
 
@@ -262,15 +259,16 @@ export function EconomicCodesPage() {
       for (let i = 1; i < lines.length; i++) {
         const cols = parseCsvLine(lines[i]);
         const rowCode = (cols[cIdx] || '').trim();
-        const rowHead = (cols[enIdx] || '').trim();
         const rowHeadBn = bnIdx >= 0 ? (cols[bnIdx] || '').trim() : '';
-        if (!rowCode || !rowHead) continue;
+        const rowHeadFallback = enIdx >= 0 ? (cols[enIdx] || '').trim() : '';
+        const finalHead = rowHeadBn || rowHeadFallback;
+        if (!rowCode || !finalHead) continue;
 
         await upsertEconomicCode(
           {
             code: rowCode,
-            headName: rowHead,
-            headNameBn: rowHeadBn,
+            headName: finalHead,
+            headNameBn: finalHead,
             active: true,
           },
           { uid: userDoc.id, name: userDoc.name }
@@ -343,7 +341,7 @@ export function EconomicCodesPage() {
                   setSearch(e.target.value);
                   setPage(1);
                 }}
-                placeholder="Search code, English, or বাংলা…"
+                placeholder="কোড বা ব্যয়ের খাত খুঁজুন…"
                 aria-label="Search economic codes"
                 className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
@@ -390,12 +388,12 @@ export function EconomicCodesPage() {
                             · {budgetCount} {budgetCount === 1 ? 'budget' : 'budgets'}
                           </span>
                         </div>
-                        <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
-                          {item.headName}
+                        <div
+                          className="text-sm font-medium text-[var(--text)] mt-1 break-words bn"
+                          style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
+                        >
+                          {item.headNameBn || item.headName}
                         </div>
-                        {item.headNameBn && (
-                          <div className="bn mt-0.5 break-words">{item.headNameBn}</div>
-                        )}
                       </div>
                       <StatusChip variant={item.active ? 'active' : 'withdrawn'}>
                         {item.active ? t('active') : t('inactive')}
@@ -441,7 +439,6 @@ export function EconomicCodesPage() {
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                   <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Code</th>
-                  <th className="py-3 px-4 font-medium">Head of expenditure</th>
                   <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
                   <th className="py-3 px-4 font-medium whitespace-nowrap">{t('status')}</th>
                   <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Used in</th>
@@ -453,13 +450,13 @@ export function EconomicCodesPage() {
               <tbody className="divide-y divide-[var(--line)]">
                 {loading ? (
                   <tr>
-                    <td colSpan={canEdit ? 6 : 5} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                    <td colSpan={canEdit ? 5 : 4} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
                       Loading economic codes…
                     </td>
                   </tr>
                 ) : paged.length === 0 ? (
                   <tr>
-                    <td colSpan={canEdit ? 6 : 5} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                    <td colSpan={canEdit ? 5 : 4} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
                       {t('noDataFound')}
                     </td>
                   </tr>
@@ -475,14 +472,11 @@ export function EconomicCodesPage() {
                         <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-semibold tabular-nums whitespace-nowrap transition-colors">
                           {item.code}
                         </td>
-                        <td className="py-3 px-4 font-medium text-[var(--text)]">
-                          {item.headName}
-                        </td>
                         <td
-                          className="py-3 px-4 text-[var(--muted)]"
+                          className="py-3 px-4 font-medium text-[var(--text)]"
                           style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
                         >
-                          {item.headNameBn || '—'}
+                          {item.headNameBn || item.headName || '—'}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           <StatusChip variant={item.active ? 'active' : 'withdrawn'}>
@@ -579,27 +573,13 @@ export function EconomicCodesPage() {
           </div>
 
           <div>
-            <label htmlFor="ec-en" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Head of expenditure (English)
-            </label>
-            <input
-              id="ec-en"
-              type="text"
-              required
-              value={headNameInput}
-              onChange={(e) => setHeadNameInput(e.target.value)}
-              placeholder="Entertainment"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
-            />
-          </div>
-
-          <div>
             <label htmlFor="ec-bn" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              ব্যয়ের খাত (Bengali)
+              ব্যয়ের খাত
             </label>
             <input
               id="ec-bn"
               type="text"
+              required
               value={headNameBnInput}
               onChange={(e) => setHeadNameBnInput(e.target.value)}
               placeholder="আপ্যায়ন ব্যয়"

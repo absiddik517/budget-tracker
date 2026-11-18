@@ -120,7 +120,7 @@ export function VatTaxModelPage() {
         {
           fiscalYear: selectedFy,
           economicCode: trimmedCode,
-          description: entry.headName,
+          description: entry.headNameBn || entry.headName,
           descriptionBn: entry.headNameBn,
           incomeTax: itNum,
           vat: vatArr,
@@ -193,11 +193,12 @@ export function VatTaxModelPage() {
         const defaultVat = vIdx >= 0 ? parseFloat(cols[vIdx]) || 0 : 0;
 
         if (!getCodeEntry(rowCode)) {
+          const finalHead = rowDescBn || rowDesc;
           await upsertEconomicCode(
             {
               code: rowCode,
-              headName: rowDesc,
-              headNameBn: rowDescBn,
+              headName: finalHead,
+              headNameBn: finalHead,
               active: true,
             },
             actor
@@ -313,12 +314,9 @@ export function VatTaxModelPage() {
                         <div className="text-xs font-bold tabular-nums text-[var(--accent)] break-all">
                           {rate.economicCode}
                         </div>
-                        <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
-                          {head.headName}
+                        <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
+                          {head.displayName}
                         </div>
-                        {head.headNameBn && (
-                          <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
-                        )}
                       </div>
                       {variantsStr && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] border border-[var(--line)] text-[var(--text)] shrink-0">
@@ -365,7 +363,7 @@ export function VatTaxModelPage() {
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                   <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Code</th>
-                  <th className="py-3 px-4 font-medium">Description</th>
+                  <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
                   <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Income tax</th>
                   <th className="py-3 px-4 font-medium text-right whitespace-nowrap">VAT</th>
                   <th className="py-3 px-4 font-medium whitespace-nowrap">Variants</th>
@@ -415,11 +413,8 @@ export function VatTaxModelPage() {
                             : rate.economicCode}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="font-medium text-[var(--text)]">
-                            {head.headName}{' '}
-                            {head.headNameBn && (
-                              <span className="bn ml-1">{head.headNameBn}</span>
-                            )}
+                          <div className="font-medium text-[var(--text)] bn">
+                            {head.displayName}
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
@@ -493,14 +488,11 @@ export function VatTaxModelPage() {
           {code && (
             <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
               <div className="text-[11px] font-medium text-[var(--muted)]">
-                Head of expenditure (from Economic Codes)
+                ব্যয়ের খাত
               </div>
-              <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
-                {description || getHead(code).headName}
+              <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
+                {getHead(code, { headName: description, headNameBn: descriptionBn }).displayName}
               </div>
-              {(descriptionBn || getHead(code).headNameBn) && (
-                <div className="bn mt-0.5 break-words">{descriptionBn || getHead(code).headNameBn}</div>
-              )}
             </div>
           )}
 

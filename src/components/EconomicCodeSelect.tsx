@@ -18,6 +18,7 @@ export interface EconomicCodeSelectProps {
   clearable?: boolean;
   includeInactive?: boolean;
   includeSpecial?: boolean;
+  excludeCodes?: string[];
   filter?: (entry: EconomicCodeDoc) => boolean;
 }
 
@@ -56,6 +57,7 @@ export function EconomicCodeSelect({
   clearable = false,
   includeInactive = false,
   includeSpecial = false,
+  excludeCodes,
   filter,
 }: EconomicCodeSelectProps) {
   const { userDoc } = useAuth();
@@ -83,7 +85,6 @@ export function EconomicCodeSelect({
   // Quick-add modal state (for DDO / Super Admin when no match)
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [qaCode, setQaCode] = useState('');
-  const [qaHeadName, setQaHeadName] = useState('');
   const [qaHeadNameBn, setQaHeadNameBn] = useState('');
   const [qaSaving, setQaSaving] = useState(false);
 
@@ -98,14 +99,22 @@ export function EconomicCodeSelect({
     [value, getCodeEntry]
   );
 
+  const excludedSet = useMemo(() => {
+    if (!excludeCodes || excludeCodes.length === 0) return null;
+    const s = new Set(excludeCodes.map((c) => c.trim()).filter(Boolean));
+    if (value) s.delete(value.trim());
+    return s;
+  }, [excludeCodes, value]);
+
   const baseOptions = useMemo(() => {
     return economicCodes.filter((item) => {
       if (!includeInactive && !item.active) return false;
       if (!includeSpecial && item.special) return false;
+      if (excludedSet && excludedSet.has(item.code)) return false;
       if (filter && !filter(item)) return false;
       return true;
     });
-  }, [economicCodes, includeInactive, includeSpecial, filter]);
+  }, [economicCodes, includeInactive, includeSpecial, excludedSet, filter]);
 
   const filteredOptions = useMemo(() => {
     const q = normalizeQuery(search);
@@ -224,8 +233,7 @@ export function EconomicCodeSelect({
     const trimmed = search.trim();
     const digitsOnly = /^\d{1,7}$/.test(trimmed) ? trimmed : '';
     setQaCode(digitsOnly);
-    setQaHeadName(digitsOnly ? '' : trimmed);
-    setQaHeadNameBn('');
+    setQaHeadNameBn(digitsOnly ? '' : trimmed);
     setOpen(false);
     setQuickAddOpen(true);
   };
@@ -238,7 +246,7 @@ export function EconomicCodeSelect({
       const created = await upsertEconomicCode(
         {
           code: qaCode,
-          headName: qaHeadName,
+          headName: qaHeadNameBn,
           headNameBn: qaHeadNameBn,
           active: true,
         },
@@ -273,7 +281,7 @@ export function EconomicCodeSelect({
               setActiveIndex(0);
             }}
             onKeyDown={handleKeyDown}
-            placeholder="Search by code, English, or বাংলা…"
+            placeholder="কোড বা ব্যয়ের খাত খুঁজুন…"
             aria-label="Search economic codes"
             aria-controls={listboxId}
             aria-activedescendant={activeOptionId}
@@ -335,13 +343,8 @@ export function EconomicCodeSelect({
                       <span className="text-[11px] text-[var(--accent)]">Special</span>
                     )}
                   </div>
-                  <div className="text-xs text-[var(--muted)] truncate mt-0.5">
-                    <HighlightMatch text={item.headName} query={search} />
-                    {item.headNameBn && (
-                      <span className="bn ml-1.5">
-                        <HighlightMatch text={item.headNameBn} query={search} />
-                      </span>
-                    )}
+                  <div className="text-xs text-[var(--muted)] truncate mt-0.5 bn">
+                    <HighlightMatch text={item.headNameBn || item.headName} query={search} />
                   </div>
                 </div>
                 {isSelected && <Check className="w-4 h-4 text-[var(--accent)] shrink-0" />}
@@ -389,11 +392,8 @@ export function EconomicCodeSelect({
                 <div className="text-sm font-semibold text-[var(--text)] tabular-nums truncate">
                   {value}
                 </div>
-                <div className="text-xs text-[var(--muted)] truncate mt-0.5">
-                  <span>{selectedEntry?.headName || 'Unknown economic code'}</span>
-                  {selectedEntry?.headNameBn && (
-                    <span className="bn ml-1.5">{selectedEntry.headNameBn}</span>
-                  )}
+                <div className="text-xs text-[var(--muted)] truncate mt-0.5 bn">
+                  {selectedEntry?.headNameBn || selectedEntry?.headName || 'অজানা অর্থনৈতিক কোড'}
                 </div>
               </>
             ) : (
@@ -509,26 +509,13 @@ export function EconomicCodeSelect({
             />
           </div>
           <div>
-            <label htmlFor={`${baseId}-qa-en`} className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Head of expenditure (English)
-            </label>
-            <input
-              id={`${baseId}-qa-en`}
-              type="text"
-              required
-              value={qaHeadName}
-              onChange={(e) => setQaHeadName(e.target.value)}
-              placeholder="Entertainment"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
-            />
-          </div>
-          <div>
             <label htmlFor={`${baseId}-qa-bn`} className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              ব্যয়ের খাত (Bengali)
+              ব্যয়ের খাত
             </label>
             <input
               id={`${baseId}-qa-bn`}
               type="text"
+              required
               value={qaHeadNameBn}
               onChange={(e) => setQaHeadNameBn(e.target.value)}
               placeholder="আপ্যায়ন ব্যয়"

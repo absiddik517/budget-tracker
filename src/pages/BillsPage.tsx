@@ -42,6 +42,7 @@ import {
 } from '../lib/firestoreOps';
 import {
   calcPercentageAmount,
+  computeGrossedUpBill,
   formatNumberIN,
   formatPaisaInput,
   formatTaka,
@@ -273,10 +274,110 @@ export function BillsPage() {
     };
   }, [selectedBill, vatTaxRates, budgets]);
 
+  const selectedBillExpenseTotal = useMemo(() => {
+    if (!selectedBill) return 0;
+    return selectedBill.items.reduce((s, it) => s + it.amount, 0);
+  }, [selectedBill]);
+
+  const previewDraftRate = useMemo(() => {
+    if (!selectedBill || !selectedBillRates) return null;
+    const variant =
+      selectedBillRates.vat.find((v) => v.key === editDraftVariantKey) || selectedBillRates.vat[0];
+    const hasItems = selectedBill.items.length > 0 && selectedBillExpenseTotal > 0;
+
+    if (hasItems) {
+      try {
+        const calc = computeGrossedUpBill({
+          expenseTotalPaisa: selectedBillExpenseTotal,
+          vatRate: variant.rate,
+          itRate: selectedBillRates.incomeTax,
+          customDeductions: editDeductions.length > 0 ? editDeductions : undefined,
+          defaultItCode: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+          defaultVatCode: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+        });
+        return {
+          grossAmount: calc.grossAmount,
+          vatRate: calc.effectiveVatRate,
+          itRate: calc.effectiveItRate,
+          totalPercentRate: calc.totalPercentRate,
+          deductions: calc.deductions,
+          vatAmt: calc.vatAmount,
+          itAmt: calc.itAmount,
+          totalDed: calc.totalDeduction,
+          netPayable: calc.netPayable,
+          rateError: '',
+        };
+      } catch (err) {
+        return {
+          grossAmount: selectedBill.grossAmount,
+          vatRate: variant.rate,
+          itRate: selectedBillRates.incomeTax,
+          totalPercentRate: 0,
+          deductions: editDeductions,
+          vatAmt: 0,
+          itAmt: 0,
+          totalDed: 0,
+          netPayable: selectedBill.grossAmount,
+          rateError:
+            err instanceof Error ? err.message : 'মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।',
+        };
+      }
+    }
+
+    const deductions =
+      editDeductions.length > 0
+        ? editDeductions
+        : [
+            {
+              id: 'it',
+              code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+              name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
+              rate: selectedBillRates.incomeTax,
+              amount: calcPercentageAmount(selectedBill.grossAmount, selectedBillRates.incomeTax),
+              kind: 'it' as const,
+            },
+            {
+              id: 'vat',
+              code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+              name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
+              rate: variant.rate,
+              amount: calcPercentageAmount(selectedBill.grossAmount, variant.rate),
+              kind: 'vat' as const,
+            },
+          ];
+    const vatAmt = deductions.filter((d) => d.kind === 'vat').reduce((s, d) => s + d.amount, 0);
+    const itAmt = deductions.filter((d) => d.kind === 'it').reduce((s, d) => s + d.amount, 0);
+    const totalDed = deductions.reduce((s, d) => s + d.amount, 0);
+    return {
+      grossAmount: selectedBill.grossAmount,
+      vatRate: variant.rate,
+      itRate: selectedBillRates.incomeTax,
+      totalPercentRate: 0,
+      deductions,
+      vatAmt,
+      itAmt,
+      totalDed,
+      netPayable: selectedBill.grossAmount - totalDed,
+      rateError: '',
+    };
+  }, [
+    selectedBill,
+    selectedBillRates,
+    selectedBillExpenseTotal,
+    editDraftVariantKey,
+    editDeductions,
+    officeSettings.defaultItCode,
+    officeSettings.defaultVatCode,
+  ]);
+
   // Live availability check for draft/submitted selected bill
   const selectedBillAvailability = useMemo(() => {
     if (!selectedBill) return null;
     const fyTotal = fyCodeTotals.find((f) => f.economicCode === selectedBill.economicCode);
+    const effectiveGross =
+      selectedBill.status === 'draft' && previewDraftRate && !previewDraftRate.rateError
+        ? previewDraftRate.grossAmount
+        : selectedBill.grossAmount;
     return computeCodeAvailable({
       fiscalYear: selectedBill.fiscalYear,
       economicCode: selectedBill.economicCode,
@@ -284,10 +385,10 @@ export function BillsPage() {
       fyCodeTotal: fyTotal,
       spendingLimits,
       date: selectedBill.date,
-      gross: selectedBill.grossAmount,
+      gross: effectiveGross,
       excludePendingAmount: selectedBill.status === 'submitted' ? selectedBill.grossAmount : 0,
     });
-  }, [selectedBill, fyCodeTotals, budgets, spendingLimits]);
+  }, [selectedBill, previewDraftRate, fyCodeTotals, budgets, spendingLimits]);
 
   const handleDirectTr21Output = async (
     bill: BillDoc,
@@ -334,6 +435,10 @@ export function BillsPage() {
 
   const handleSaveDraftRates = async () => {
     if (!userDoc || !selectedBill || selectedBill.status !== 'draft' || !selectedBillRates) return;
+    if (previewDraftRate?.rateError) {
+      pushToast('error', previewDraftRate.rateError);
+      return;
+    }
     const variant =
       selectedBillRates.vat.find((v) => v.key === editDraftVariantKey) || selectedBillRates.vat[0];
     setSavingDraftEdit(true);
@@ -493,8 +598,7 @@ export function BillsPage() {
           'Bill No': b.billNo || 'Draft',
           Date: formatDateDisplay(b.date),
           'Economic Code': b.economicCode,
-          Head: head.headName,
-          'Head (Bangla)': head.headNameBn,
+          'ব্যয়ের খাত': head.displayName,
           'Items Count': b.items.length,
           'Gross (BDT)': fromPaisa(b.grossAmount),
           'VAT %': b.vatRate,
@@ -563,44 +667,6 @@ export function BillsPage() {
     </div>
   );
 
-  const previewDraftRate = useMemo(() => {
-    if (!selectedBill || !selectedBillRates) return null;
-    const variant =
-      selectedBillRates.vat.find((v) => v.key === editDraftVariantKey) || selectedBillRates.vat[0];
-    const deductions =
-      editDeductions.length > 0
-        ? editDeductions
-        : [
-            {
-              id: 'it',
-              code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
-              name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
-              rate: selectedBillRates.incomeTax,
-              amount: calcPercentageAmount(selectedBill.grossAmount, selectedBillRates.incomeTax),
-              kind: 'it' as const,
-            },
-            {
-              id: 'vat',
-              code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
-              name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
-              rate: variant.rate,
-              amount: calcPercentageAmount(selectedBill.grossAmount, variant.rate),
-              kind: 'vat' as const,
-            },
-          ];
-    const vatAmt = deductions.filter((d) => d.kind === 'vat').reduce((s, d) => s + d.amount, 0);
-    const itAmt = deductions.filter((d) => d.kind === 'it').reduce((s, d) => s + d.amount, 0);
-    const totalDed = deductions.reduce((s, d) => s + d.amount, 0);
-    return {
-      vatRate: variant.rate,
-      itRate: selectedBillRates.incomeTax,
-      deductions,
-      vatAmt,
-      itAmt,
-      totalDed,
-      netPayable: selectedBill.grossAmount - totalDed,
-    };
-  }, [selectedBill, selectedBillRates, editDraftVariantKey, editDeductions]);
 
   return (
     <Layout title={t('navBills')} actions={actions}>
@@ -717,11 +783,8 @@ export function BillsPage() {
                         </div>
                         <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
                           <span className="tabular-nums font-semibold">{b.economicCode}</span>{' '}
-                          {head.headName}
+                          <span className="bn">{head.displayName}</span>
                         </div>
-                        {head.headNameBn && (
-                          <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
-                        )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <StatusChip variant={billStatusToChip(b.status)}>{t(b.status)}</StatusChip>
@@ -844,9 +907,9 @@ export function BillsPage() {
                         </td>
                         <td className="py-3 px-4 min-w-[200px]">
                           <div className="font-medium text-[var(--text)]">
-                            <span className="tabular-nums">{b.economicCode}</span> {head.headName}
+                            <span className="tabular-nums">{b.economicCode}</span>{' '}
+                            <span className="bn">{head.displayName}</span>
                           </div>
-                          {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums">{b.items.length}</td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
@@ -945,26 +1008,15 @@ export function BillsPage() {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-[var(--text)]">
                   <span className="tabular-nums">{selectedBill.economicCode}</span>{' '}
-                  {
-                    getHead(selectedBill.economicCode, {
-                      headName: selectedBill.headName,
-                      headNameBn: selectedBill.headNameBn,
-                    }).headName
-                  }
-                </div>
-                {getHead(selectedBill.economicCode, {
-                  headName: selectedBill.headName,
-                  headNameBn: selectedBill.headNameBn,
-                }).headNameBn && (
-                  <div className="bn mt-0.5">
+                  <span className="bn">
                     {
                       getHead(selectedBill.economicCode, {
                         headName: selectedBill.headName,
                         headNameBn: selectedBill.headNameBn,
-                      }).headNameBn
+                      }).displayName
                     }
-                  </div>
-                )}
+                  </span>
+                </div>
                 {selectedBill.createdByName && (
                   <div className="text-xs text-[var(--muted)] mt-1">
                     প্রস্তুতকারী: {selectedBill.createdByName}
@@ -1110,10 +1162,6 @@ export function BillsPage() {
                                 ? {
                                     ...d,
                                     rate: chosen.rate,
-                                    amount: calcPercentageAmount(
-                                      selectedBill.grossAmount,
-                                      chosen.rate
-                                    ),
                                   }
                                 : d
                             )
@@ -1247,7 +1295,9 @@ export function BillsPage() {
                     </div>
                   </div>
 
-                  {editDeductions.map((d, dIdx) => (
+                  {editDeductions.map((d, dIdx) => {
+                    const liveAmount = previewDraftRate?.deductions[dIdx]?.amount ?? d.amount;
+                    return (
                     <div
                       key={d.id}
                       className="p-2 rounded-lg bg-[var(--card)] border border-[var(--line)] grid grid-cols-12 gap-1.5 items-center"
@@ -1293,10 +1343,6 @@ export function BillsPage() {
                                   ? {
                                       ...row,
                                       rate: nextRate,
-                                      amount:
-                                        nextRate !== null && Number.isFinite(nextRate)
-                                          ? calcPercentageAmount(selectedBill.grossAmount, nextRate)
-                                          : row.amount,
                                     }
                                   : row
                               )
@@ -1311,7 +1357,7 @@ export function BillsPage() {
                           type="number"
                           step="0.01"
                           min="0"
-                          value={formatPaisaInput(d.amount)}
+                          value={formatPaisaInput(liveAmount)}
                           onChange={(e) => {
                             const nextPaisa = toPaisa(e.target.value);
                             setEditDeductions((prev) =>
@@ -1319,6 +1365,7 @@ export function BillsPage() {
                                 i === dIdx
                                   ? {
                                       ...row,
+                                      rate: null,
                                       amount: Number.isFinite(nextPaisa) && nextPaisa >= 0 ? nextPaisa : 0,
                                     }
                                   : row
@@ -1344,13 +1391,21 @@ export function BillsPage() {
                         )}
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
+
+                {previewDraftRate?.rateError && (
+                  <div className="p-2.5 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{previewDraftRate.rateError}</span>
+                  </div>
+                )}
 
                 <div className="flex justify-end">
                   <button
                     type="button"
-                    disabled={savingDraftEdit}
+                    disabled={savingDraftEdit || Boolean(previewDraftRate?.rateError)}
                     onClick={handleSaveDraftRates}
                     className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-semibold hover:bg-[var(--bg)] disabled:opacity-60"
                   >
@@ -1362,10 +1417,22 @@ export function BillsPage() {
 
             {/* Financial Deduction Summary */}
             <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] space-y-2 text-xs">
+              {selectedBill.items.length > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-[var(--muted)]">মূল খরচের মোট (Expense Total)</span>
+                  <span className="font-semibold tabular-nums">
+                    {formatTaka(selectedBillExpenseTotal)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-[var(--muted)]">মোট বিল (Gross Amount)</span>
                 <span className="font-bold tabular-nums">
-                  {formatTaka(selectedBill.grossAmount)}
+                  {formatTaka(
+                    selectedBill.status === 'draft' && previewDraftRate
+                      ? previewDraftRate.grossAmount
+                      : selectedBill.grossAmount
+                  )}
                 </span>
               </div>
               {(() => {

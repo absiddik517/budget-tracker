@@ -174,10 +174,8 @@ function tdStyle(align: 'left' | 'right' = 'left', extra = ''): string {
 }
 
 function buildHeadCell(code: string, nameEn: string, nameBn?: string): string {
-  const bnBlock = nameBn
-    ? `<div style="font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif; color: #55655F; font-size: 11.5px; line-height: 1.65; margin-top: 2px;">${esc(nameBn)}</div>`
-    : '';
-  return `<div style="font-weight: 600; color: #14201D; word-break: break-word;"><span style="font-variant-numeric: tabular-nums;">${esc(code)}</span> ${esc(nameEn)}</div>${bnBlock}`;
+  const displayHead = nameBn || nameEn;
+  return `<div style="font-weight: 600; color: #14201D; word-break: break-word;"><span style="font-variant-numeric: tabular-nums;">${esc(code)}</span> <span style="font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;">${esc(displayHead)}</span></div>`;
 }
 
 function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
@@ -185,7 +183,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
   if (tab === 'allocations') {
     const columns: TableColumn[] = [
-      { label: 'Head', align: 'left', width: '28%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
       { label: 'Memo No', align: 'left', width: '14%' },
       { label: 'Date', align: 'left', width: '10%' },
       { label: 'Type', align: 'left', width: '8%' },
@@ -220,7 +218,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
       if (group.entries.length > 1) {
         rowsHtml.push(
           `<tr style="background-color: #EDF2EF;">
-            <td colspan="4" style="${tdStyle('left', 'font-weight: 700; font-size: 11.5px;')}">Subtotal · ${esc(group.economicCode)} ${esc(group.headName)}${group.headNameBn ? ` (${esc(group.headNameBn)})` : ''}</td>
+            <td colspan="4" style="${tdStyle('left', 'font-weight: 700; font-size: 11.5px;')}">Subtotal · ${esc(group.economicCode)} ${esc(group.headNameBn || group.headName)}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.allocated))}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.approvedSpent))}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.pendingAmount))}</td>
@@ -241,7 +239,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
   if (tab === 'summary') {
     const columns: TableColumn[] = [
-      { label: 'Head', align: 'left', width: '38%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '38%' },
       { label: 'Allocated (৳)', align: 'right', width: '14%' },
       { label: 'Approved (৳)', align: 'right', width: '14%' },
       { label: 'Pending (৳)', align: 'right', width: '13%' },
@@ -277,7 +275,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
   if (tab === 'headBills') {
     const columns: TableColumn[] = [
-      { label: 'Head', align: 'left', width: '46%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '46%' },
       { label: 'Approved Bills', align: 'right', width: '12%' },
       { label: 'Gross (৳)', align: 'right', width: '14%' },
       { label: 'VAT + IT (৳)', align: 'right', width: '14%' },
@@ -311,7 +309,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
     const items = payload.expenseItems || [];
     const columns: TableColumn[] = [
       { label: 'Date', align: 'left', width: '11%' },
-      { label: 'Head', align: 'left', width: '28%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
       { label: 'Description', align: 'left', width: '25%' },
       { label: 'Responsible', align: 'left', width: '16%' },
       { label: 'Amount (৳)', align: 'right', width: '11%' },
@@ -356,7 +354,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
   // deductions
   const columns: TableColumn[] = [
-    { label: 'Head', align: 'left', width: '36%' },
+    { label: 'ব্যয়ের খাত', align: 'left', width: '36%' },
     { label: 'Gross (৳)', align: 'right', width: '13%' },
     { label: 'VAT (৳)', align: 'right', width: '12%' },
     { label: 'Income Tax (৳)', align: 'right', width: '13%' },
@@ -404,7 +402,8 @@ function buildFilterSummary(payload: ExportReportPdfPayload): string {
   }
   if (payload.selectedCode) {
     const h = payload.getHead(payload.selectedCode);
-    parts.push(`Code: ${payload.selectedCode}${h.headName ? ` (${h.headName})` : ''}`);
+    const label = h.headNameBn || h.headName;
+    parts.push(`Code: ${payload.selectedCode}${label ? ` (${label})` : ''}`);
   }
   if ((payload.tab === 'headBills' || payload.tab === 'expenseItems') && (payload.fromDate || payload.toDate)) {
     const from = payload.fromDate ? formatDateDisplay(payload.fromDate) : '…';
@@ -659,7 +658,7 @@ export async function exportExpenseItemsPdf(params: {
 }): Promise<SaveAndShareOutcome> {
   const columns: TableColumn[] = [
     { label: 'Date', align: 'left', width: '11%' },
-    { label: 'Head', align: 'left', width: '28%' },
+    { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
     { label: 'Description', align: 'left', width: '25%' },
     { label: 'Responsible', align: 'left', width: '16%' },
     { label: 'Amount (৳)', align: 'right', width: '11%' },
@@ -732,7 +731,7 @@ export async function exportBillsPdf(params: {
   const columns: TableColumn[] = [
     { label: 'Bill No', align: 'left', width: '13%' },
     { label: 'Date', align: 'left', width: '10%' },
-    { label: 'Head', align: 'left', width: '27%' },
+    { label: 'ব্যয়ের খাত', align: 'left', width: '27%' },
     { label: 'Items', align: 'right', width: '7%' },
     { label: 'Gross (৳)', align: 'right', width: '11%' },
     { label: 'VAT+IT (৳)', align: 'right', width: '11%' },

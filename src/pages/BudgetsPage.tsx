@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronRight, Search } from 'lucide-react';
+import { ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
@@ -13,10 +13,12 @@ import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import {
+  createBudgetsBatchTx,
   createBudgetTx,
   markBudgetStatusTx,
   softDeleteBudgetTx,
   updateBudgetTx,
+  type CreateBudgetInput,
 } from '../lib/firestoreOps';
 import { formatNumberIN, formatPaisaInput, formatTaka, toPaisa } from '../lib/money';
 import {
@@ -28,10 +30,30 @@ import type { BudgetDoc, BudgetEntryType, DeductionRates, EconomicCodeDoc } from
 
 const DEFAULT_DEDUCTION_RATES: DeductionRates = {
   basis: 'gross',
-  incomeTax: 5,
-  vat: [{ key: 'default', label: 'Standard', rate: 10 }],
+  incomeTax: 0,
+  vat: [{ key: 'default', label: 'Standard', rate: 0 }],
   serviceCharge: 0,
 };
+
+interface BudgetAllocationRowDraft {
+  key: string;
+  economicCode: string;
+  headName: string;
+  headNameBn: string;
+  amountStr: string;
+  codeError: string;
+}
+
+function makeEmptyAllocationRow(): BudgetAllocationRowDraft {
+  return {
+    key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    economicCode: '',
+    headName: '',
+    headNameBn: '',
+    amountStr: '',
+    codeError: '',
+  };
+}
 
 export function BudgetsPage() {
   const { userDoc } = useAuth();
@@ -62,7 +84,18 @@ export function BudgetsPage() {
   const [entryType, setEntryType] = useState<BudgetEntryType>('original');
   const [revisionOf, setRevisionOf] = useState<string>('');
   const [deductionRates, setDeductionRates] = useState<DeductionRates>(DEFAULT_DEDUCTION_RATES);
+  const [allocationRows, setAllocationRows] = useState<BudgetAllocationRowDraft[]>([
+    makeEmptyAllocationRow(),
+  ]);
   const [saving, setSaving] = useState(false);
+
+  const sameMemoBudgets = useMemo(() => {
+    const trimmed = memoNo.trim();
+    if (!trimmed) return [];
+    return budgets.filter(
+      (b) => b.memoNo === trimmed && (!editingBudget || b.id !== editingBudget.id)
+    );
+  }, [budgets, memoNo, editingBudget]);
 
   const filteredBudgets = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -122,6 +155,38 @@ export function BudgetsPage() {
     );
   }, [spendingLimits, selectedBudget]);
 
+  const resolveDeductionRatesForCode = (code: string): DeductionRates => {
+    const match = vatTaxRates.find((r) => r.economicCode === code.trim());
+    if (match) {
+      return {
+        basis: 'gross',
+        incomeTax: match.incomeTax,
+        vat:
+          match.vat.length > 0
+            ? match.vat.map((v) => ({ ...v }))
+            : [{ key: 'default', label: 'Standard', rate: 0 }],
+        serviceCharge: 0,
+      };
+    }
+    return {
+      basis: 'gross',
+      incomeTax: 0,
+      vat: [{ key: 'default', label: 'Standard', rate: 0 }],
+      serviceCharge: 0,
+    };
+  };
+
+  const allocationBatchTotalPaisa = useMemo(() => {
+    return allocationRows.reduce((sum, row) => {
+      const p = toPaisa(row.amountStr);
+      return Number.isFinite(p) && p > 0 ? sum + p : sum;
+    }, 0);
+  }, [allocationRows]);
+
+  const updateAllocationRow = (idx: number, patch: Partial<BudgetAllocationRowDraft>) => {
+    setAllocationRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  };
+
   const openNewBudgetModal = () => {
     setEditingBudget(null);
     setMemoNo('');
@@ -133,12 +198,8 @@ export function BudgetsPage() {
     setAmountStr('');
     setEntryType('original');
     setRevisionOf('');
-    setDeductionRates({
-      basis: 'gross',
-      incomeTax: 5,
-      vat: [{ key: 'default', label: 'Standard', rate: 10 }],
-      serviceCharge: 0,
-    });
+    setDeductionRates(DEFAULT_DEDUCTION_RATES);
+    setAllocationRows([makeEmptyAllocationRow()]);
     setFormOpen(true);
   };
 
@@ -159,34 +220,6 @@ export function BudgetsPage() {
     setFormOpen(true);
   };
 
-  const handleEconomicCodeChange = (val: string, entry: EconomicCodeDoc | null) => {
-    setEconomicCode(val);
-    setCodeError('');
-    if (entry) {
-      setHeadName(entry.headName);
-      setHeadNameBn(entry.headNameBn);
-    } else {
-      setHeadName('');
-      setHeadNameBn('');
-    }
-    const match = vatTaxRates.find((r) => r.economicCode === val.trim());
-    if (match) {
-      setDeductionRates({
-        basis: 'gross',
-        incomeTax: match.incomeTax,
-        vat: match.vat.map((v) => ({ ...v })),
-        serviceCharge: 0,
-      });
-    } else {
-      setDeductionRates({
-        basis: 'gross',
-        incomeTax: 5,
-        vat: [{ key: 'default', label: 'Standard', rate: 10 }],
-        serviceCharge: 0,
-      });
-    }
-  };
-
   const handleRevisionTargetChange = (targetId: string) => {
     setRevisionOf(targetId);
     setCodeError('');
@@ -199,40 +232,30 @@ export function BudgetsPage() {
       setEconomicCode(target.economicCode);
       setHeadName(head.headName);
       setHeadNameBn(head.headNameBn);
-      setDeductionRates(JSON.parse(JSON.stringify(target.deductionRates)) as DeductionRates);
+      const match = vatTaxRates.find((r) => r.economicCode === target.economicCode);
+      setDeductionRates(
+        match
+          ? resolveDeductionRatesForCode(target.economicCode)
+          : (JSON.parse(JSON.stringify(target.deductionRates)) as DeductionRates)
+      );
     }
   };
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc) return;
-    const allocatedPaisa = toPaisa(amountStr);
-    if (Number.isNaN(allocatedPaisa)) {
-      pushToast('error', 'Enter a valid taka amount.');
-      return;
-    }
+    const actor = { uid: userDoc.id, name: userDoc.name };
 
-    const code = economicCode.trim();
-    if (!editingBudget) {
-      const masterEntry = getCodeEntry(code);
-      if (!masterEntry) {
-        setCodeError('Select a valid economic code from Economic Codes.');
-        pushToast('error', 'Select a valid economic code.');
+    if (editingBudget) {
+      const allocatedPaisa = toPaisa(amountStr);
+      if (Number.isNaN(allocatedPaisa)) {
+        pushToast('error', 'Enter a valid taka amount.');
         return;
       }
-      if (masterEntry.special) {
-        setCodeError('GENERAL-CONSTRUCTION cannot be used on budgets.');
-        pushToast('error', 'GENERAL-CONSTRUCTION cannot be used on budgets.');
-        return;
-      }
-    }
-
-    const resolvedHead = getHead(code, { headName, headNameBn });
-
-    setSaving(true);
-    try {
-      const actor = { uid: userDoc.id, name: userDoc.name };
-      if (editingBudget) {
+      const code = economicCode.trim();
+      const resolvedHead = getHead(code, { headName, headNameBn });
+      setSaving(true);
+      try {
         await updateBudgetTx(
           editingBudget.id,
           {
@@ -246,7 +269,36 @@ export function BudgetsPage() {
           actor
         );
         pushToast('success', 'Budget updated.');
-      } else {
+        setFormOpen(false);
+      } catch (err) {
+        pushToast('error', err instanceof Error ? err.message : 'Failed to save budget.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    if (entryType === 'revision') {
+      const allocatedPaisa = toPaisa(amountStr);
+      if (Number.isNaN(allocatedPaisa)) {
+        pushToast('error', 'Enter a valid taka amount.');
+        return;
+      }
+      const code = economicCode.trim();
+      const masterEntry = getCodeEntry(code);
+      if (!masterEntry) {
+        setCodeError('Select a valid economic code from Economic Codes.');
+        pushToast('error', 'Select a valid economic code.');
+        return;
+      }
+      if (masterEntry.special) {
+        setCodeError('GENERAL-CONSTRUCTION cannot be used on budgets.');
+        pushToast('error', 'GENERAL-CONSTRUCTION cannot be used on budgets.');
+        return;
+      }
+      const resolvedHead = getHead(code, { headName, headNameBn });
+      setSaving(true);
+      try {
         const newId = await createBudgetTx(
           {
             fiscalYear: selectedFy,
@@ -256,15 +308,92 @@ export function BudgetsPage() {
             headName: resolvedHead.headName,
             headNameBn: resolvedHead.headNameBn,
             allocated: allocatedPaisa,
-            entryType,
-            revisionOf: entryType === 'revision' ? revisionOf : null,
-            deductionRates,
+            entryType: 'revision',
+            revisionOf,
+            deductionRates: resolveDeductionRatesForCode(code),
           },
           actor
         );
         setSelectedBudgetId(newId);
-        pushToast('success', 'Budget created.');
+        pushToast('success', 'Budget revision created.');
+        setFormOpen(false);
+      } catch (err) {
+        pushToast('error', err instanceof Error ? err.message : 'Failed to save budget.');
+      } finally {
+        setSaving(false);
       }
+      return;
+    }
+
+    // New Original Allocation (supports 1 or more economic code + amount rows under same memo)
+    const batchInputs: CreateBudgetInput[] = [];
+    const seenCodes = new Set<string>();
+    let hasRowError = false;
+
+    const nextRows = allocationRows.map((row) => ({ ...row, codeError: '' }));
+    for (let i = 0; i < nextRows.length; i++) {
+      const row = nextRows[i];
+      const code = row.economicCode.trim();
+      const masterEntry = getCodeEntry(code);
+      if (!masterEntry) {
+        row.codeError = 'বৈধ ৭-অঙ্কের অর্থনৈতিক কোড নির্বাচন করুন।';
+        hasRowError = true;
+        continue;
+      }
+      if (masterEntry.special) {
+        row.codeError = 'GENERAL-CONSTRUCTION বাজেটে ব্যবহার করা যাবে না।';
+        hasRowError = true;
+        continue;
+      }
+      if (seenCodes.has(code)) {
+        row.codeError = `কোড ${code} ইতোমধ্যে উপরের সারিতে যোগ করা হয়েছে।`;
+        hasRowError = true;
+        continue;
+      }
+      seenCodes.add(code);
+
+      const allocatedPaisa = toPaisa(row.amountStr);
+      if (Number.isNaN(allocatedPaisa) || allocatedPaisa <= 0) {
+        pushToast('error', `আইটেম #${i + 1} (${code}): ০ এর বেশি টাকার পরিমাণ দিন।`);
+        setAllocationRows(nextRows);
+        return;
+      }
+
+      const resolvedHead = getHead(code, {
+        headName: row.headName || masterEntry.headName,
+        headNameBn: row.headNameBn || masterEntry.headNameBn,
+      });
+
+      batchInputs.push({
+        fiscalYear: selectedFy,
+        memoNo,
+        memoDate,
+        economicCode: code,
+        headName: resolvedHead.headName,
+        headNameBn: resolvedHead.headNameBn,
+        allocated: allocatedPaisa,
+        entryType: 'original',
+        revisionOf: null,
+        deductionRates: resolveDeductionRatesForCode(code),
+      });
+    }
+
+    if (hasRowError) {
+      setAllocationRows(nextRows);
+      pushToast('error', 'অনুগ্রহ করে চিহ্নিত অর্থনৈতিক কোডগুলো সঠিকভাবে নির্বাচন করুন।');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const createdIds = await createBudgetsBatchTx(batchInputs, actor);
+      if (createdIds[0]) setSelectedBudgetId(createdIds[0]);
+      pushToast(
+        'success',
+        createdIds.length > 1
+          ? `${createdIds.length}টি অর্থনৈতিক কোডে বাজেট বরাদ্দ সংরক্ষণ হয়েছে।`
+          : 'Budget created.'
+      );
       setFormOpen(false);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to save budget.');
@@ -328,13 +457,13 @@ export function BudgetsPage() {
             <h2 className="text-base font-semibold text-[var(--text)]">
               Deduction rates
             </h2>
-            <p className="text-xs text-[var(--muted)] mt-0.5 tabular-nums break-words">
+            <p className="text-xs text-[var(--muted)] mt-0.5 tabular-nums break-words bn">
               {selectedBudget.economicCode} ·{' '}
               {
                 getHead(selectedBudget.economicCode, {
                   headName: selectedBudget.headName,
                   headNameBn: selectedBudget.headNameBn,
-                }).headName
+                }).displayName
               }
             </p>
           </div>
@@ -531,7 +660,7 @@ export function BudgetsPage() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search memo, code, head…"
+              placeholder="স্মারক, কোড বা ব্যয়ের খাত খুঁজুন…"
               aria-label="Search budgets"
               className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             />
@@ -574,11 +703,8 @@ export function BudgetsPage() {
                           </div>
                           <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
                             <span className="tabular-nums font-semibold">{b.economicCode}</span>{' '}
-                            {head.headName}
+                            <span className="bn">{head.displayName}</span>
                           </div>
-                          {head.headNameBn && (
-                            <div className="bn mt-0.5 break-words">{head.headNameBn}</div>
-                          )}
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <StatusChip variant={b.status === 'active' ? 'active' : 'executed'}>
@@ -682,9 +808,9 @@ export function BudgetsPage() {
                           </td>
                           <td className="py-3 px-4 min-w-[190px]">
                             <div className="font-medium text-[var(--text)]">
-                              <span className="tabular-nums">{b.economicCode}</span> {head.headName}
+                              <span className="tabular-nums">{b.economicCode}</span>{' '}
+                              <span className="bn">{head.displayName}</span>
                             </div>
-                            {head.headNameBn && <div className="bn">{head.headNameBn}</div>}
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                             {formatNumberIN(b.allocated)}
@@ -746,24 +872,41 @@ export function BudgetsPage() {
         onClose={() => setFormOpen(false)}
         title={editingBudget ? `Edit Budget · ${editingBudget.memoNo}` : 'New Budget Allocation'}
         subtitle={`FY ${selectedFy}`}
-        maxWidthClass="md:max-w-lg"
+        fullScreenOnMobile
+        maxWidthClass="md:max-w-2xl"
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setFormOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="budget-form"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : t('save')}
-            </button>
+          <div className="flex items-center justify-between gap-2">
+            {!editingBudget && entryType === 'original' ? (
+              <div className="text-xs text-[var(--muted)] tabular-nums truncate">
+                মোট {allocationRows.length}টি কোড ·{' '}
+                <strong className="text-[var(--text)]">
+                  {formatTaka(allocationBatchTotalPaisa)}
+                </strong>
+              </div>
+            ) : (
+              <div />
+            )}
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setFormOpen(false)}
+                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="submit"
+                form="budget-form"
+                disabled={saving}
+                className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+              >
+                {saving
+                  ? 'Saving…'
+                  : !editingBudget && entryType === 'original' && allocationRows.length > 1
+                  ? `${t('save')} (${allocationRows.length})`
+                  : t('save')}
+              </button>
+            </div>
           </div>
         }
       >
@@ -823,7 +966,7 @@ export function BudgetsPage() {
                     });
                     return (
                       <option key={b.id} value={b.id}>
-                        {b.memoNo} · {b.economicCode} {head.headName} ({formatTaka(b.allocated)})
+                        {b.memoNo} · {b.economicCode} {head.displayName} ({formatTaka(b.allocated)})
                       </option>
                     );
                   })}
@@ -845,6 +988,15 @@ export function BudgetsPage() {
                 placeholder="Memo 01/26"
                 className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               />
+              {sameMemoBudgets.length > 0 ? (
+                <p className="text-[11px] text-[var(--accent)] mt-1 bn">
+                  এই স্মারকে আরও {sameMemoBudgets.length}টি কোড আছে ({sameMemoBudgets.map((b) => b.economicCode).join(', ')}) — ভিন্ন কোডে যুক্ত করা যাবে।
+                </p>
+              ) : !editingBudget ? (
+                <p className="text-[11px] text-[var(--muted)] mt-1 bn">
+                  একই স্মারক নম্বরে একাধিক অর্থনৈতিক কোডে বাজেট এন্ট্রি দেওয়া যাবে।
+                </p>
+              ) : null}
             </div>
             <div>
               <label htmlFor="budget-memo-date" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
@@ -861,116 +1013,234 @@ export function BudgetsPage() {
             </div>
           </div>
 
-          <EconomicCodeSelect
-            label="Economic code"
-            value={economicCode}
-            onChange={handleEconomicCodeChange}
-            error={codeError}
-            disabled={Boolean(editingBudget) || (entryType === 'revision' && Boolean(revisionOf))}
-            includeInactive={Boolean(editingBudget)}
-            includeSpecial={false}
-            placeholder="Select economic code…"
-          />
-
-          {economicCode && (
-            <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
-              <div className="text-[11px] font-medium text-[var(--muted)]">
-                Head of expenditure (from Economic Codes)
-              </div>
-              <div className="text-sm font-medium text-[var(--text)] mt-0.5 break-words">
-                {headName || getHead(economicCode).headName}
-              </div>
-              {(headNameBn || getHead(economicCode).headNameBn) && (
-                <div className="bn mt-0.5 break-words">{headNameBn || getHead(economicCode).headNameBn}</div>
-              )}
-            </div>
-          )}
-
-          <div>
-            <label htmlFor="budget-amount" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Amount (৳){entryType === 'revision' ? ' · negative allowed for reduction' : ''}
-            </label>
-            <input
-              id="budget-amount"
-              type="number"
-              step="0.01"
-              required
-              value={amountStr}
-              onChange={(e) => setAmountStr(e.target.value)}
-              placeholder="300000"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
-            />
-          </div>
-
-          {/* Editable Deduction Rates copied from Vat & Tax Model */}
-          <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] space-y-3">
-            <div className="text-xs font-semibold text-[var(--text)]">
-              Deduction rates (saved with this budget)
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] text-[var(--muted)] mb-1">Income Tax (%)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={deductionRates.incomeTax}
-                  onChange={(e) =>
-                    setDeductionRates({
-                      ...deductionRates,
-                      incomeTax: parseFloat(e.target.value) || 0,
+          {!editingBudget && entryType === 'original' ? (
+            <div className="space-y-3">
+              {allocationRows.map((row, idx) => {
+                const resolvedHead = row.economicCode
+                  ? getHead(row.economicCode, {
+                      headName: row.headName,
+                      headNameBn: row.headNameBn,
                     })
-                  }
-                  className="w-full min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] text-[var(--muted)] mb-1">Service Charge (%)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={deductionRates.serviceCharge}
-                  onChange={(e) =>
-                    setDeductionRates({
-                      ...deductionRates,
-                      serviceCharge: parseFloat(e.target.value) || 0,
-                    })
-                  }
-                  className="w-full min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
-                />
-              </div>
+                  : null;
+                const excludedForRow = allocationRows
+                  .filter((_, otherIdx) => otherIdx !== idx)
+                  .map((r) => r.economicCode.trim())
+                  .filter(Boolean);
+
+                return (
+                  <div
+                    key={row.key}
+                    className="p-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)]/60 space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-[var(--accent)]">
+                        অর্থনৈতিক কোড #{idx + 1}
+                      </span>
+                      {allocationRows.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAllocationRows((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          className="min-h-[34px] px-2.5 rounded-lg text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 inline-flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>সরান</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <EconomicCodeSelect
+                      label="Economic code"
+                      value={row.economicCode}
+                      onChange={(code, entry: EconomicCodeDoc | null) => {
+                        const trimmed = code.trim();
+                        const dupInOther =
+                          Boolean(trimmed) &&
+                          allocationRows.some(
+                            (r, otherIdx) => otherIdx !== idx && r.economicCode.trim() === trimmed
+                          );
+                        updateAllocationRow(idx, {
+                          economicCode: dupInOther ? '' : code,
+                          headName: dupInOther ? '' : entry?.headName || '',
+                          headNameBn: dupInOther ? '' : entry?.headNameBn || '',
+                          codeError: dupInOther
+                            ? `কোড ${trimmed} ইতোমধ্যে অন্য সারিতে যোগ করা হয়েছে।`
+                            : '',
+                        });
+                      }}
+                      error={row.codeError}
+                      includeInactive={false}
+                      includeSpecial={false}
+                      excludeCodes={excludedForRow}
+                      placeholder="Select economic code…"
+                    />
+
+                    {row.economicCode && resolvedHead && (
+                      <div className="px-3 py-2 rounded-lg bg-[var(--card)] border border-[var(--line)] text-xs space-y-0.5">
+                        <div className="text-[11px] font-medium text-[var(--muted)]">
+                          ব্যয়ের খাত
+                        </div>
+                        <div className="font-medium text-[var(--text)] bn break-words">
+                          {resolvedHead.displayName}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <label
+                        htmlFor={`budget-amount-${row.key}`}
+                        className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                      >
+                        Amount (৳)
+                      </label>
+                      <input
+                        id={`budget-amount-${row.key}`}
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        required
+                        value={row.amountStr}
+                        onChange={(e) => updateAllocationRow(idx, { amountStr: e.target.value })}
+                        placeholder="300000"
+                        className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setAllocationRows((prev) => [...prev, makeEmptyAllocationRow()])}
+                className="w-full min-h-[44px] px-4 rounded-xl border border-dashed border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)]/50 text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span>আরেকটি কোড ও টাকা যোগ করুন</span>
+              </button>
             </div>
-            <div className="space-y-2">
-              <div className="text-[11px] text-[var(--muted)]">VAT rates (%)</div>
-              {deductionRates.vat.map((v, idx) => (
-                <div key={v.key} className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={v.label}
-                    onChange={(e) => {
-                      const nextVat = [...deductionRates.vat];
-                      nextVat[idx] = { ...v, label: e.target.value };
-                      setDeductionRates({ ...deductionRates, vat: nextVat });
-                    }}
-                    className="min-w-0 flex-1 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs"
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={v.rate}
-                    onChange={(e) => {
-                      const nextVat = [...deductionRates.vat];
-                      nextVat[idx] = { ...v, rate: parseFloat(e.target.value) || 0 };
-                      setDeductionRates({ ...deductionRates, vat: nextVat });
-                    }}
-                    className="w-24 shrink-0 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs tabular-nums"
-                  />
+          ) : (
+            <>
+              <EconomicCodeSelect
+                label="Economic code"
+                value={economicCode}
+                onChange={(val, entry) => {
+                  setEconomicCode(val);
+                  setCodeError('');
+                  setHeadName(entry?.headName || '');
+                  setHeadNameBn(entry?.headNameBn || '');
+                }}
+                error={codeError}
+                disabled={Boolean(editingBudget) || (entryType === 'revision' && Boolean(revisionOf))}
+                includeInactive={Boolean(editingBudget)}
+                includeSpecial={false}
+                placeholder="Select economic code…"
+              />
+
+              {economicCode && (
+                <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+                  <div className="text-[11px] font-medium text-[var(--muted)]">
+                    ব্যয়ের খাত
+                  </div>
+                  <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
+                    {getHead(economicCode, { headName, headNameBn }).displayName}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              )}
+
+              <div>
+                <label htmlFor="budget-amount" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+                  Amount (৳){entryType === 'revision' ? ' · negative allowed for reduction' : ''}
+                </label>
+                <input
+                  id="budget-amount"
+                  type="number"
+                  step="0.01"
+                  required
+                  value={amountStr}
+                  onChange={(e) => setAmountStr(e.target.value)}
+                  placeholder="300000"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                />
+              </div>
+
+              {/* Editable Deduction Rates shown only when editing an existing budget */}
+              {Boolean(editingBudget) && (
+                <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] space-y-3">
+                  <div className="text-xs font-semibold text-[var(--text)]">
+                    Deduction rates (saved with this budget)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-[var(--muted)] mb-1">
+                        Income Tax (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={deductionRates.incomeTax}
+                        onChange={(e) =>
+                          setDeductionRates({
+                            ...deductionRates,
+                            incomeTax: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[var(--muted)] mb-1">
+                        Service Charge (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={deductionRates.serviceCharge}
+                        onChange={(e) =>
+                          setDeductionRates({
+                            ...deductionRates,
+                            serviceCharge: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-[11px] text-[var(--muted)]">VAT rates (%)</div>
+                    {deductionRates.vat.map((v, idx) => (
+                      <div key={v.key} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={v.label}
+                          onChange={(e) => {
+                            const nextVat = [...deductionRates.vat];
+                            nextVat[idx] = { ...v, label: e.target.value };
+                            setDeductionRates({ ...deductionRates, vat: nextVat });
+                          }}
+                          className="min-w-0 flex-1 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs"
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={v.rate}
+                          onChange={(e) => {
+                            const nextVat = [...deductionRates.vat];
+                            nextVat[idx] = { ...v, rate: parseFloat(e.target.value) || 0 };
+                            setDeductionRates({ ...deductionRates, vat: nextVat });
+                          }}
+                          className="w-24 shrink-0 min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs tabular-nums"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </form>
       </Modal>
     </Layout>

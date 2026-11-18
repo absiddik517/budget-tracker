@@ -16,7 +16,7 @@ import { db } from './firebase';
 import { writeAuditLogInBatch, writeAuditLogInTx, type AuditActor } from './audit';
 import { computeAvailable, computeCodeAvailable, pickLatestEffectiveLimit } from './computeAvailable';
 import { isDateInFiscalYear } from './fy';
-import { calcPercentageAmount } from './money';
+import { calcPercentageAmount, computeGrossedUpBill } from './money';
 import { DEFAULT_IT_CODE, DEFAULT_NET_PAYABLE_CODE, DEFAULT_VAT_CODE } from './tr21Defaults';
 import { isValidEconomicCode, normalizeEmail } from './validation';
 import type {
@@ -85,7 +85,7 @@ export async function createBudgetTx(
   if (!isValidEconomicCode(economicCode, false)) {
     throw new Error('Economic code must be exactly 7 digits.');
   }
-  if (!headName) throw new Error('Head name is required.');
+  if (!headName && !headNameBn) throw new Error('ব্যয়ের খাত প্রয়োজন।');
   if (input.entryType === 'original' && input.allocated <= 0) {
     throw new Error('Original allocation amount must be greater than zero.');
   }
@@ -105,18 +105,25 @@ export async function createBudgetTx(
   if (masterData.special) {
     throw new Error('GENERAL-CONSTRUCTION cannot be used directly for a budget allocation.');
   }
-  const resolvedHeadName = masterData.headName || headName;
   const resolvedHeadNameBn = masterData.headNameBn || headNameBn;
+  const resolvedHeadName = masterData.headName || resolvedHeadNameBn || headName;
 
   const fyBudgetsSnap = await getDocs(
     query(collection(db, 'budgets'), where('fiscalYear', '==', input.fiscalYear))
   );
   const hasActiveDup = fyBudgetsSnap.docs.some((d) => {
     const data = d.data();
-    return !data.deleted && data.memoNo === memoNo;
+    return (
+      !data.deleted &&
+      data.memoNo === memoNo &&
+      data.economicCode === economicCode &&
+      (data.entryType || 'original') === input.entryType
+    );
   });
   if (hasActiveDup) {
-    throw new Error(`Duplicate memo number "${memoNo}" in FY ${input.fiscalYear}.`);
+    throw new Error(
+      `অর্থনৈতিক কোড ${economicCode}-এর জন্য স্মারক নং "${memoNo}" ইতোমধ্যে FY ${input.fiscalYear}-এ রয়েছে।`
+    );
   }
 
   const budgetRef = doc(collection(db, 'budgets'));
@@ -190,6 +197,176 @@ export async function createBudgetTx(
   });
 
   return budgetRef.id;
+}
+
+export async function createBudgetsBatchTx(
+  inputs: CreateBudgetInput[],
+  actor: AuditActor
+): Promise<string[]> {
+  if (inputs.length === 0) {
+    throw new Error('কমপক্ষে একটি অর্থনৈতিক কোড ও পরিমাণ যোগ করুন।');
+  }
+  if (inputs.length === 1) {
+    const id = await createBudgetTx(inputs[0], actor);
+    return [id];
+  }
+
+  const normalized = inputs.map((inp) => ({
+    ...inp,
+    memoNo: inp.memoNo.trim(),
+    economicCode: inp.economicCode.trim(),
+    headName: inp.headName.trim(),
+    headNameBn: inp.headNameBn.trim(),
+  }));
+
+  const seenCodeSet = new Set<string>();
+  for (let i = 0; i < normalized.length; i++) {
+    const item = normalized[i];
+    if (!item.memoNo) throw new Error('Memo number is required.');
+    if (!isDateInFiscalYear(item.memoDate, item.fiscalYear)) {
+      throw new Error(`Memo date must fall inside FY ${item.fiscalYear}.`);
+    }
+    if (!isValidEconomicCode(item.economicCode, false)) {
+      throw new Error(`আইটেম #${i + 1}: বৈধ ৭-অঙ্কের অর্থনৈতিক কোড দিন।`);
+    }
+    if (!item.headName && !item.headNameBn) {
+      throw new Error(`আইটেম #${i + 1}: ব্যয়ের খাত প্রয়োজন।`);
+    }
+    if (item.entryType !== 'original') {
+      throw new Error('মাল্টি-কোড ব্যাচে শুধুমাত্র মূল বরাদ্দ (Original allocation) যোগ করা যায়।');
+    }
+    if (item.allocated <= 0) {
+      throw new Error(`আইটেম #${i + 1} (${item.economicCode}): টাকার পরিমাণ ০ এর বেশি হতে হবে।`);
+    }
+    if (seenCodeSet.has(item.economicCode)) {
+      throw new Error(
+        `একই ফর্মে একই অর্থনৈতিক কোড (${item.economicCode}) একাধিকবার যোগ করা যাবে না।`
+      );
+    }
+    seenCodeSet.add(item.economicCode);
+  }
+
+  const fiscalYear = normalized[0].fiscalYear;
+  const memoNo = normalized[0].memoNo;
+
+  const masterSnaps = await Promise.all(
+    normalized.map((item) => getDoc(doc(db, 'economicCodes', item.economicCode)))
+  );
+  const resolvedItems = normalized.map((item, idx) => {
+    const snap = masterSnaps[idx];
+    if (!snap.exists()) {
+      throw new Error(`Economic code "${item.economicCode}" does not exist in Economic Codes.`);
+    }
+    const masterData = snap.data() as Omit<EconomicCodeDoc, 'id'>;
+    if (masterData.special) {
+      throw new Error('GENERAL-CONSTRUCTION cannot be used directly for a budget allocation.');
+    }
+    const resolvedBn = masterData.headNameBn || item.headNameBn;
+    return {
+      ...item,
+      headName: masterData.headName || resolvedBn || item.headName,
+      headNameBn: resolvedBn,
+    };
+  });
+
+  const fyBudgetsSnap = await getDocs(
+    query(collection(db, 'budgets'), where('fiscalYear', '==', fiscalYear))
+  );
+  for (const item of resolvedItems) {
+    const hasActiveDup = fyBudgetsSnap.docs.some((d) => {
+      const data = d.data();
+      return (
+        !data.deleted &&
+        data.memoNo === memoNo &&
+        data.economicCode === item.economicCode &&
+        (data.entryType || 'original') === 'original'
+      );
+    });
+    if (hasActiveDup) {
+      throw new Error(
+        `অর্থনৈতিক কোড ${item.economicCode}-এর জন্য স্মারক নং "${memoNo}" ইতোমধ্যে FY ${fiscalYear}-এ রয়েছে।`
+      );
+    }
+  }
+
+  const createdIds: string[] = [];
+  const budgetRefs = resolvedItems.map(() => doc(collection(db, 'budgets')));
+  const fyTotalRefs = resolvedItems.map((item) =>
+    doc(db, 'fyCodeTotals', `${item.fiscalYear}_${item.economicCode}`)
+  );
+
+  await runTransaction(db, async (tx) => {
+    const fyTotalSnaps = await Promise.all(fyTotalRefs.map((r) => tx.get(r)));
+
+    for (let i = 0; i < resolvedItems.length; i++) {
+      const item = resolvedItems[i];
+      const budgetRef = budgetRefs[i];
+      const fyTotalRef = fyTotalRefs[i];
+      const fyTotalSnap = fyTotalSnaps[i];
+
+      const prevAllocated = fyTotalSnap.exists()
+        ? (fyTotalSnap.data().allocated as number) || 0
+        : 0;
+      const prevSpent = fyTotalSnap.exists() ? (fyTotalSnap.data().spent as number) || 0 : 0;
+      const prevPending = fyTotalSnap.exists()
+        ? (fyTotalSnap.data().pendingAmount as number) || 0
+        : 0;
+
+      const budgetPayload = {
+        fiscalYear: item.fiscalYear,
+        memoNo: item.memoNo,
+        memoDate: item.memoDate,
+        economicCode: item.economicCode,
+        headName: item.headName,
+        headNameBn: item.headNameBn,
+        allocated: item.allocated,
+        entryType: item.entryType,
+        revisionOf: null,
+        deductionRates: item.deductionRates,
+        spent: 0,
+        approvedSpent: 0,
+        pendingAmount: 0,
+        remaining: item.allocated,
+        status: 'active' as BudgetStatus,
+        deleted: false,
+        createdAt: serverTimestamp(),
+        createdBy: actor.uid,
+        updatedAt: serverTimestamp(),
+        updatedBy: actor.uid,
+      };
+
+      tx.set(budgetRef, budgetPayload);
+      tx.set(
+        fyTotalRef,
+        {
+          fiscalYear: item.fiscalYear,
+          economicCode: item.economicCode,
+          allocated: prevAllocated + item.allocated,
+          spent: prevSpent,
+          approvedSpent: prevSpent,
+          pendingAmount: prevPending,
+          createdAt: fyTotalSnap.exists() ? fyTotalSnap.data().createdAt : serverTimestamp(),
+          createdBy: fyTotalSnap.exists() ? fyTotalSnap.data().createdBy : actor.uid,
+          updatedAt: serverTimestamp(),
+          updatedBy: actor.uid,
+        },
+        { merge: true }
+      );
+
+      writeAuditLogInTx(tx, {
+        collection: 'budgets',
+        docId: budgetRef.id,
+        action: 'create',
+        before: null,
+        after: { id: budgetRef.id, ...budgetPayload },
+        actor,
+      });
+
+      createdIds.push(budgetRef.id);
+    }
+  });
+
+  return createdIds;
 }
 
 export async function updateBudgetTx(
@@ -597,15 +774,24 @@ export async function createDraftBillsFromItems(
   groups: DraftBillGroupInput[],
   actor: AuditActor
 ): Promise<string[]> {
-  if (groups.length === 0) {
+  const nonEmptyGroups = groups.filter((g) => g.items.length > 0);
+  if (nonEmptyGroups.length === 0) {
     throw new Error('বিল প্রস্তুত করতে কমপক্ষে একটি তালিকাভুক্ত (listed) খরচ নির্বাচন করুন।');
+  }
+
+  const distinctCodes = new Set(
+    nonEmptyGroups.flatMap((g) => [g.economicCode, ...g.items.map((it) => it.economicCode)])
+  );
+  if (nonEmptyGroups.length > 1 || distinctCodes.size > 1) {
+    throw new Error(
+      'একটি বিলে শুধুমাত্র একই অর্থনৈতিক কোডের খরচ যুক্ত করা যাবে। একাধিক কোডের খরচ নিয়ে বিল হবে না।'
+    );
   }
 
   const createdBillIds: string[] = [];
   const batch = writeBatch(db);
 
-  for (const group of groups) {
-    if (group.items.length === 0) continue;
+  for (const group of nonEmptyGroups) {
     for (const item of group.items) {
       if (item.status !== 'listed' || item.deleted) {
         throw new Error(`আইটেম "${item.description}" ইতোমধ্যে অন্য বিলে যুক্ত হয়েছে।`);
@@ -618,11 +804,12 @@ export async function createDraftBillsFromItems(
       throw new Error(`বিলের তারিখ অর্থবছর ${group.fiscalYear} এর মধ্যে হতে হবে।`);
     }
 
-    const grossAmount = group.items.reduce((sum, item) => sum + item.amount, 0);
-    if (grossAmount <= 0) {
-      throw new Error('মোট বিলের পরিমাণ ০ এর বেশি হতে হবে।');
+    const expenseTotal = group.items.reduce((sum, item) => sum + item.amount, 0);
+    if (expenseTotal <= 0) {
+      throw new Error('মোট খরচের পরিমাণ ০ এর বেশি হতে হবে।');
     }
     const {
+      grossAmount,
       deductions,
       vatAmount,
       itAmount,
@@ -630,7 +817,14 @@ export async function createDraftBillsFromItems(
       netPayable,
       effectiveVatRate,
       effectiveItRate,
-    } = summarizeBillDeductions(grossAmount, group.vatRate, group.itRate, group.deductions);
+    } = computeGrossedUpBill({
+      expenseTotalPaisa: expenseTotal,
+      vatRate: group.vatRate,
+      itRate: group.itRate,
+      customDeductions: group.deductions,
+      defaultItCode: DEFAULT_IT_CODE,
+      defaultVatCode: DEFAULT_VAT_CODE,
+    });
 
     if (netPayable < 0) {
       throw new Error('মোট কর্তন বিলের চেয়ে বেশি হতে পারে না।');
@@ -756,8 +950,29 @@ export async function updateDraftBillRates(
     throw new Error(`বিলের তারিখ অর্থবছর ${bill.fiscalYear} এর মধ্যে হতে হবে।`);
   }
 
-  const grossAmount = bill.items.reduce((sum, item) => sum + item.amount, 0) || bill.grossAmount;
+  const itemsExpenseTotal = bill.items.reduce((sum, item) => sum + item.amount, 0);
+  const hasItemBreakdown = bill.items.length > 0 && itemsExpenseTotal > 0;
+  const computed = hasItemBreakdown
+    ? computeGrossedUpBill({
+        expenseTotalPaisa: itemsExpenseTotal,
+        vatRate: updates.vatRate,
+        itRate: updates.itRate,
+        customDeductions: updates.deductions,
+        defaultItCode: DEFAULT_IT_CODE,
+        defaultVatCode: DEFAULT_VAT_CODE,
+      })
+    : {
+        grossAmount: bill.grossAmount,
+        ...summarizeBillDeductions(
+          bill.grossAmount,
+          updates.vatRate,
+          updates.itRate,
+          updates.deductions
+        ),
+      };
+
   const {
+    grossAmount,
     deductions,
     vatAmount,
     itAmount,
@@ -765,7 +980,7 @@ export async function updateDraftBillRates(
     netPayable,
     effectiveVatRate,
     effectiveItRate,
-  } = summarizeBillDeductions(grossAmount, updates.vatRate, updates.itRate, updates.deductions);
+  } = computed;
 
   if (netPayable < 0) {
     throw new Error('মোট কর্তন বিলের চেয়ে বেশি হতে পারে না।');
@@ -2137,7 +2352,7 @@ export async function saveOfficeSettings(
 export async function upsertEconomicCode(
   input: {
     code: string;
-    headName: string;
+    headName?: string;
     headNameBn: string;
     active: boolean;
   },
@@ -2148,9 +2363,9 @@ export async function upsertEconomicCode(
   if (!isValidEconomicCode(code, true)) {
     throw new Error('Economic code must be exactly 7 digits.');
   }
-  const headName = input.headName.trim();
   const headNameBn = input.headNameBn.trim();
-  if (!headName) throw new Error('Head of expenditure (English) is required.');
+  const headName = (input.headName || '').trim() || headNameBn;
+  if (!headNameBn && !headName) throw new Error('ব্যয়ের খাত প্রয়োজন।');
 
   const ref = doc(db, 'economicCodes', code);
   const existingSnap = await getDoc(ref);
