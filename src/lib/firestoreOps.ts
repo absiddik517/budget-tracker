@@ -2570,3 +2570,150 @@ export async function buildEconomicCodesFromExistingData(
 
   return { created, skipped };
 }
+
+export type DeletableDbTableKey =
+  | 'budgets'
+  | 'fyCodeTotals'
+  | 'expenseItems'
+  | 'bills'
+  | 'counters'
+  | 'vatTaxRates'
+  | 'spendingLimits'
+  | 'economicCodes'
+  | 'spendings'
+  | 'invites';
+
+export interface DbTableDescriptor {
+  key: DeletableDbTableKey;
+  labelBn: string;
+  descriptionBn: string;
+  category: 'transactional' | 'master';
+}
+
+export const DELETABLE_DB_TABLES: DbTableDescriptor[] = [
+  {
+    key: 'bills',
+    labelBn: 'বিলসমূহ (Bills)',
+    descriptionBn: 'সকল খসড়া, জমা, অনুমোদিত, প্রত্যাখ্যাত ও বাতিল বিল',
+    category: 'transactional',
+  },
+  {
+    key: 'expenseItems',
+    labelBn: 'খরচ তালিকা (Expense Items)',
+    descriptionBn: 'তালিকাভুক্ত ও বিলকৃত সকল খরচের আইটেম',
+    category: 'transactional',
+  },
+  {
+    key: 'budgets',
+    labelBn: 'বরাদ্দকৃত বাজেট (Budgets)',
+    descriptionBn: 'সকল মূল বাজেট বরাদ্দ ও সংশোধন এন্ট্রি',
+    category: 'transactional',
+  },
+  {
+    key: 'fyCodeTotals',
+    labelBn: 'কোডভিত্তিক মোট হিসাব (FY Code Totals)',
+    descriptionBn: 'অর্থবছর ও অর্থনৈতিক কোড অনুযায়ী সংরক্ষিত বরাদ্দ/ব্যয় সমষ্টি',
+    category: 'transactional',
+  },
+  {
+    key: 'counters',
+    labelBn: 'বিল নম্বর কাউন্টার (Counters)',
+    descriptionBn: 'অর্থবছর অনুযায়ী ক্রমিক বিল নম্বরের কাউন্টার',
+    category: 'transactional',
+  },
+  {
+    key: 'spendingLimits',
+    labelBn: 'ব্যয়ের সীমা (Spending Limits)',
+    descriptionBn: 'কোড ও বাজেটভিত্তিক সর্বোচ্চ ব্যয়ের সীমা',
+    category: 'transactional',
+  },
+  {
+    key: 'vatTaxRates',
+    labelBn: 'ভ্যাট ও আয়কর হার (VAT & Tax Rates)',
+    descriptionBn: 'অর্থবছর অনুযায়ী নির্ধারিত ভ্যাট ও আয়করের হার',
+    category: 'master',
+  },
+  {
+    key: 'economicCodes',
+    labelBn: 'অর্থনৈতিক কোড (Economic Codes)',
+    descriptionBn: 'মাস্টার অর্থনৈতিক কোড ও ব্যয়ের খাত তালিকা',
+    category: 'master',
+  },
+  {
+    key: 'spendings',
+    labelBn: 'পুরনো ব্যয় রেকর্ড (Legacy Spendings)',
+    descriptionBn: 'মাইগ্রেশনের আগের পুরনো spendings কালেকশন',
+    category: 'transactional',
+  },
+  {
+    key: 'invites',
+    labelBn: 'ব্যবহারকারী আমন্ত্রণ (Invites)',
+    descriptionBn: 'অপেক্ষমান ইমেইল আমন্ত্রণ তালিকা',
+    category: 'master',
+  },
+];
+
+const DELETABLE_KEY_SET = new Set<DeletableDbTableKey>(DELETABLE_DB_TABLES.map((t) => t.key));
+
+export async function fetchDbTableCounts(): Promise<Record<DeletableDbTableKey, number>> {
+  const snaps = await Promise.all(
+    DELETABLE_DB_TABLES.map(async (t) => {
+      const snap = await getDocs(collection(db, t.key));
+      return [t.key, snap.size] as const;
+    })
+  );
+  const result = {} as Record<DeletableDbTableKey, number>;
+  for (const [k, count] of snaps) {
+    result[k] = count;
+  }
+  return result;
+}
+
+export async function clearDbTables(
+  tableKeys: DeletableDbTableKey[],
+  actor: AuditActor
+): Promise<Array<{ table: DeletableDbTableKey; deletedCount: number }>> {
+  assertOnlineForTransaction('টেবিল অনুযায়ী সকল ডেটা মুছা');
+
+  const uniqueKeys = Array.from(new Set(tableKeys)).filter((k) => DELETABLE_KEY_SET.has(k));
+  if (uniqueKeys.length === 0) {
+    throw new Error('মুছার জন্য অন্তত একটি টেবিল নির্বাচন করুন।');
+  }
+
+  const results: Array<{ table: DeletableDbTableKey; deletedCount: number }> = [];
+  const CHUNK_SIZE = 450;
+
+  for (const tableKey of uniqueKeys) {
+    const snap = await getDocs(collection(db, tableKey));
+    const docs = snap.docs;
+    if (docs.length === 0) {
+      results.push({ table: tableKey, deletedCount: 0 });
+      continue;
+    }
+
+    for (let i = 0; i < docs.length; i += CHUNK_SIZE) {
+      const chunk = docs.slice(i, i + CHUNK_SIZE);
+      const isLastChunk = i + CHUNK_SIZE >= docs.length;
+      const batch = writeBatch(db);
+      for (const d of chunk) {
+        batch.delete(d.ref);
+      }
+      if (isLastChunk) {
+        writeAuditLogInBatch(batch, {
+          collection: tableKey,
+          docId: 'BULK_DELETE_ALL',
+          action: 'delete',
+          before: { deletedCount: docs.length },
+          after: null,
+          actor,
+        });
+      }
+      await batch.commit();
+    }
+
+    results.push({ table: tableKey, deletedCount: docs.length });
+  }
+
+  return results;
+}
+

@@ -1,7 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { ArrowRight, Download, Database, FileSpreadsheet, History, RefreshCw } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckSquare,
+  Download,
+  Database,
+  FileSpreadsheet,
+  History,
+  RefreshCw,
+  Square,
+  Trash2,
+} from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,9 +22,13 @@ import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
 import { db } from '../lib/firebase';
 import {
   buildEconomicCodesFromExistingData,
+  clearDbTables,
+  DELETABLE_DB_TABLES,
+  fetchDbTableCounts,
   previewLegacySpendingsMigration,
   runLegacySpendingsMigration,
   saveOfficeSettings,
+  type DeletableDbTableKey,
   type MigrationPreviewReport,
   type MigrationRunResult,
 } from '../lib/firestoreOps';
@@ -47,10 +62,37 @@ export function SettingsPage() {
   const [migrationPreview, setMigrationPreview] = useState<MigrationPreviewReport | null>(null);
   const [migrationResult, setMigrationResult] = useState<MigrationRunResult | null>(null);
 
+  // Table-wise DB cleanup state (Super Admin only)
+  const [tableCounts, setTableCounts] = useState<Partial<Record<DeletableDbTableKey, number>>>({});
+  const [countsLoading, setCountsLoading] = useState(false);
+  const [selectedTables, setSelectedTables] = useState<Set<DeletableDbTableKey>>(new Set());
+  const [confirmTables, setConfirmTables] = useState<DeletableDbTableKey[] | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [clearingTables, setClearingTables] = useState(false);
+
   const { logs: globalLogs, loading: logsLoading } = useGlobalAuditLogs(
     isSuperAdmin && activityModalOpen,
     120
   );
+
+  const loadTableCounts = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    setCountsLoading(true);
+    try {
+      const counts = await fetchDbTableCounts();
+      setTableCounts(counts);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'টেবিলের তথ্য লোড করা যায়নি।');
+    } finally {
+      setCountsLoading(false);
+    }
+  }, [isSuperAdmin, pushToast]);
+
+  useEffect(() => {
+    if (isSuperAdmin) {
+      loadTableCounts();
+    }
+  }, [isSuperAdmin, loadTableCounts]);
 
   useEffect(() => {
     setOfficeName(officeSettings.officeName);
@@ -233,6 +275,71 @@ export function SettingsPage() {
 
   const handleLanguageChange = (lang: LanguageCode) => {
     setLanguage(lang);
+  };
+
+  const toggleTableSelection = (key: DeletableDbTableKey) => {
+    setSelectedTables((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectTablesByCategory = (mode: 'transactional' | 'all' | 'none') => {
+    if (mode === 'none') {
+      setSelectedTables(new Set());
+      return;
+    }
+    const next = new Set<DeletableDbTableKey>();
+    for (const tbl of DELETABLE_DB_TABLES) {
+      if (mode === 'transactional' && tbl.category !== 'transactional') continue;
+      if ((tableCounts[tbl.key] ?? 0) > 0) {
+        next.add(tbl.key);
+      }
+    }
+    setSelectedTables(next);
+  };
+
+  const openClearConfirmModal = (tables: DeletableDbTableKey[]) => {
+    if (tables.length === 0) return;
+    setConfirmTables(tables);
+    setConfirmText('');
+  };
+
+  const confirmPhraseValid = (() => {
+    const v = confirmText.trim();
+    return v.toUpperCase() === 'DELETE' || v === 'মুছুন';
+  })();
+
+  const handleConfirmClearTables = async () => {
+    if (!userDoc || !isSuperAdmin || !confirmTables || confirmTables.length === 0) return;
+    if (!confirmPhraseValid) return;
+
+    setClearingTables(true);
+    try {
+      const results = await clearDbTables(confirmTables, {
+        uid: userDoc.id,
+        name: userDoc.name,
+      });
+      const totalDeleted = results.reduce((sum, r) => sum + r.deletedCount, 0);
+      setSelectedTables((prev) => {
+        const next = new Set(prev);
+        for (const k of confirmTables) next.delete(k);
+        return next;
+      });
+      setConfirmTables(null);
+      setConfirmText('');
+      await loadTableCounts();
+      pushToast(
+        'success',
+        `${results.length}টি টেবিল থেকে মোট ${totalDeleted}টি রেকর্ড স্থায়ীভাবে মুছে ফেলা হয়েছে।`
+      );
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'টেবিলের ডেটা মুছা যায়নি।');
+    } finally {
+      setClearingTables(false);
+    }
   };
 
   const headerActions = isSuperAdmin ? (
@@ -523,6 +630,139 @@ export function SettingsPage() {
             )}
           </section>
         )}
+
+        {/* Table-wise Database Wipe (Super Admin only) */}
+        {isSuperAdmin && (
+          <section className="lg:col-span-2 card-surface p-4 md:p-5 space-y-4 border border-[var(--danger-text)]/25">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-[var(--danger-text)] shrink-0" />
+                  <h2 className="text-base font-semibold text-[var(--text)]">
+                    ডাটাবেইজ থেকে টেবিল অনুসারে সকল ডাটা মুছুন
+                  </h2>
+                </div>
+                <p className="text-xs text-[var(--muted)]">
+                  নির্দিষ্ট কোনো টেবিল বা একাধিক টেবিলের সকল রেকর্ড স্থায়ীভাবে মুছে ফেলুন। ব্যবহারকারী (users), অফিস সেটিংস (settings) ও অডিট লগ (auditLogs) সুরক্ষিত থাকবে।
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={loadTableCounts}
+                  disabled={countsLoading || clearingTables}
+                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${countsLoading ? 'animate-spin' : ''}`} />
+                  <span>রিফ্রেশ</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectTablesByCategory('transactional')}
+                  disabled={countsLoading || clearingTables}
+                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium disabled:opacity-60"
+                >
+                  লেনদেন টেবিল বাছুন
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    selectTablesByCategory(selectedTables.size > 0 ? 'none' : 'all')
+                  }
+                  disabled={countsLoading || clearingTables}
+                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium disabled:opacity-60"
+                >
+                  {selectedTables.size > 0 ? 'বাছাই বাতিল' : 'সব বাছুন'}
+                </button>
+                {selectedTables.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => openClearConfirmModal(Array.from(selectedTables))}
+                    disabled={clearingTables}
+                    className="min-h-[40px] px-3.5 rounded-lg bg-[var(--danger-text)] text-white text-xs font-semibold inline-flex items-center gap-1.5 hover:opacity-90 disabled:opacity-60"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>নির্বাচিত ({selectedTables.size}) মুছুন</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[var(--line)] overflow-hidden divide-y divide-[var(--line)]">
+              {DELETABLE_DB_TABLES.map((tbl) => {
+                const count = tableCounts[tbl.key];
+                const checked = selectedTables.has(tbl.key);
+                const isEmpty = count === 0;
+                return (
+                  <div
+                    key={tbl.key}
+                    className={`p-3 md:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-colors ${
+                      checked ? 'bg-[var(--danger-bg)]/30' : 'bg-[var(--card)] hover:bg-[var(--surface-subtle)]/60'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleTableSelection(tbl.key)}
+                        aria-label={`Select ${tbl.labelBn}`}
+                        className="mt-0.5 min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] shrink-0"
+                      >
+                        {checked ? (
+                          <CheckSquare className="w-4 h-4 text-[var(--danger-text)]" />
+                        ) : (
+                          <Square className="w-4 h-4" />
+                        )}
+                      </button>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-[var(--text)] bn">
+                            {tbl.labelBn}
+                          </span>
+                          <code className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[var(--surface-subtle)] text-[var(--muted)]">
+                            {tbl.key}
+                          </code>
+                        </div>
+                        <p className="text-xs text-[var(--muted)] mt-0.5 bn">
+                          {tbl.descriptionBn}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-2.5 pl-9 sm:pl-0 shrink-0">
+                      <span
+                        className={`text-xs font-semibold tabular-nums px-2.5 py-1 rounded-full border ${
+                          isEmpty
+                            ? 'border-[var(--line)] text-[var(--muted)] bg-[var(--surface-subtle)]'
+                            : 'border-[var(--line)] text-[var(--text)] bg-[var(--card)]'
+                        }`}
+                      >
+                        {countsLoading && count === undefined
+                          ? '…'
+                          : count === undefined
+                          ? '—'
+                          : count === 0
+                          ? 'ফাঁকা (০)'
+                          : `${count}টি রেকর্ড`}
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled={clearingTables || isEmpty || countsLoading}
+                        onClick={() => openClearConfirmModal([tbl.key])}
+                        className="min-h-[38px] px-3 rounded-lg border border-[var(--danger-text)]/40 text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/50 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>সব মুছুন</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
       </div>
 
       {/* Super Admin Global Activity Log Modal */}
@@ -622,6 +862,88 @@ export function SettingsPage() {
               </table>
             </div>
           </>
+        )}
+      </Modal>
+
+      {/* Confirm Table-wise Database Delete Modal */}
+      <Modal
+        open={Boolean(confirmTables && confirmTables.length > 0)}
+        onClose={() => !clearingTables && setConfirmTables(null)}
+        title="ডাটাবেইজ টেবিল মুছে ফেলার নিশ্চিতকরণ"
+        subtitle="এই কাজটি পূর্বাবস্থায় ফেরানো যাবে না"
+        maxWidthClass="md:max-w-lg"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={clearingTables}
+              onClick={() => setConfirmTables(null)}
+              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium disabled:opacity-60"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={clearingTables || !confirmPhraseValid}
+              onClick={handleConfirmClearTables}
+              className="min-h-[44px] px-5 rounded-lg bg-[var(--danger-text)] text-white text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-40"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>{clearingTables ? 'মুছে ফেলা হচ্ছে…' : 'স্থায়ীভাবে মুছুন'}</span>
+            </button>
+          </div>
+        }
+      >
+        {confirmTables && (
+          <div className="space-y-4">
+            <div className="p-3 rounded-xl bg-[var(--danger-bg)]/50 border border-[var(--danger-text)]/30 text-xs text-[var(--danger-text)] space-y-1">
+              <div className="font-semibold">
+                সতর্কতা: নিচের টেবিল(গুলোর) সকল ডকুমেন্ট ডাটাবেইজ থেকে স্থায়ীভাবে মুছে যাবে।
+              </div>
+              <div>
+                প্রয়োজনে আগে উপরের <strong>Export backup</strong> বাটন থেকে JSON ব্যাকআপ সংরক্ষণ করুন।
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[var(--line)] divide-y divide-[var(--line)] text-xs">
+              {confirmTables.map((k) => {
+                const meta = DELETABLE_DB_TABLES.find((item) => item.key === k);
+                const cnt = tableCounts[k] ?? 0;
+                return (
+                  <div key={k} className="px-3 py-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[var(--text)] bn">
+                        {meta?.labelBn || k}
+                      </div>
+                      <div className="font-mono text-[11px] text-[var(--muted)]">{k}</div>
+                    </div>
+                    <span className="font-bold tabular-nums text-[var(--danger-text)] shrink-0">
+                      {cnt}টি রেকর্ড
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirm-db-delete-input"
+                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+              >
+                নিশ্চিত করতে নিচে <strong className="text-[var(--text)]">DELETE</strong> অথবা{' '}
+                <strong className="text-[var(--text)]">মুছুন</strong> লিখুন:
+              </label>
+              <input
+                id="confirm-db-delete-input"
+                type="text"
+                autoComplete="off"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="DELETE বা মুছুন লিখুন…"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-[var(--danger-text)]"
+              />
+            </div>
+          </div>
         )}
       </Modal>
     </Layout>

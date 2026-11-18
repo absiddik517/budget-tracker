@@ -284,15 +284,6 @@ export function Layout({ title, actions, children }: LayoutProps) {
         >
           <div className="grid grid-cols-5 h-[56px]">
             <Link
-              to="/"
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
-                isRouteActive('/') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
-              }`}
-            >
-              <LayoutGrid className="w-5 h-5 shrink-0" />
-              <span className="truncate max-w-full">{t('navDashboard')}</span>
-            </Link>
-            <Link
               to="/budgets"
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
                 isRouteActive('/budgets') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
@@ -302,15 +293,6 @@ export function Layout({ title, actions, children }: LayoutProps) {
               <span className="truncate max-w-full">{t('navBudgetsShort')}</span>
             </Link>
             <Link
-              to="/expense-items"
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
-                isRouteActive('/expense-items') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
-              }`}
-            >
-              <ClipboardList className="w-5 h-5 shrink-0" />
-              <span className="truncate max-w-full">{t('navExpenseItemsShort')}</span>
-            </Link>
-            <Link
               to="/bills"
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
                 isRouteActive('/bills') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
@@ -318,6 +300,24 @@ export function Layout({ title, actions, children }: LayoutProps) {
             >
               <ReceiptText className="w-5 h-5 shrink-0" />
               <span className="truncate max-w-full">{t('navBills')}</span>
+            </Link>
+            <Link
+              to="/"
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
+                isRouteActive('/') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              <LayoutGrid className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">{t('navDashboard')}</span>
+            </Link>
+            <Link
+              to="/expense-items"
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
+                isRouteActive('/expense-items') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              <ClipboardList className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">{t('navExpenseItemsShort')}</span>
             </Link>
             <button
               type="button"
