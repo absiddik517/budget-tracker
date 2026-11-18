@@ -6,6 +6,7 @@ import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { db } from '../lib/firebase';
+import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
 import {
   createInvite,
   deleteInvite,
@@ -15,8 +16,8 @@ import { formatRoleLabel } from '../lib/permissions';
 import type { InviteDoc, Role, UserDoc } from '../types';
 
 export function UsersPage() {
-  const { userDoc } = useAuth();
-  const { pushToast, t } = useApp();
+  const { userDoc, accessState } = useAuth();
+  const { pushToast, t, reportPermissionError, clearPermissionError } = useApp();
 
   const [users, setUsers] = useState<UserDoc[]>([]);
   const [invites, setInvites] = useState<InviteDoc[]>([]);
@@ -30,24 +31,42 @@ export function UsersPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
-      const list = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() } as UserDoc))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      setUsers(list);
-      setLoading(false);
-    });
-    const unsubInvites = onSnapshot(collection(db, 'invites'), (snap) => {
-      const list = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() } as InviteDoc))
-        .sort((a, b) => a.email.localeCompare(b.email));
-      setInvites(list);
-    });
+    if (accessState !== 'active') return;
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snap) => {
+        clearPermissionError('users');
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as UserDoc))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setUsers(list);
+        setLoading(false);
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'users');
+        if (isPermissionDeniedError(err)) reportPermissionError('users');
+        setLoading(false);
+      }
+    );
+    const unsubInvites = onSnapshot(
+      collection(db, 'invites'),
+      (snap) => {
+        clearPermissionError('invites');
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as InviteDoc))
+          .sort((a, b) => a.email.localeCompare(b.email));
+        setInvites(list);
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'invites');
+        if (isPermissionDeniedError(err)) reportPermissionError('invites');
+      }
+    );
     return () => {
       unsubUsers();
       unsubInvites();
     };
-  }, []);
+  }, [accessState, clearPermissionError, reportPermissionError]);
 
   const handleInviteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -341,13 +360,13 @@ export function UsersPage() {
         <section className="card-surface p-4 md:p-5 space-y-2 text-sm">
           <h2 className="text-base font-semibold text-[var(--text)]">Role permissions</h2>
           <p className="text-[var(--muted)]">
-            <strong className="text-[var(--text)]">Super Admin:</strong> everything, including users and settings, and editing/deleting approved entries or budgets.
+            <strong className="text-[var(--text)]">Super Admin:</strong> users, invites, office settings, economic codes, budgets, VAT/IT rates, limits, expense items, and draft/submit bills (cannot approve, reject, or cancel bills).
           </p>
           <p className="text-[var(--muted)]">
-            <strong className="text-[var(--text)]">DDO:</strong> budgets and revisions, approvals, voids, limits, VAT/IT rates, and all reports.
+            <strong className="text-[var(--text)]">DDO:</strong> exclusively approves, rejects, or cancels bills; also creates budgets, revisions, limits, VAT/IT rates, economic codes, and views all reports.
           </p>
           <p className="text-[var(--muted)]">
-            <strong className="text-[var(--text)]">Employee:</strong> view all budgets and reports, create and submit own spending entries.
+            <strong className="text-[var(--text)]">Employee:</strong> views all budgets and reports, creates expense items, prepares draft bills, and submits bills for DDO approval.
           </p>
         </section>
       </div>

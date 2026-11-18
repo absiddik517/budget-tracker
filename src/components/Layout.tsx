@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
+  AlertTriangle,
   BarChart2,
   BookOpen,
+  Check,
+  ClipboardList,
+  Copy,
+  ExternalLink,
   LayoutGrid,
   LogOut,
   Menu,
@@ -21,6 +26,7 @@ import { useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { formatRoleLabel } from '../lib/permissions';
 import type { TranslationKey } from '../i18n';
+import firestoreRulesText from '../../firestore.rules?raw';
 
 interface LayoutProps {
   title: string;
@@ -38,7 +44,8 @@ interface NavItem {
 const DESKTOP_NAV: NavItem[] = [
   { to: '/', labelKey: 'navDashboard', icon: LayoutGrid },
   { to: '/budgets', labelKey: 'navBudgets', icon: Wallet },
-  { to: '/spending', labelKey: 'navSpending', icon: ReceiptText },
+  { to: '/expense-items', labelKey: 'navExpenseItems', icon: ClipboardList },
+  { to: '/bills', labelKey: 'navBills', icon: ReceiptText },
   { to: '/economic-codes', labelKey: 'navEconomicCodes', icon: BookOpen },
   { to: '/vat-tax', labelKey: 'navVatTax', icon: Percent },
   { to: '/limits', labelKey: 'navLimits', icon: ShieldCheck },
@@ -49,10 +56,24 @@ const DESKTOP_NAV: NavItem[] = [
 
 export function Layout({ title, actions, children }: LayoutProps) {
   const { userDoc, signOut } = useAuth();
-  const { officeSettings, selectedFy, setSelectedFy, t } = useApp();
+  const { officeSettings, selectedFy, setSelectedFy, t, permissionDeniedPaths, pushToast } =
+    useApp();
   const { resolvedTheme, toggleTheme } = useTheme();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [copiedRules, setCopiedRules] = useState(false);
+
+  const handleCopyRules = async () => {
+    try {
+      await navigator.clipboard.writeText(firestoreRulesText);
+      setCopiedRules(true);
+      pushToast('success', 'firestore.rules কপি হয়েছে। Firebase Console → Rules-এ পেস্ট করে Publish করুন।');
+      setTimeout(() => setCopiedRules(false), 3000);
+    } catch {
+      pushToast('error', 'ক্লিপবোর্ডে কপি করা যায়নি। প্রজেক্টের firestore.rules ফাইলটি ব্যবহার করুন।');
+    }
+  };
 
   const isSuperAdmin = userDoc?.role === 'superAdmin';
   const visibleNav = DESKTOP_NAV.filter((item) => !item.superAdminOnly || isSuperAdmin);
@@ -187,6 +208,69 @@ export function Layout({ title, actions, children }: LayoutProps) {
         {/* Scrollable Content Region */}
         <main className="flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain w-full print:overflow-visible">
           <div className="max-w-[1220px] w-full mx-auto px-3 md:px-6 lg:px-8 pt-2.5 md:pt-1 pb-5 md:pb-10">
+            {permissionDeniedPaths.length > 0 && !bannerDismissed && (
+              <div
+                role="alert"
+                className="mb-3.5 rounded-xl border border-[var(--danger-border)] bg-[var(--danger-bg)] px-3.5 py-3 text-xs md:text-sm text-[var(--danger-text)] flex items-start justify-between gap-3 no-print"
+              >
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div className="min-w-0 space-y-2 flex-1">
+                    <div className="font-semibold">
+                      Firestore Rules আপডেট প্রয়োজন (Missing or insufficient permissions)
+                    </div>
+                    <p className="text-xs leading-relaxed opacity-90">
+                      কালেকশন{' '}
+                      <span className="font-mono font-semibold">
+                        {permissionDeniedPaths.join(', ')}
+                      </span>{' '}
+                      পড়ার অনুমতি মেলেনি। প্রজেক্ট{' '}
+                      <span className="font-mono font-semibold">budget-tracker-f7025</span>-এ
+                      সর্বশেষ <span className="font-mono">firestore.rules</span> কপি করে
+                      Firebase Console → Firestore Database → Rules-এ Publish করুন (অথবা CLI-তে{' '}
+                      <span className="font-mono">firebase deploy --only firestore:rules,firestore:indexes</span>{' '}
+                      চালান)।
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={handleCopyRules}
+                        className="min-h-[36px] px-3 rounded-lg border border-[var(--danger-border)] bg-[var(--card)] text-[var(--text)] text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-[var(--surface-subtle)]"
+                      >
+                        {copiedRules ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-[var(--accent)]" />
+                            <span>কপি হয়েছে</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>firestore.rules কপি করুন</span>
+                          </>
+                        )}
+                      </button>
+                      <a
+                        href="https://console.firebase.google.com/project/budget-tracker-f7025/firestore/rules"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[36px] px-3 rounded-lg border border-[var(--danger-border)] bg-[var(--card)] text-[var(--text)] text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-[var(--surface-subtle)]"
+                      >
+                        <span>Firebase Console Rules খুলুন</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setBannerDismissed(true)}
+                  aria-label="Dismiss alert"
+                  className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-lg hover:bg-black/10 shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             {children}
           </div>
         </main>
@@ -216,28 +300,29 @@ export function Layout({ title, actions, children }: LayoutProps) {
               <span className="truncate max-w-full">{t('navBudgetsShort')}</span>
             </Link>
             <Link
-              to="/spending"
+              to="/expense-items"
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
-                isRouteActive('/spending') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+                isRouteActive('/expense-items') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              <ClipboardList className="w-5 h-5 shrink-0" />
+              <span className="truncate max-w-full">{t('navExpenseItemsShort')}</span>
+            </Link>
+            <Link
+              to="/bills"
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
+                isRouteActive('/bills') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
               }`}
             >
               <ReceiptText className="w-5 h-5 shrink-0" />
-              <span className="truncate max-w-full">{t('navSpending')}</span>
-            </Link>
-            <Link
-              to="/reports"
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
-                isRouteActive('/reports') ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
-              }`}
-            >
-              <BarChart2 className="w-5 h-5 shrink-0" />
-              <span className="truncate max-w-full">{t('navReports')}</span>
+              <span className="truncate max-w-full">{t('navBills')}</span>
             </Link>
             <button
               type="button"
               onClick={() => setMoreOpen(true)}
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium px-1 ${
                 moreOpen ||
+                isRouteActive('/reports') ||
                 isRouteActive('/economic-codes') ||
                 isRouteActive('/vat-tax') ||
                 isRouteActive('/limits') ||
@@ -284,6 +369,14 @@ export function Layout({ title, actions, children }: LayoutProps) {
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 space-y-1">
+              <Link
+                to="/reports"
+                onClick={() => setMoreOpen(false)}
+                className="min-h-[44px] flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+              >
+                <BarChart2 className="w-5 h-5 text-[var(--muted)] shrink-0" />
+                <span>{t('navReports')}</span>
+              </Link>
               <Link
                 to="/economic-codes"
                 onClick={() => setMoreOpen(false)}

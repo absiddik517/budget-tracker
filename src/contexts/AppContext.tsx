@@ -3,6 +3,8 @@ import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getCurrentFiscalYear } from '../lib/fy';
 import { translate, type TranslationKey } from '../i18n';
+import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
+import { DEFAULT_NET_PAYABLE_CODE, resolveTr21Clauses } from '../lib/tr21Defaults';
 import { useAuth } from './AuthContext';
 import type { EconomicCodeDoc, LanguageCode, OfficeSettings } from '../types';
 
@@ -38,6 +40,9 @@ interface AppContextValue {
     code: string,
     fallback?: { headName?: string; headNameBn?: string }
   ) => HeadLookupResult;
+  permissionDeniedPaths: string[];
+  reportPermissionError: (path: string) => void;
+  clearPermissionError: (path: string) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -50,6 +55,11 @@ const defaultOfficeSettings: OfficeSettings = {
   activeFiscalYear: defaultFy,
   fiscalYears: [defaultFy],
   language: 'en',
+  institutionalCode: '',
+  defaultPayeeText: '',
+  placeName: '',
+  defaultNetPayableCode: DEFAULT_NET_PAYABLE_CODE,
+  tr21Clauses: resolveTr21Clauses(null),
 };
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -60,6 +70,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [economicCodes, setEconomicCodes] = useState<EconomicCodeDoc[]>([]);
   const [economicCodesLoading, setEconomicCodesLoading] = useState(true);
+  const [permissionDeniedPaths, setPermissionDeniedPaths] = useState<string[]>([]);
 
   const [language, setLanguageState] = useState<LanguageCode>(() => {
     try {
@@ -73,11 +84,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  const reportPermissionError = useCallback((path: string) => {
+    setPermissionDeniedPaths((prev) => (prev.includes(path) ? prev : [...prev, path]));
+  }, []);
+
+  const clearPermissionError = useCallback((path: string) => {
+    setPermissionDeniedPaths((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : prev));
+  }, []);
+
   useEffect(() => {
-    if (accessState !== 'active') return;
+    if (accessState !== 'active') {
+      setPermissionDeniedPaths([]);
+      return;
+    }
     const unsub = onSnapshot(
       doc(db, 'settings', 'office'),
       (snap) => {
+        clearPermissionError('settings/office');
         if (snap.exists()) {
           const data = snap.data() as Partial<OfficeSettings>;
           const activeFy = data.activeFiscalYear || defaultFy;
@@ -91,6 +114,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             activeFiscalYear: activeFy,
             fiscalYears,
             language: data.language || 'en',
+            institutionalCode: data.institutionalCode || '',
+            defaultPayeeText: data.defaultPayeeText || '',
+            placeName: data.placeName || '',
+            defaultNetPayableCode: data.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE,
+            tr21Clauses: resolveTr21Clauses(data.tr21Clauses),
           });
           if (!fyInitializedFromServer) {
             setSelectedFy(activeFy);
@@ -98,12 +126,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
       },
-      () => {
-        // Offline or initial read error ignored silently
+      (err) => {
+        logFirestoreError(err, OperationType.GET, 'settings/office');
+        if (isPermissionDeniedError(err)) {
+          reportPermissionError('settings/office');
+        }
       }
     );
     return () => unsub();
-  }, [accessState, fyInitializedFromServer]);
+  }, [accessState, fyInitializedFromServer, clearPermissionError, reportPermissionError]);
 
   // Single Firestore listener for economicCodes across the entire app (cached offline)
   useEffect(() => {
@@ -116,18 +147,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const unsub = onSnapshot(
       collection(db, 'economicCodes'),
       (snap) => {
+        clearPermissionError('economicCodes');
         const list = snap.docs
           .map((d) => ({ id: d.id, ...d.data() } as EconomicCodeDoc))
           .sort((a, b) => a.code.localeCompare(b.code));
         setEconomicCodes(list);
         setEconomicCodesLoading(false);
       },
-      () => {
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'economicCodes');
+        if (isPermissionDeniedError(err)) {
+          reportPermissionError('economicCodes');
+        }
         setEconomicCodesLoading(false);
       }
     );
     return () => unsub();
-  }, [accessState]);
+  }, [accessState, clearPermissionError, reportPermissionError]);
 
   const economicCodeMap = useMemo(() => {
     const map = new Map<string, EconomicCodeDoc>();
@@ -210,6 +246,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         economicCodesLoading,
         getCodeEntry,
         getHead,
+        permissionDeniedPaths,
+        reportPermissionError,
+        clearPermissionError,
       }}
     >
       {children}

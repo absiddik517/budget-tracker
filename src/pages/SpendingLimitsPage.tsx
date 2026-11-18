@@ -82,27 +82,32 @@ export function SpendingLimitsPage() {
     const rate = parseFloat(rateStr) || 0;
     let allocated = 0;
     let spent = 0;
+    let pending = 0;
     if (limitType === 'code' && economicCode.trim()) {
       const tot = fyCodeTotals.find((f) => f.economicCode === economicCode.trim());
       if (tot) {
         allocated = tot.allocated;
         spent = tot.spent;
+        pending = Math.max(0, tot.pendingAmount || 0);
       } else {
         const matching = budgets.filter((b) => b.economicCode === economicCode.trim());
         allocated = matching.reduce((acc, b) => acc + b.allocated, 0);
         spent = matching.reduce((acc, b) => acc + b.spent, 0);
+        pending = matching.reduce((acc, b) => acc + Math.max(0, b.pendingAmount || 0), 0);
       }
     } else if (limitType === 'budget' && budgetId) {
       const b = budgets.find((item) => item.id === budgetId);
       if (b) {
         allocated = b.allocated;
         spent = b.spent;
+        pending = Math.max(0, b.pendingAmount || 0);
       }
     }
     const cap = Math.round((allocated * rate) / 100);
-    const spendable = cap - spent;
-    const pctUsedOfCap = cap > 0 ? Math.min(100, Math.round((spent / cap) * 100)) : 0;
-    return { allocated, spent, cap, spendable, pctUsedOfCap };
+    const spendable = cap - spent - pending;
+    const pctUsedOfCap =
+      cap > 0 ? Math.min(100, Math.round(((spent + pending) / cap) * 100)) : 0;
+    return { allocated, spent, pending, cap, spendable, pctUsedOfCap };
   }, [limitType, economicCode, budgetId, rateStr, fyCodeTotals, budgets]);
 
   const resetForm = () => {
@@ -172,6 +177,7 @@ export function SpendingLimitsPage() {
   const computeRowNumbers = (l: SpendingLimitDoc) => {
     let allocated = 0;
     let spent = 0;
+    let pending = 0;
     let budgetLabel = 'All entries';
     if (l.type === 'code') {
       const tot = fyCodeTotals.find((f) => f.economicCode === l.economicCode);
@@ -185,19 +191,25 @@ export function SpendingLimitsPage() {
         : budgets
             .filter((b) => b.economicCode === l.economicCode)
             .reduce((s, b) => s + b.spent, 0);
+      pending = tot
+        ? Math.max(0, tot.pendingAmount || 0)
+        : budgets
+            .filter((b) => b.economicCode === l.economicCode)
+            .reduce((s, b) => s + Math.max(0, b.pendingAmount || 0), 0);
     } else if (l.budgetId) {
       const b = budgets.find((item) => item.id === l.budgetId);
       if (b) {
         allocated = b.allocated;
         spent = b.spent;
+        pending = Math.max(0, b.pendingAmount || 0);
         budgetLabel = b.memoNo;
       } else {
         budgetLabel = l.budgetId;
       }
     }
     const cap = Math.round((allocated * l.rate) / 100);
-    const spendable = cap - spent;
-    return { cap, spent, spendable, budgetLabel };
+    const spendable = cap - spent - pending;
+    return { cap, spent, pending, spendable, budgetLabel };
   };
 
   const renderAddLimitForm = (formId: string, showInlineButtons: boolean) => (

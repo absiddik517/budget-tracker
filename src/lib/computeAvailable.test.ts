@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { computeAvailable } from './computeAvailable.ts';
+import { computeAvailable, computeCodeAvailable } from './computeAvailable.ts';
 import type { SpendingLimitDoc } from '../types/index.ts';
 
 const baseBudget = {
@@ -9,12 +9,14 @@ const baseBudget = {
   memoNo: 'Memo 01/26',
   allocated: 30000000, // 3,00,000 taka in paisa
   spent: 18000000, // 1,80,000 taka in paisa
+  pendingAmount: 0,
   status: 'active' as const,
 };
 
 const baseCodeTotal = {
   allocated: 30000000,
   spent: 18000000,
+  pendingAmount: 0,
 };
 
 const codeLimit80: SpendingLimitDoc = {
@@ -130,6 +132,40 @@ const codeLimit80: SpendingLimitDoc = {
   });
   assert.equal(res.available, 12000000);
   assert.equal(res.allowed, true);
+}
+
+// Test 7: Pending bills reduce available balance and DDO approval excludes own pending amount
+{
+  const pendingTotal = {
+    allocated: 30000000, // 3,00,000
+    spent: 18000000,     // 1,80,000
+    pendingAmount: 2000000, // 20,000 submitted pending
+  };
+  const resNewBill = computeCodeAvailable({
+    fiscalYear: '2025-26',
+    economicCode: '3211106',
+    budgets: [{ ...baseBudget, pendingAmount: 2000000 }],
+    fyCodeTotal: pendingTotal,
+    spendingLimits: [codeLimit80],
+    date: '2026-01-15',
+    gross: 4500000, // 45,000 > 40,000 (80% cap = 2,40,000; 2,40,000 - 1,80,000 - 20,000 = 40,000)
+  });
+  assert.equal(resNewBill.available, 4000000);
+  assert.equal(resNewBill.allowed, false);
+
+  // Approving the 20,000 submitted bill itself excludes its own pending hold (available = 60,000)
+  const resApprove = computeCodeAvailable({
+    fiscalYear: '2025-26',
+    economicCode: '3211106',
+    budgets: [{ ...baseBudget, pendingAmount: 2000000 }],
+    fyCodeTotal: pendingTotal,
+    spendingLimits: [codeLimit80],
+    date: '2026-01-15',
+    gross: 2000000,
+    excludePendingAmount: 2000000,
+  });
+  assert.equal(resApprove.available, 6000000);
+  assert.equal(resApprove.allowed, true);
 }
 
 console.log('All computeAvailable tests passed!');

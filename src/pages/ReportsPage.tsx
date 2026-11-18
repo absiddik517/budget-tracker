@@ -2,24 +2,27 @@ import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Layout } from '../components/Layout';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { formatDateDisplay } from '../lib/dates';
 import { fromPaisa, formatNumberIN } from '../lib/money';
-
-type ReportTab = 'allocations' | 'summary' | 'headSpending' | 'deductions';
+import { exportReportPdf, type ReportTabKey } from '../utils/exportPdf';
+import { saveAndShareFile } from '../utils/saveFile';
 
 export function ReportsPage() {
-  const { selectedFy, t } = useApp();
-  const { budgets, spendings, loading } = useFyData(selectedFy);
+  const { selectedFy, officeSettings, pushToast, t } = useApp();
+  const { budgets, bills, expenseItems, loading } = useFyData(selectedFy);
   const { getHead } = useEconomicCodes();
 
-  const [tab, setTab] = useState<ReportTab>('allocations');
+  const [tab, setTab] = useState<ReportTabKey>('allocations');
   const [selectedCode, setSelectedCode] = useState('');
   const [budgetStatusFilter, setBudgetStatusFilter] = useState<'all' | 'active' | 'executed'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const filteredBudgets = useMemo(() => {
     return budgets.filter((b) => {
@@ -29,7 +32,7 @@ export function ReportsPage() {
     });
   }, [budgets, budgetStatusFilter, selectedCode]);
 
-  // 1. FY Allocations grouped by economic code (including revisions)
+  // 1. FY Allocations grouped by economic code
   const allocationsGrouped = useMemo(() => {
     const map = new Map<
       string,
@@ -39,18 +42,21 @@ export function ReportsPage() {
         headNameBn: string;
         entries: typeof filteredBudgets;
         allocated: number;
-        spent: number;
-        remaining: number;
+        approvedSpent: number;
+        pendingAmount: number;
+        available: number;
       }
     >();
     for (const b of filteredBudgets) {
       const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+      const pending = Math.max(0, b.pendingAmount || 0);
       const existing = map.get(b.economicCode);
       if (existing) {
         existing.entries.push(b);
         existing.allocated += b.allocated;
-        existing.spent += b.spent;
-        existing.remaining += b.remaining;
+        existing.approvedSpent += b.spent;
+        existing.pendingAmount += pending;
+        existing.available += b.remaining;
       } else {
         map.set(b.economicCode, {
           economicCode: b.economicCode,
@@ -58,45 +64,48 @@ export function ReportsPage() {
           headNameBn: head.headNameBn,
           entries: [b],
           allocated: b.allocated,
-          spent: b.spent,
-          remaining: b.remaining,
+          approvedSpent: b.spent,
+          pendingAmount: pending,
+          available: b.remaining,
         });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
   }, [filteredBudgets, getHead]);
 
-  // 2. Budget Summary per head with totals
+  // 2. Budget Summary per head
   const summaryRows = useMemo(() => {
     return allocationsGrouped.map((g) => ({
       economicCode: g.economicCode,
       headName: g.headName,
       headNameBn: g.headNameBn,
       allocated: g.allocated,
-      spent: g.spent,
-      remaining: g.remaining,
-      usedPct: g.allocated > 0 ? Math.round((g.spent / g.allocated) * 100) : 0,
+      approvedSpent: g.approvedSpent,
+      pendingAmount: g.pendingAmount,
+      available: g.available,
+      usedPct: g.allocated > 0 ? Math.round((g.approvedSpent / g.allocated) * 100) : 0,
     }));
   }, [allocationsGrouped]);
 
   const summaryTotals = useMemo(() => {
     const allocated = summaryRows.reduce((s, r) => s + r.allocated, 0);
-    const spent = summaryRows.reduce((s, r) => s + r.spent, 0);
-    const remaining = allocated - spent;
-    const usedPct = allocated > 0 ? Math.round((spent / allocated) * 100) : 0;
-    return { allocated, spent, remaining, usedPct };
+    const approvedSpent = summaryRows.reduce((s, r) => s + r.approvedSpent, 0);
+    const pendingAmount = summaryRows.reduce((s, r) => s + r.pendingAmount, 0);
+    const available = allocated - approvedSpent - pendingAmount;
+    const usedPct = allocated > 0 ? Math.round((approvedSpent / allocated) * 100) : 0;
+    return { allocated, approvedSpent, pendingAmount, available, usedPct };
   }, [summaryRows]);
 
-  // 3. Head-wise Spending (approved only, optional date range)
-  const approvedSpendings = useMemo(() => {
-    return spendings.filter((s) => {
-      if (s.status !== 'approved') return false;
-      if (selectedCode && s.economicCode !== selectedCode) return false;
-      if (fromDate && s.date < fromDate) return false;
-      if (toDate && s.date > toDate) return false;
+  // 3. Head-wise Approved Bills (optional date range)
+  const approvedBills = useMemo(() => {
+    return bills.filter((b) => {
+      if (b.status !== 'approved') return false;
+      if (selectedCode && b.economicCode !== selectedCode) return false;
+      if (fromDate && b.date < fromDate) return false;
+      if (toDate && b.date > toDate) return false;
       return true;
     });
-  }, [spendings, selectedCode, fromDate, toDate]);
+  }, [bills, selectedCode, fromDate, toDate]);
 
   const headWiseTotals = useMemo(() => {
     const map = new Map<
@@ -104,78 +113,77 @@ export function ReportsPage() {
       {
         economicCode: string;
         headName: string;
+        headNameBn: string;
         count: number;
         gross: number;
         deductions: number;
         net: number;
       }
     >();
-    for (const s of approvedSpendings) {
-      const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
-      const ded = s.gross - s.netPayable;
-      const cur = map.get(s.economicCode);
+    for (const b of approvedBills) {
+      const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+      const cur = map.get(b.economicCode);
       if (cur) {
         cur.count += 1;
-        cur.gross += s.gross;
-        cur.deductions += ded;
-        cur.net += s.netPayable;
+        cur.gross += b.grossAmount;
+        cur.deductions += b.totalDeduction;
+        cur.net += b.netPayable;
       } else {
-        map.set(s.economicCode, {
-          economicCode: s.economicCode,
+        map.set(b.economicCode, {
+          economicCode: b.economicCode,
           headName: head.headName,
+          headNameBn: head.headNameBn,
           count: 1,
-          gross: s.gross,
-          deductions: ded,
-          net: s.netPayable,
+          gross: b.grossAmount,
+          deductions: b.totalDeduction,
+          net: b.netPayable,
         });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
-  }, [approvedSpendings, getHead]);
+  }, [approvedBills, getHead]);
 
-  // 4. VAT / IT Deductions per head and overall
+  // 4. VAT / IT Deductions per head (from approved bills)
   const deductionRows = useMemo(() => {
     const map = new Map<
       string,
       {
         economicCode: string;
         headName: string;
+        headNameBn: string;
         gross: number;
         vat: number;
         it: number;
-        serviceCharge: number;
-        others: number;
+        totalDeduction: number;
         netPayable: number;
       }
     >();
-    for (const s of spendings.filter(
-      (sp) => sp.status === 'approved' && (!selectedCode || sp.economicCode === selectedCode)
+    for (const b of bills.filter(
+      (bill) => bill.status === 'approved' && (!selectedCode || bill.economicCode === selectedCode)
     )) {
-      const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
-      const othersAmt = (s.deductions.others || []).reduce((acc, o) => acc + o.amount, 0);
-      const cur = map.get(s.economicCode);
+      const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+      const cur = map.get(b.economicCode);
       if (cur) {
-        cur.gross += s.gross;
-        cur.vat += s.deductions.vat;
-        cur.it += s.deductions.it;
-        cur.serviceCharge += s.deductions.serviceCharge;
-        cur.others += othersAmt;
-        cur.netPayable += s.netPayable;
+        cur.gross += b.grossAmount;
+        cur.vat += b.vatAmount;
+        cur.it += b.itAmount;
+        cur.totalDeduction += b.totalDeduction;
+        cur.netPayable += b.netPayable;
       } else {
-        map.set(s.economicCode, {
-          economicCode: s.economicCode,
+        map.set(b.economicCode, {
+          economicCode: b.economicCode,
           headName: head.headName,
-          gross: s.gross,
-          vat: s.deductions.vat,
-          it: s.deductions.it,
-          serviceCharge: s.deductions.serviceCharge,
-          others: othersAmt,
-          netPayable: s.netPayable,
+          headNameBn: head.headNameBn,
+          gross: b.grossAmount,
+          vat: b.vatAmount,
+          it: b.itAmount,
+          totalDeduction: b.totalDeduction,
+          netPayable: b.netPayable,
         });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.economicCode.localeCompare(b.economicCode));
-  }, [spendings, selectedCode, getHead]);
+  }, [bills, selectedCode, getHead]);
 
   const deductionTotals = useMemo(() => {
     return deductionRows.reduce(
@@ -183,79 +191,163 @@ export function ReportsPage() {
         gross: acc.gross + r.gross,
         vat: acc.vat + r.vat,
         it: acc.it + r.it,
-        serviceCharge: acc.serviceCharge + r.serviceCharge,
-        others: acc.others + r.others,
+        totalDeduction: acc.totalDeduction + r.totalDeduction,
         netPayable: acc.netPayable + r.netPayable,
       }),
-      { gross: 0, vat: 0, it: 0, serviceCharge: 0, others: 0, netPayable: 0 }
+      { gross: 0, vat: 0, it: 0, totalDeduction: 0, netPayable: 0 }
     );
   }, [deductionRows]);
 
-  const handleExportPdf = () => {
-    window.print();
+  // 5. Filtered Expense Items
+  const filteredExpenseItems = useMemo(() => {
+    return expenseItems.filter((item) => {
+      if (selectedCode && item.economicCode !== selectedCode) return false;
+      if (fromDate && item.date < fromDate) return false;
+      if (toDate && item.date > toDate) return false;
+      return true;
+    });
+  }, [expenseItems, selectedCode, fromDate, toDate]);
+
+  const handleExportPdf = async () => {
+    if (exportingPdf) return;
+    setExportingPdf(true);
+    try {
+      const outcome = await exportReportPdf({
+        tab,
+        selectedFy,
+        officeName: officeSettings.officeName,
+        officeAddress: officeSettings.address,
+        selectedCode,
+        budgetStatusFilter,
+        fromDate,
+        toDate,
+        getHead,
+        allocationsGrouped,
+        summaryRows,
+        summaryTotals,
+        headWiseTotals,
+        approvedBills,
+        deductionRows,
+        deductionTotals,
+        expenseItems: filteredExpenseItems,
+      });
+      if (outcome.status === 'shared') {
+        pushToast('success', 'PDF ready — choose an app to open or save.');
+      } else if (outcome.status === 'downloaded') {
+        pushToast('success', 'PDF downloaded.');
+      } else {
+        pushToast('info', 'PDF export cancelled.');
+      }
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'PDF export failed.');
+    } finally {
+      setExportingPdf(false);
+    }
   };
 
-  const handleExportExcel = () => {
-    let rows: Array<Record<string, string | number>> = [];
-    let sheetName = 'Report';
+  const handleExportExcel = async () => {
+    if (exportingExcel) return;
+    setExportingExcel(true);
+    try {
+      let rows: Array<Record<string, string | number>> = [];
+      let sheetName = 'Report';
 
-    if (tab === 'allocations') {
-      sheetName = 'FY Allocations';
-      rows = filteredBudgets.map((b) => {
-        const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
-        return {
-          'Economic Code': b.economicCode,
-          Head: head.headName,
-          'Memo No': b.memoNo,
-          'Memo Date': formatDateDisplay(b.memoDate),
-          Type: b.entryType,
-          'Allocated (BDT)': fromPaisa(b.allocated),
-          'Spent (BDT)': fromPaisa(b.spent),
-          'Remaining (BDT)': fromPaisa(b.remaining),
-          Status: b.status,
-        };
+      if (tab === 'allocations') {
+        sheetName = 'FY Allocations';
+        rows = filteredBudgets.map((b) => {
+          const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+          return {
+            'Economic Code': b.economicCode,
+            Head: head.headName,
+            'Memo No': b.memoNo,
+            'Memo Date': formatDateDisplay(b.memoDate),
+            Type: b.entryType,
+            'Allocated (BDT)': fromPaisa(b.allocated),
+            'Approved Spent (BDT)': fromPaisa(b.spent),
+            'Pending (BDT)': fromPaisa(b.pendingAmount || 0),
+            'Available (BDT)': fromPaisa(b.remaining),
+            Status: b.status,
+          };
+        });
+      } else if (tab === 'summary') {
+        sheetName = 'Budget Summary';
+        rows = summaryRows.map((r) => ({
+          Head: `${r.economicCode} ${r.headName}`,
+          'Allocated (BDT)': fromPaisa(r.allocated),
+          'Approved Spent (BDT)': fromPaisa(r.approvedSpent),
+          'Pending (BDT)': fromPaisa(r.pendingAmount),
+          'Available (BDT)': fromPaisa(r.available),
+          'Used (%)': `${r.usedPct}%`,
+        }));
+      } else if (tab === 'headBills') {
+        sheetName = 'Approved Bills';
+        rows = approvedBills.map((b) => {
+          const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
+          return {
+            Date: formatDateDisplay(b.date),
+            'Bill No': b.billNo || 'Draft',
+            Head: `${b.economicCode} ${head.headName}`,
+            'Items Count': b.items.length,
+            'Gross (BDT)': fromPaisa(b.grossAmount),
+            'VAT (BDT)': fromPaisa(b.vatAmount),
+            'Income Tax (BDT)': fromPaisa(b.itAmount),
+            'Total Deduction (BDT)': fromPaisa(b.totalDeduction),
+            'Net Payable (BDT)': fromPaisa(b.netPayable),
+          };
+        });
+      } else if (tab === 'expenseItems') {
+        sheetName = 'Expense Items';
+        rows = filteredExpenseItems.map((item) => {
+          const head = getHead(item.economicCode, {
+            headName: item.headName,
+            headNameBn: item.headNameBn,
+          });
+          return {
+            Date: formatDateDisplay(item.date),
+            Head: `${item.economicCode} ${head.headName}`,
+            Description: item.description,
+            'Responsible Employee': item.responsibleEmployee.name,
+            Designation: item.responsibleEmployee.designation,
+            'Amount (BDT)': fromPaisa(item.amount),
+            Status: item.status,
+          };
+        });
+      } else {
+        sheetName = 'VAT IT Deductions';
+        rows = deductionRows.map((r) => ({
+          Head: `${r.economicCode} ${r.headName}`,
+          'Gross (BDT)': fromPaisa(r.gross),
+          'VAT (BDT)': fromPaisa(r.vat),
+          'Income Tax (BDT)': fromPaisa(r.it),
+          'Total Deduction (BDT)': fromPaisa(r.totalDeduction),
+          'Net Payable (BDT)': fromPaisa(r.netPayable),
+        }));
+      }
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      const wbArray = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+
+      const outcome = await saveAndShareFile({
+        data: new Uint8Array(wbArray),
+        fileName: `budget-report-${tab}-FY-${selectedFy}.xlsx`,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        title: `${sheetName} (FY ${selectedFy})`,
       });
-    } else if (tab === 'summary') {
-      sheetName = 'Budget Summary';
-      rows = summaryRows.map((r) => ({
-        Head: `${r.economicCode} ${r.headName}`,
-        'Allocated (BDT)': fromPaisa(r.allocated),
-        'Spent (BDT)': fromPaisa(r.spent),
-        'Remaining (BDT)': fromPaisa(r.remaining),
-        'Used (%)': `${r.usedPct}%`,
-      }));
-    } else if (tab === 'headSpending') {
-      sheetName = 'Head-wise Spending';
-      rows = approvedSpendings.map((s) => {
-        const head = getHead(s.economicCode, { headName: s.headName, headNameBn: s.headNameBn });
-        return {
-          Date: formatDateDisplay(s.date),
-          Bill: s.billNo,
-          Cheque: s.chequeNo || '',
-          Payee: s.payee,
-          Head: `${s.economicCode} ${head.headName}`,
-          'Gross (BDT)': fromPaisa(s.gross),
-          'Deductions (BDT)': fromPaisa(s.gross - s.netPayable),
-          'Net (BDT)': fromPaisa(s.netPayable),
-        };
-      });
-    } else {
-      sheetName = 'VAT IT Deductions';
-      rows = deductionRows.map((r) => ({
-        Head: `${r.economicCode} ${r.headName}`,
-        'Gross (BDT)': fromPaisa(r.gross),
-        'VAT (BDT)': fromPaisa(r.vat),
-        'Income Tax (BDT)': fromPaisa(r.it),
-        'Service Charge (BDT)': fromPaisa(r.serviceCharge),
-        'Others (BDT)': fromPaisa(r.others),
-        'Net Payable (BDT)': fromPaisa(r.netPayable),
-      }));
+
+      if (outcome.status === 'shared') {
+        pushToast('success', 'Excel file ready — choose an app to open or save.');
+      } else if (outcome.status === 'downloaded') {
+        pushToast('success', 'Excel file downloaded.');
+      } else {
+        pushToast('info', 'Excel export cancelled.');
+      }
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Excel export failed.');
+    } finally {
+      setExportingExcel(false);
     }
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    XLSX.writeFile(wb, `budget-report-${tab}-FY-${selectedFy}.xlsx`);
   };
 
   const actions = (
@@ -263,16 +355,18 @@ export function ReportsPage() {
       <button
         type="button"
         onClick={handleExportPdf}
-        className="min-h-[44px] md:min-h-[40px] px-3 sm:px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] whitespace-nowrap"
+        disabled={exportingPdf}
+        className="min-h-[44px] md:min-h-[40px] px-3 sm:px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] whitespace-nowrap disabled:opacity-60"
       >
-        PDF
+        {exportingPdf ? 'PDF…' : 'PDF'}
       </button>
       <button
         type="button"
         onClick={handleExportExcel}
-        className="min-h-[44px] md:min-h-[40px] px-3 sm:px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] whitespace-nowrap"
+        disabled={exportingExcel}
+        className="min-h-[44px] md:min-h-[40px] px-3 sm:px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] whitespace-nowrap disabled:opacity-60"
       >
-        Excel
+        {exportingExcel ? 'Excel…' : 'Excel'}
       </button>
     </div>
   );
@@ -286,8 +380,9 @@ export function ReportsPage() {
             [
               { id: 'allocations', label: 'FY Allocations' },
               { id: 'summary', label: 'Budget Summary' },
-              { id: 'headSpending', label: 'Head-wise Spending' },
+              { id: 'headBills', label: 'Head-wise Bills' },
               { id: 'deductions', label: 'VAT / IT Deductions' },
+              { id: 'expenseItems', label: 'খরচ তালিকা' },
             ] as const
           ).map((item) => {
             const active = tab === item.id;
@@ -341,7 +436,7 @@ export function ReportsPage() {
             />
           </div>
 
-          {tab === 'headSpending' && (
+          {(tab === 'headBills' || tab === 'expenseItems') && (
             <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full md:w-auto">
               <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
                 <label className="text-xs text-[var(--muted)]">From</label>
@@ -371,7 +466,6 @@ export function ReportsPage() {
             <p className="p-6 text-sm text-[var(--muted)]">Loading report data…</p>
           ) : tab === 'allocations' ? (
             <>
-              {/* Mobile Cards (screen only) */}
               <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
                 {allocationsGrouped.length === 0 ? (
                   <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
@@ -400,13 +494,16 @@ export function ReportsPage() {
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <span className="font-semibold text-[var(--text)]">
-                                {entry.memoNo} <span className="capitalize font-normal text-[var(--muted)]">({entry.entryType})</span>
+                                {entry.memoNo}{' '}
+                                <span className="capitalize font-normal text-[var(--muted)]">
+                                  ({entry.entryType})
+                                </span>
                               </span>
                               <span className="tabular-nums text-[var(--muted)]">
                                 {formatDateDisplay(entry.memoDate)}
                               </span>
                             </div>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-4 gap-1.5">
                               <div className="min-w-0">
                                 <div className="text-[11px] text-[var(--muted)]">Allocated</div>
                                 <div className="font-medium tabular-nums truncate">
@@ -414,13 +511,19 @@ export function ReportsPage() {
                                 </div>
                               </div>
                               <div className="min-w-0">
-                                <div className="text-[11px] text-[var(--muted)]">Spent</div>
+                                <div className="text-[11px] text-[var(--muted)]">Approved</div>
                                 <div className="font-medium tabular-nums truncate">
                                   {formatNumberIN(entry.spent)}
                                 </div>
                               </div>
+                              <div className="min-w-0">
+                                <div className="text-[11px] text-[var(--muted)]">Pending</div>
+                                <div className="font-medium text-[var(--warn-text)] tabular-nums truncate">
+                                  {formatNumberIN(entry.pendingAmount || 0)}
+                                </div>
+                              </div>
                               <div className="min-w-0 text-right">
-                                <div className="text-[11px] text-[var(--muted)]">Remaining</div>
+                                <div className="text-[11px] text-[var(--muted)]">Available</div>
                                 <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
                                   {formatNumberIN(entry.remaining)}
                                 </div>
@@ -431,19 +534,29 @@ export function ReportsPage() {
                       </div>
 
                       {group.entries.length > 1 && (
-                        <div className="grid grid-cols-3 gap-2 pt-1.5 text-xs border-t border-[var(--line)] font-semibold">
+                        <div className="grid grid-cols-4 gap-1.5 pt-1.5 text-xs border-t border-[var(--line)] font-semibold">
                           <div className="min-w-0">
-                            <div className="text-[11px] text-[var(--muted)] font-normal">Subtotal Alloc</div>
-                            <div className="tabular-nums truncate">{formatNumberIN(group.allocated)}</div>
+                            <div className="text-[11px] text-[var(--muted)] font-normal">Alloc</div>
+                            <div className="tabular-nums truncate">
+                              {formatNumberIN(group.allocated)}
+                            </div>
                           </div>
                           <div className="min-w-0">
-                            <div className="text-[11px] text-[var(--muted)] font-normal">Subtotal Spent</div>
-                            <div className="tabular-nums truncate">{formatNumberIN(group.spent)}</div>
+                            <div className="text-[11px] text-[var(--muted)] font-normal">Appr</div>
+                            <div className="tabular-nums truncate">
+                              {formatNumberIN(group.approvedSpent)}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[11px] text-[var(--muted)] font-normal">Pend</div>
+                            <div className="tabular-nums truncate">
+                              {formatNumberIN(group.pendingAmount)}
+                            </div>
                           </div>
                           <div className="min-w-0 text-right">
-                            <div className="text-[11px] text-[var(--muted)] font-normal">Subtotal Rem</div>
+                            <div className="text-[11px] text-[var(--muted)] font-normal">Avail</div>
                             <div className="tabular-nums text-[var(--accent)] truncate">
-                              {formatNumberIN(group.remaining)}
+                              {formatNumberIN(group.available)}
                             </div>
                           </div>
                         </div>
@@ -453,24 +566,37 @@ export function ReportsPage() {
                 )}
               </div>
 
-              {/* Desktop & Print Table */}
               <div className="hidden md:block print:block overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">Head</th>
+                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
+                        Head
+                      </th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Memo No</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Type</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Allocated</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Spent</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Remaining</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Allocated
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Approved
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Pending
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Available
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--line)]">
                     {allocationsGrouped.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                        <td
+                          colSpan={8}
+                          className="py-8 px-4 text-center text-sm text-[var(--muted)]"
+                        >
                           {t('noDataFound')}
                         </td>
                       </tr>
@@ -484,7 +610,9 @@ export function ReportsPage() {
                           return (
                             <tr key={entry.id}>
                               <td className="sticky left-0 print:static z-10 bg-[var(--card)] py-2.5 px-4 max-w-[220px]">
-                                <span className="tabular-nums font-medium">{entry.economicCode}</span>{' '}
+                                <span className="tabular-nums font-medium">
+                                  {entry.economicCode}
+                                </span>{' '}
                                 {entryHead.headName}
                               </td>
                               <td className="py-2.5 px-4 whitespace-nowrap">{entry.memoNo}</td>
@@ -500,14 +628,20 @@ export function ReportsPage() {
                               <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
                                 {formatNumberIN(entry.spent)}
                               </td>
-                              <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
+                              <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap text-[var(--warn-text)]">
+                                {formatNumberIN(entry.pendingAmount || 0)}
+                              </td>
+                              <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
                                 {formatNumberIN(entry.remaining)}
                               </td>
                             </tr>
                           );
                         }),
                         group.entries.length > 1 ? (
-                          <tr key={`${group.economicCode}_subtotal`} className="bg-[var(--surface-subtle)] font-semibold">
+                          <tr
+                            key={`${group.economicCode}_subtotal`}
+                            className="bg-[var(--surface-subtle)] font-semibold"
+                          >
                             <td colSpan={4} className="py-2 px-4 text-xs">
                               Subtotal · {group.economicCode} {group.headName}
                             </td>
@@ -515,10 +649,13 @@ export function ReportsPage() {
                               {formatNumberIN(group.allocated)}
                             </td>
                             <td className="py-2 px-4 text-right tabular-nums text-xs">
-                              {formatNumberIN(group.spent)}
+                              {formatNumberIN(group.approvedSpent)}
                             </td>
                             <td className="py-2 px-4 text-right tabular-nums text-xs">
-                              {formatNumberIN(group.remaining)}
+                              {formatNumberIN(group.pendingAmount)}
+                            </td>
+                            <td className="py-2 px-4 text-right tabular-nums text-xs">
+                              {formatNumberIN(group.available)}
                             </td>
                           </tr>
                         ) : null,
@@ -530,30 +667,37 @@ export function ReportsPage() {
             </>
           ) : tab === 'summary' ? (
             <>
-              {/* Mobile Cards (screen only) */}
               <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
                 <div className="p-3.5 bg-[var(--surface-subtle)] space-y-1.5">
                   <div className="flex items-center justify-between text-xs font-semibold">
                     <span>Total ({summaryRows.length} heads)</span>
-                    <span className="tabular-nums text-[var(--accent)]">{summaryTotals.usedPct}% used</span>
+                    <span className="tabular-nums text-[var(--accent)]">
+                      {summaryTotals.usedPct}% used
+                    </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="grid grid-cols-4 gap-1.5 text-xs">
                     <div className="min-w-0">
-                      <div className="text-[11px] text-[var(--muted)]">Allocated</div>
+                      <div className="text-[11px] text-[var(--muted)]">Alloc</div>
                       <div className="font-semibold tabular-nums truncate">
                         {formatNumberIN(summaryTotals.allocated)}
                       </div>
                     </div>
                     <div className="min-w-0">
-                      <div className="text-[11px] text-[var(--muted)]">Spent</div>
+                      <div className="text-[11px] text-[var(--muted)]">Appr</div>
                       <div className="font-semibold tabular-nums truncate">
-                        {formatNumberIN(summaryTotals.spent)}
+                        {formatNumberIN(summaryTotals.approvedSpent)}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-[var(--muted)]">Pend</div>
+                      <div className="font-semibold text-[var(--warn-text)] tabular-nums truncate">
+                        {formatNumberIN(summaryTotals.pendingAmount)}
                       </div>
                     </div>
                     <div className="min-w-0 text-right">
-                      <div className="text-[11px] text-[var(--muted)]">Remaining</div>
+                      <div className="text-[11px] text-[var(--muted)]">Avail</div>
                       <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
-                        {formatNumberIN(summaryTotals.remaining)}
+                        {formatNumberIN(summaryTotals.available)}
                       </div>
                     </div>
                   </div>
@@ -580,19 +724,29 @@ export function ReportsPage() {
                           {r.usedPct}%
                         </span>
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-[var(--line)]/60">
+                      <div className="grid grid-cols-4 gap-1.5 text-xs pt-1 border-t border-[var(--line)]/60">
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">Allocated</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.allocated)}</div>
+                          <div className="text-[11px] text-[var(--muted)]">Alloc</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(r.allocated)}
+                          </div>
                         </div>
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">Spent</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.spent)}</div>
+                          <div className="text-[11px] text-[var(--muted)]">Appr</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(r.approvedSpent)}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[var(--muted)]">Pend</div>
+                          <div className="font-medium text-[var(--warn-text)] tabular-nums truncate">
+                            {formatNumberIN(r.pendingAmount)}
+                          </div>
                         </div>
                         <div className="min-w-0 text-right">
-                          <div className="text-[11px] text-[var(--muted)]">Remaining</div>
+                          <div className="text-[11px] text-[var(--muted)]">Avail</div>
                           <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
-                            {formatNumberIN(r.remaining)}
+                            {formatNumberIN(r.available)}
                           </div>
                         </div>
                       </div>
@@ -601,15 +755,25 @@ export function ReportsPage() {
                 )}
               </div>
 
-              {/* Desktop & Print Table */}
               <div className="hidden md:block print:block overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">Head</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Allocated</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Spent</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Remaining</th>
+                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
+                        Head
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Allocated
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Approved
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Pending
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Available
+                      </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Used</th>
                     </tr>
                   </thead>
@@ -624,10 +788,13 @@ export function ReportsPage() {
                           {formatNumberIN(r.allocated)}
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                          {formatNumberIN(r.spent)}
+                          {formatNumberIN(r.approvedSpent)}
                         </td>
-                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                          {formatNumberIN(r.remaining)}
+                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-[var(--warn-text)]">
+                          {formatNumberIN(r.pendingAmount)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
+                          {formatNumberIN(r.available)}
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                           {r.usedPct}%
@@ -635,15 +802,20 @@ export function ReportsPage() {
                       </tr>
                     ))}
                     <tr className="font-bold bg-[var(--surface-subtle)]">
-                      <td className="sticky left-0 print:static z-10 bg-[var(--surface-subtle)] py-3 px-4">Total</td>
+                      <td className="sticky left-0 print:static z-10 bg-[var(--surface-subtle)] py-3 px-4">
+                        Total
+                      </td>
                       <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                         {formatNumberIN(summaryTotals.allocated)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                        {formatNumberIN(summaryTotals.spent)}
+                        {formatNumberIN(summaryTotals.approvedSpent)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                        {formatNumberIN(summaryTotals.remaining)}
+                        {formatNumberIN(summaryTotals.pendingAmount)}
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                        {formatNumberIN(summaryTotals.available)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                         {summaryTotals.usedPct}%
@@ -653,13 +825,12 @@ export function ReportsPage() {
                 </table>
               </div>
             </>
-          ) : tab === 'headSpending' ? (
+          ) : tab === 'headBills' ? (
             <>
-              {/* Mobile Cards (screen only) */}
               <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
                 {headWiseTotals.length === 0 ? (
                   <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                    No approved spending in selected period.
+                    No approved bills in selected period.
                   </div>
                 ) : (
                   headWiseTotals.map((h) => (
@@ -676,10 +847,12 @@ export function ReportsPage() {
                       <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-[var(--line)]/60">
                         <div className="min-w-0">
                           <div className="text-[11px] text-[var(--muted)]">Gross</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(h.gross)}</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(h.gross)}
+                          </div>
                         </div>
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">Deductions</div>
+                          <div className="text-[11px] text-[var(--muted)]">VAT + IT</div>
                           <div className="font-medium text-[var(--muted)] tabular-nums truncate">
                             {formatNumberIN(h.deductions)}
                           </div>
@@ -696,23 +869,33 @@ export function ReportsPage() {
                 )}
               </div>
 
-              {/* Desktop & Print Table */}
               <div className="hidden md:block print:block overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">Head</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Approved Bills</th>
+                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
+                        Head
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Approved Bills
+                      </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Gross</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Deductions</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Net Paid</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        VAT + IT
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Net Paid
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--line)]">
                     {headWiseTotals.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                          No approved spending in selected period.
+                        <td
+                          colSpan={5}
+                          className="py-8 px-4 text-center text-sm text-[var(--muted)]"
+                        >
+                          No approved bills in selected period.
                         </td>
                       </tr>
                     ) : (
@@ -728,7 +911,7 @@ export function ReportsPage() {
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                             {formatNumberIN(h.deductions)}
                           </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
                             {formatNumberIN(h.net)}
                           </td>
                         </tr>
@@ -738,12 +921,107 @@ export function ReportsPage() {
                 </table>
               </div>
             </>
+          ) : tab === 'expenseItems' ? (
+            <>
+              <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
+                {filteredExpenseItems.length === 0 ? (
+                  <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                    {t('noDataFound')}
+                  </div>
+                ) : (
+                  filteredExpenseItems.map((item) => {
+                    const head = getHead(item.economicCode, {
+                      headName: item.headName,
+                      headNameBn: item.headNameBn,
+                    });
+                    return (
+                      <div key={item.id} className="p-3.5 space-y-1.5 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="font-semibold text-[var(--text)] bn">
+                            {item.description}
+                          </div>
+                          <StatusChip variant={item.status}>{t(item.status)}</StatusChip>
+                        </div>
+                        <div className="text-[var(--muted)]">
+                          <span className="tabular-nums font-medium text-[var(--text)]">
+                            {item.economicCode}
+                          </span>{' '}
+                          {head.headName}
+                        </div>
+                        <div className="flex justify-between pt-1 border-t border-[var(--line)]/60">
+                          <span className="text-[var(--muted)]">
+                            {formatDateDisplay(item.date)} · {item.responsibleEmployee.name}
+                          </span>
+                          <span className="font-bold tabular-nums">
+                            {formatNumberIN(item.amount)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="hidden md:block print:block overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
+                      <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
+                      <th className="py-3 px-4 font-medium">Head</th>
+                      <th className="py-3 px-4 font-medium">Description</th>
+                      <th className="py-3 px-4 font-medium">Responsible</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Amount</th>
+                      <th className="py-3 px-4 font-medium whitespace-nowrap">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--line)]">
+                    {filteredExpenseItems.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="py-8 px-4 text-center text-sm text-[var(--muted)]"
+                        >
+                          {t('noDataFound')}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredExpenseItems.map((item) => {
+                        const head = getHead(item.economicCode, {
+                          headName: item.headName,
+                          headNameBn: item.headNameBn,
+                        });
+                        return (
+                          <tr key={item.id}>
+                            <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                              {formatDateDisplay(item.date)}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="tabular-nums font-medium">{item.economicCode}</span>{' '}
+                              {head.headName}
+                            </td>
+                            <td className="py-3 px-4 bn">{item.description}</td>
+                            <td className="py-3 px-4 bn">{item.responsibleEmployee.name}</td>
+                            <td className="py-3 px-4 text-right tabular-nums font-semibold">
+                              {formatNumberIN(item.amount)}
+                            </td>
+                            <td className="py-3 px-4">
+                              <StatusChip variant={item.status}>{t(item.status)}</StatusChip>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : (
             <>
-              {/* Mobile Cards (screen only) */}
               <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
                 <div className="p-3.5 bg-[var(--surface-subtle)] space-y-2">
-                  <div className="text-xs font-semibold">Total Deductions ({deductionRows.length} heads)</div>
+                  <div className="text-xs font-semibold">
+                    Total Deductions ({deductionRows.length} heads)
+                  </div>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div className="min-w-0">
                       <div className="text-[11px] text-[var(--muted)]">Gross</div>
@@ -764,18 +1042,12 @@ export function ReportsPage() {
                       </div>
                     </div>
                     <div className="min-w-0">
-                      <div className="text-[11px] text-[var(--muted)]">Service Chg</div>
+                      <div className="text-[11px] text-[var(--muted)]">Total Ded.</div>
                       <div className="font-medium tabular-nums truncate">
-                        {formatNumberIN(deductionTotals.serviceCharge)}
+                        {formatNumberIN(deductionTotals.totalDeduction)}
                       </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-[11px] text-[var(--muted)]">Others</div>
-                      <div className="font-medium tabular-nums truncate">
-                        {formatNumberIN(deductionTotals.others)}
-                      </div>
-                    </div>
-                    <div className="min-w-0 text-right">
+                    <div className="col-span-2 text-right">
                       <div className="text-[11px] text-[var(--muted)]">Net Paid</div>
                       <div className="font-bold text-[var(--accent)] tabular-nums truncate">
                         {formatNumberIN(deductionTotals.netPayable)}
@@ -798,27 +1070,29 @@ export function ReportsPage() {
                       <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-[var(--line)]/60">
                         <div className="min-w-0">
                           <div className="text-[11px] text-[var(--muted)]">Gross</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.gross)}</div>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">VAT</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.vat)}</div>
-                        </div>
-                        <div className="min-w-0 text-right">
-                          <div className="text-[11px] text-[var(--muted)]">Income Tax</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.it)}</div>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">Service Chg</div>
                           <div className="font-medium tabular-nums truncate">
-                            {formatNumberIN(r.serviceCharge)}
+                            {formatNumberIN(r.gross)}
                           </div>
                         </div>
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">Others</div>
-                          <div className="font-medium tabular-nums truncate">{formatNumberIN(r.others)}</div>
+                          <div className="text-[11px] text-[var(--muted)]">VAT</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(r.vat)}
+                          </div>
                         </div>
                         <div className="min-w-0 text-right">
+                          <div className="text-[11px] text-[var(--muted)]">Income Tax</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(r.it)}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[var(--muted)]">Total Ded.</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(r.totalDeduction)}
+                          </div>
+                        </div>
+                        <div className="col-span-2 text-right">
                           <div className="text-[11px] text-[var(--muted)]">Net Paid</div>
                           <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
                             {formatNumberIN(r.netPayable)}
@@ -830,18 +1104,24 @@ export function ReportsPage() {
                 )}
               </div>
 
-              {/* Desktop & Print Table */}
               <div className="hidden md:block print:block overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">Head</th>
+                      <th className="sticky left-0 print:static z-10 bg-[var(--card)] py-3 px-4 font-medium">
+                        Head
+                      </th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Gross</th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">VAT</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Income Tax</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Service Charge</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Others</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Net Paid</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Income Tax
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Total Ded.
+                      </th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
+                        Net Paid
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--line)]">
@@ -860,18 +1140,17 @@ export function ReportsPage() {
                           {formatNumberIN(r.it)}
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums">
-                          {formatNumberIN(r.serviceCharge)}
+                          {formatNumberIN(r.totalDeduction)}
                         </td>
-                        <td className="py-3 px-4 text-right tabular-nums">
-                          {formatNumberIN(r.others)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums">
+                        <td className="py-3 px-4 text-right tabular-nums font-semibold text-[var(--accent)]">
                           {formatNumberIN(r.netPayable)}
                         </td>
                       </tr>
                     ))}
                     <tr className="font-bold bg-[var(--surface-subtle)]">
-                      <td className="sticky left-0 print:static z-10 bg-[var(--surface-subtle)] py-3 px-4">Total</td>
+                      <td className="sticky left-0 print:static z-10 bg-[var(--surface-subtle)] py-3 px-4">
+                        Total
+                      </td>
                       <td className="py-3 px-4 text-right tabular-nums">
                         {formatNumberIN(deductionTotals.gross)}
                       </td>
@@ -882,10 +1161,7 @@ export function ReportsPage() {
                         {formatNumberIN(deductionTotals.it)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums">
-                        {formatNumberIN(deductionTotals.serviceCharge)}
-                      </td>
-                      <td className="py-3 px-4 text-right tabular-nums">
-                        {formatNumberIN(deductionTotals.others)}
+                        {formatNumberIN(deductionTotals.totalDeduction)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums">
                         {formatNumberIN(deductionTotals.netPayable)}

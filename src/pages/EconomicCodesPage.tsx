@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { db } from '../lib/firebase';
+import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
 import {
   deleteEconomicCodeIfUnused,
   setEconomicCodeActive,
@@ -42,8 +43,8 @@ function parseCsvLine(line: string): string[] {
 }
 
 export function EconomicCodesPage() {
-  const { userDoc } = useAuth();
-  const { pushToast, t } = useApp();
+  const { userDoc, accessState } = useAuth();
+  const { pushToast, t, reportPermissionError, clearPermissionError } = useApp();
   const { economicCodes, loading } = useEconomicCodes();
 
   const canEdit = userDoc ? canManageRates(userDoc.role) : false;
@@ -58,45 +59,71 @@ export function EconomicCodesPage() {
   const [otherUsedCodes, setOtherUsedCodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    const unsubBudgets = onSnapshot(collection(db, 'budgets'), (snap) => {
-      const map = new Map<string, number>();
-      for (const d of snap.docs) {
-        const data = d.data();
-        if (data.deleted) continue;
-        const c = String(data.economicCode || '').trim();
-        if (c) map.set(c, (map.get(c) || 0) + 1);
+    if (accessState !== 'active') return;
+
+    const unsubBudgets = onSnapshot(
+      collection(db, 'budgets'),
+      (snap) => {
+        clearPermissionError('budgets');
+        const map = new Map<string, number>();
+        for (const d of snap.docs) {
+          const data = d.data();
+          if (data.deleted) continue;
+          const c = String(data.economicCode || '').trim();
+          if (c) map.set(c, (map.get(c) || 0) + 1);
+        }
+        setBudgetUsageMap(map);
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'budgets');
+        if (isPermissionDeniedError(err)) reportPermissionError('budgets');
       }
-      setBudgetUsageMap(map);
-    });
+    );
 
-    const unsubRates = onSnapshot(collection(db, 'vatTaxRates'), (snap) => {
-      setOtherUsedCodes((prev) => {
-        const next = new Set(prev);
-        for (const d of snap.docs) {
-          const c = String(d.data().economicCode || '').trim();
-          if (c) next.add(`rate:${c}`);
-        }
-        return next;
-      });
-    });
+    const unsubRates = onSnapshot(
+      collection(db, 'vatTaxRates'),
+      (snap) => {
+        clearPermissionError('vatTaxRates');
+        setOtherUsedCodes((prev) => {
+          const next = new Set(prev);
+          for (const d of snap.docs) {
+            const c = String(d.data().economicCode || '').trim();
+            if (c) next.add(`rate:${c}`);
+          }
+          return next;
+        });
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'vatTaxRates');
+        if (isPermissionDeniedError(err)) reportPermissionError('vatTaxRates');
+      }
+    );
 
-    const unsubLimits = onSnapshot(collection(db, 'spendingLimits'), (snap) => {
-      setOtherUsedCodes((prev) => {
-        const next = new Set(prev);
-        for (const d of snap.docs) {
-          const c = String(d.data().economicCode || '').trim();
-          if (c) next.add(`limit:${c}`);
-        }
-        return next;
-      });
-    });
+    const unsubLimits = onSnapshot(
+      collection(db, 'spendingLimits'),
+      (snap) => {
+        clearPermissionError('spendingLimits');
+        setOtherUsedCodes((prev) => {
+          const next = new Set(prev);
+          for (const d of snap.docs) {
+            const c = String(d.data().economicCode || '').trim();
+            if (c) next.add(`limit:${c}`);
+          }
+          return next;
+        });
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'spendingLimits');
+        if (isPermissionDeniedError(err)) reportPermissionError('spendingLimits');
+      }
+    );
 
     return () => {
       unsubBudgets();
       unsubRates();
       unsubLimits();
     };
-  }, []);
+  }, [accessState, clearPermissionError, reportPermissionError]);
 
   const isCodeUsedAnywhere = (code: string): boolean => {
     return (

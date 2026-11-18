@@ -8,7 +8,21 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { logFirestoreError, OperationType } from '../lib/firestoreError';
 import type { AuditLogDoc } from '../types';
+
+function getTimestampMs(ts: unknown): number {
+  if (!ts) return Number.MAX_SAFE_INTEGER;
+  if (typeof ts === 'object' && ts !== null) {
+    if ('toMillis' in ts && typeof (ts as { toMillis: unknown }).toMillis === 'function') {
+      return (ts as { toMillis: () => number }).toMillis();
+    }
+    if ('seconds' in ts && typeof (ts as { seconds: unknown }).seconds === 'number') {
+      return (ts as { seconds: number }).seconds * 1000;
+    }
+  }
+  return 0;
+}
 
 export function useDocAuditLogs(collectionName: string, docId: string | null) {
   const [logs, setLogs] = useState<AuditLogDoc[]>([]);
@@ -20,20 +34,21 @@ export function useDocAuditLogs(collectionName: string, docId: string | null) {
       return;
     }
     setLoading(true);
-    const q = query(
-      collection(db, 'auditLogs'),
-      where('collection', '==', collectionName),
-      where('docId', '==', docId),
-      orderBy('timestamp', 'desc'),
-      limit(50)
-    );
+    // Single-field equality query requires no composite index; filter collection & sort client-side.
+    const q = query(collection(db, 'auditLogs'), where('docId', '==', docId));
     const unsub = onSnapshot(
       q,
       (snap) => {
-        setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLogDoc)));
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as AuditLogDoc))
+          .filter((item) => item.collection === collectionName)
+          .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp))
+          .slice(0, 50);
+        setLogs(list);
         setLoading(false);
       },
-      () => {
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, `auditLogs/${collectionName}/${docId}`);
         setLoading(false);
       }
     );
@@ -61,7 +76,8 @@ export function useGlobalAuditLogs(enabled: boolean, maxCount = 100) {
         setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLogDoc)));
         setLoading(false);
       },
-      () => {
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'auditLogs');
         setLoading(false);
       }
     );

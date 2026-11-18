@@ -31,12 +31,25 @@ export interface InviteDoc extends BaseAuditFields {
   invitedBy: string;
 }
 
+export interface CertificationClause {
+  id: string;
+  numberBn: string;
+  text: string;
+  enabled: boolean;
+  page: 1 | 2;
+}
+
 export interface OfficeSettings extends BaseAuditFields {
   officeName: string;
   address: string;
   activeFiscalYear: string;
   fiscalYears: string[];
   language: LanguageCode;
+  institutionalCode?: string;
+  defaultPayeeText?: string;
+  placeName?: string;
+  defaultNetPayableCode?: string;
+  tr21Clauses?: CertificationClause[];
 }
 
 export interface EconomicCodeDoc extends BaseAuditFields {
@@ -86,12 +99,119 @@ export interface BudgetDoc extends BaseAuditFields {
   entryType: BudgetEntryType;
   revisionOf: string | null;
   deductionRates: DeductionRates;
-  spent: number; // integer paisa
-  remaining: number; // integer paisa
+  spent: number; // integer paisa (approved spent)
+  approvedSpent?: number; // mirror of spent for explicit clarity
+  pendingAmount?: number; // integer paisa held by submitted bills
+  remaining: number; // integer paisa (allocated - spent - pendingAmount)
   status: BudgetStatus;
   deleted?: boolean;
 }
 
+export interface ResponsibleEmployee {
+  userId?: string | null;
+  name: string;
+  designation: string;
+}
+
+export type ExpenseItemStatus = 'listed' | 'billed';
+
+export interface ExpenseItemDoc extends BaseAuditFields {
+  id: string;
+  fiscalYear: string;
+  economicCode: string;
+  headName: string;
+  headNameBn?: string;
+  date: string; // YYYY-MM-DD
+  description: string;
+  amount: number; // integer paisa (gross only, no VAT/IT)
+  responsibleEmployee: ResponsibleEmployee;
+  status: ExpenseItemStatus;
+  billId: string | null;
+  createdByName?: string;
+  deleted: boolean;
+}
+
+export type BillStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'cancelled';
+
+export interface BillItemSnapshot {
+  id: string;
+  date: string;
+  description: string;
+  amount: number; // integer paisa
+  responsibleEmployee: ResponsibleEmployee;
+}
+
+export interface BillBudgetSlice {
+  budgetId: string;
+  amount: number; // integer paisa
+}
+
+export interface BillDeductionLine {
+  id: string;
+  code: string;
+  name: string;
+  rate?: number | null;
+  amount: number; // integer paisa
+  kind?: 'it' | 'vat' | 'security' | 'other';
+}
+
+export interface BillSupplierInfo {
+  name?: string;
+  address?: string;
+  tinBin?: string;
+}
+
+export interface BillDoc extends BaseAuditFields {
+  id: string;
+  billNo: string; // sequential per FY on submit e.g. "2025-26/001"
+  fiscalYear: string;
+  economicCode: string;
+  headName: string;
+  headNameBn?: string;
+  date: string; // YYYY-MM-DD
+  billDate?: string; // optional explicit T.R. 21 bill date (falls back to date)
+  tokenNo?: string;
+  purposeText?: string;
+  payeeText?: string;
+  netPayableCode?: string;
+  supplier?: BillSupplierInfo | null;
+  deductions?: BillDeductionLine[];
+  itemIds: string[];
+  items: BillItemSnapshot[];
+  grossAmount: number; // integer paisa
+  vatRate: number; // snapshot %
+  itRate: number; // snapshot %
+  vatVariant: string;
+  vatVariantLabel?: string;
+  vatAmount: number; // integer paisa
+  itAmount: number; // integer paisa
+  totalDeduction: number; // integer paisa (sum of deductions or vatAmount + itAmount)
+  netPayable: number; // integer paisa (grossAmount - totalDeduction)
+  status: BillStatus;
+  submittedAt: Timestamp | null;
+  submittedBy?: string | null;
+  approvedBy: string | null;
+  approvedAt: Timestamp | null;
+  rejectReason: string | null;
+  cancelledBy: string | null;
+  cancelledAt: Timestamp | null;
+  cancelReason: string | null;
+  pendingSlices?: BillBudgetSlice[];
+  budgetDeductions?: BillBudgetSlice[];
+  migratedFromSpendingId?: string | null;
+  createdByName?: string;
+  deleted: boolean;
+}
+
+export interface FyCounterDoc {
+  id: string; // `${fiscalYear}_bill`
+  fiscalYear: string;
+  nextNumber: number;
+  updatedAt?: Timestamp | null;
+  updatedBy?: string;
+}
+
+// Legacy Spending types preserved for Settings migration utility
 export type SpendingStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'voided';
 
 export interface OtherDeduction {
@@ -163,7 +283,9 @@ export interface FyCodeTotalDoc extends BaseAuditFields {
   fiscalYear: string;
   economicCode: string;
   allocated: number; // integer paisa
-  spent: number; // integer paisa
+  spent: number; // integer paisa (approved spent)
+  approvedSpent?: number; // mirror of spent
+  pendingAmount?: number; // integer paisa held by submitted bills
 }
 
 export type AuditAction =
@@ -173,7 +295,9 @@ export type AuditAction =
   | 'submit'
   | 'approve'
   | 'reject'
-  | 'void';
+  | 'cancel'
+  | 'void'
+  | 'migrate';
 
 export interface AuditLogDoc {
   id: string;

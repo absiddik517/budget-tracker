@@ -36,7 +36,7 @@ const DEFAULT_DEDUCTION_RATES: DeductionRates = {
 export function BudgetsPage() {
   const { userDoc } = useAuth();
   const { selectedFy, pushToast, t } = useApp();
-  const { budgets, spendings, vatTaxRates, spendingLimits, loading } = useFyData(selectedFy);
+  const { budgets, bills, vatTaxRates, spendingLimits, loading } = useFyData(selectedFy);
   const { getCodeEntry, getHead } = useEconomicCodes();
 
   const canCreate = userDoc ? canCreateBudgets(userDoc.role) : false;
@@ -102,10 +102,15 @@ export function BudgetsPage() {
     return budgets.filter((b) => b.id === rootId || b.revisionOf === rootId);
   }, [budgets, selectedBudget]);
 
-  const linkedSpendings = useMemo(() => {
+  const linkedBills = useMemo(() => {
     if (!selectedBudget) return [];
-    return spendings.filter((s) => s.budgetId === selectedBudget.id);
-  }, [spendings, selectedBudget]);
+    return bills.filter((bill) => {
+      const hasDedSlice = bill.budgetDeductions?.some((s) => s.budgetId === selectedBudget.id);
+      const hasPendSlice = bill.pendingSlices?.some((s) => s.budgetId === selectedBudget.id);
+      if (hasDedSlice || hasPendSlice) return true;
+      return bill.economicCode === selectedBudget.economicCode;
+    });
+  }, [bills, selectedBudget]);
 
   const applicableLimits = useMemo(() => {
     if (!selectedBudget) return [];
@@ -455,19 +460,19 @@ export function BudgetsPage() {
 
         <div className="border-t border-[var(--line)] pt-3">
           <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">
-            Linked spendings ({linkedSpendings.length})
+            Linked bills ({linkedBills.length})
           </h3>
-          {linkedSpendings.length === 0 ? (
-            <p className="text-xs text-[var(--muted)]">No spendings recorded yet.</p>
+          {linkedBills.length === 0 ? (
+            <p className="text-xs text-[var(--muted)]">No bills recorded yet.</p>
           ) : (
             <ul className="space-y-1.5 text-xs">
-              {linkedSpendings.slice(0, 6).map((s) => (
-                <li key={s.id} className="flex justify-between gap-2">
+              {linkedBills.slice(0, 6).map((bill) => (
+                <li key={bill.id} className="flex justify-between gap-2">
                   <span className="truncate min-w-0">
-                    {formatDateDisplay(s.date)} · {s.payee}
+                    {bill.billNo || 'Draft'} · {formatDateDisplay(bill.date)} ({bill.items.length}টি)
                   </span>
                   <span className="tabular-nums font-medium shrink-0">
-                    {formatTaka(s.gross)} ({s.status})
+                    {formatTaka(bill.grossAmount)} ({bill.status})
                   </span>
                 </li>
               ))}
@@ -583,7 +588,7 @@ export function BudgetsPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-2 pt-1 text-xs border-t border-[var(--line)]/60">
+                      <div className="grid grid-cols-4 gap-2 pt-1 text-xs border-t border-[var(--line)]/60">
                         <div className="min-w-0">
                           <div className="text-[11px] text-[var(--muted)]">{t('allocated')}</div>
                           <div className="font-medium tabular-nums truncate">
@@ -591,13 +596,19 @@ export function BudgetsPage() {
                           </div>
                         </div>
                         <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">{t('spent')}</div>
+                          <div className="text-[11px] text-[var(--muted)]">{t('approvedSpent')}</div>
                           <div className="font-medium tabular-nums truncate">
                             {formatNumberIN(b.spent)}
                           </div>
                         </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[var(--muted)]">{t('pendingAmount')}</div>
+                          <div className="font-medium text-[var(--warn-text)] tabular-nums truncate">
+                            {formatNumberIN(b.pendingAmount || 0)}
+                          </div>
+                        </div>
                         <div className="min-w-0 text-right">
-                          <div className="text-[11px] text-[var(--muted)]">{t('remaining')}</div>
+                          <div className="text-[11px] text-[var(--muted)]">{t('available')}</div>
                           <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
                             {formatNumberIN(b.remaining)}
                           </div>
@@ -618,21 +629,22 @@ export function BudgetsPage() {
                     <th className="py-3 px-4 font-medium whitespace-nowrap">{t('date')}</th>
                     <th className="py-3 px-4 font-medium">{t('head')}</th>
                     <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('allocated')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('spent')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('remaining')}</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('approvedSpent')}</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('pendingAmount')}</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('available')}</th>
                     <th className="py-3 px-4 font-medium whitespace-nowrap">{t('status')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                      <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
                         Loading budgets…
                       </td>
                     </tr>
                   ) : pagedBudgets.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                      <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
                         {t('noDataFound')}
                       </td>
                     </tr>
@@ -680,7 +692,10 @@ export function BudgetsPage() {
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                             {formatNumberIN(b.spent)}
                           </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-[var(--warn-text)]">
+                            {formatNumberIN(b.pendingAmount || 0)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
                             {formatNumberIN(b.remaining)}
                           </td>
                           <td className="py-3 px-4 whitespace-nowrap">

@@ -7,7 +7,8 @@ import { ToastContainer } from './components/ToastContainer';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { BudgetsPage } from './pages/BudgetsPage';
-import { SpendingPage } from './pages/SpendingPage';
+import { ExpenseItemsPage } from './pages/ExpenseItemsPage';
+import { BillsPage } from './pages/BillsPage';
 import { EconomicCodesPage } from './pages/EconomicCodesPage';
 import { VatTaxModelPage } from './pages/VatTaxModelPage';
 import { SpendingLimitsPage } from './pages/SpendingLimitsPage';
@@ -46,7 +47,9 @@ function AppGate() {
         element={needsOfficeSetup ? <Navigate to="/settings" replace /> : <DashboardPage />}
       />
       <Route path="/budgets" element={<BudgetsPage />} />
-      <Route path="/spending" element={<SpendingPage />} />
+      <Route path="/expense-items" element={<ExpenseItemsPage />} />
+      <Route path="/bills" element={<BillsPage />} />
+      <Route path="/spending" element={<Navigate to="/bills" replace />} />
       <Route path="/economic-codes" element={<EconomicCodesPage />} />
       <Route path="/vat-tax" element={<VatTaxModelPage />} />
       <Route path="/limits" element={<SpendingLimitsPage />} />
@@ -71,8 +74,10 @@ export default function App() {
       <AuthProvider>
         <AppProvider>
           <BrowserRouter>
-            <AppGate />
-            <ToastContainer />
+            <div className="app-shell-root">
+              <AppGate />
+              <ToastContainer />
+            </div>
           </BrowserRouter>
         </AppProvider>
       </AuthProvider>

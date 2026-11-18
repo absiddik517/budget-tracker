@@ -50,10 +50,10 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    // Users collection
+    // Users collection (all active office users can list staff directory for responsibleEmployee selection)
     match /users/{uid} {
       allow get: if isSignedIn() && (request.auth.uid == uid || isActiveUser());
-      allow list: if isSuperAdmin() || (isSignedIn() && !officeInitialized());
+      allow list: if isActiveUser() || (isSignedIn() && !officeInitialized());
 
       allow create: if isSignedIn()
         && request.auth.uid == uid
@@ -115,7 +115,26 @@ service cloud.firestore {
     // Aggregated FY + Economic Code totals
     match /fyCodeTotals/{totalId} {
       allow read: if isActiveUser();
-      allow create, update: if isDdoOrSuperAdmin();
+      allow create: if isDdoOrSuperAdmin()
+        || (
+          isActiveUser()
+          && request.resource.data.keys().hasOnly([
+            'fiscalYear',
+            'economicCode',
+            'allocated',
+            'spent',
+            'approvedSpent',
+            'pendingAmount',
+            'updatedAt',
+            'updatedBy'
+          ])
+        );
+      allow update: if isDdoOrSuperAdmin()
+        || (
+          isActiveUser()
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['pendingAmount', 'approvedSpent', 'updatedAt', 'updatedBy'])
+        );
       allow delete: if isSuperAdmin();
     }
 
@@ -127,13 +146,25 @@ service cloud.firestore {
         || (
           isDdo()
           && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['spent', 'remaining', 'status', 'updatedAt', 'updatedBy'])
+               .hasOnly(['spent', 'approvedSpent', 'pendingAmount', 'remaining', 'status', 'updatedAt', 'updatedBy'])
+        )
+        || (
+          isActiveUser()
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['pendingAmount', 'remaining', 'updatedAt', 'updatedBy'])
         );
       allow delete: if isSuperAdmin();
     }
 
-    // Spendings
-    match /spendings/{spendingId} {
+    // Sequential Bill Number Counters (per FY)
+    match /counters/{counterId} {
+      allow read: if isActiveUser();
+      allow create, update: if isActiveUser();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Expense Items (খরচ তালিকা)
+    match /expenseItems/{itemId} {
       allow read: if isActiveUser();
 
       allow create: if (
@@ -143,32 +174,109 @@ service cloud.firestore {
         || (
           isActiveUser()
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.status in ['draft', 'submitted']
+          && request.resource.data.status == 'listed'
           && request.resource.data.deleted == false
         );
 
-      allow update: if isSuperAdmin()
-        || (
+      allow update: if (
+          // Link a 'listed' item to a newly drafted bill
           isActiveUser()
-          && resource.data.createdBy == request.auth.uid
-          && resource.data.status in ['draft', 'rejected']
+          && resource.data.status == 'listed'
+          && request.resource.data.status == 'billed'
+          && request.resource.data.billId is string
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'billId', 'updatedAt', 'updatedBy'])
+        )
+        || (
+          // Return 'billed' item back to 'listed' on DDO reject/cancel or draft delete
+          isActiveUser()
+          && resource.data.status == 'billed'
+          && request.resource.data.status == 'listed'
+          && request.resource.data.billId == null
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'billId', 'updatedAt', 'updatedBy'])
+        )
+        || (
+          // Edit or soft-delete ONLY while status == 'listed'
+          isActiveUser()
+          && resource.data.status == 'listed'
+          && request.resource.data.status == 'listed'
+          && (isDdoOrSuperAdmin() || resource.data.createdBy == request.auth.uid)
           && (
-            (request.resource.data.status in ['draft', 'submitted'] && request.resource.data.deleted == false)
-            || (request.resource.data.deleted == true && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'updatedAt', 'updatedBy']))
+            request.resource.data.deleted == false
+            || (
+              request.resource.data.deleted == true
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['deleted', 'updatedAt', 'updatedBy'])
+            )
           )
-        )
-        || (
-          isDdo()
-          && resource.data.status == 'submitted'
-          && request.resource.data.status in ['approved', 'rejected']
-        )
-        || (
-          isDdo()
-          && resource.data.status == 'approved'
-          && request.resource.data.status == 'voided'
         );
 
       allow delete: if isSuperAdmin();
+    }
+
+    // Bills (বিল) - Strictly DDO-only for Approve / Reject / Cancel
+    match /bills/{billId} {
+      allow read: if isActiveUser();
+
+      allow create: if (
+          isSuperAdmin()
+          && request.resource.data.deleted == false
+        )
+        || (
+          isActiveUser()
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'draft'
+          && request.resource.data.deleted == false
+        );
+
+      allow update: if (
+          // Creator, DDO, or Super Admin can edit/submit/soft-delete ONLY while draft
+          isActiveUser()
+          && resource.data.status == 'draft'
+          && (resource.data.createdBy == request.auth.uid || isDdoOrSuperAdmin())
+          && (
+            (request.resource.data.status in ['draft', 'submitted'] && request.resource.data.deleted == false)
+            || (
+              request.resource.data.deleted == true
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['deleted', 'updatedAt', 'updatedBy'])
+            )
+          )
+        )
+        || (
+          // Strictly DDO ONLY: Approve submitted bill
+          isDdo()
+          && resource.data.status == 'submitted'
+          && request.resource.data.status == 'approved'
+          && request.resource.data.deleted == false
+        )
+        || (
+          // Strictly DDO ONLY: Reject submitted bill with reason
+          isDdo()
+          && resource.data.status == 'submitted'
+          && request.resource.data.status == 'rejected'
+          && request.resource.data.rejectReason is string
+          && request.resource.data.rejectReason.size() > 0
+          && request.resource.data.deleted == false
+        )
+        || (
+          // Strictly DDO ONLY: Cancel approved bill with reason
+          isDdo()
+          && resource.data.status == 'approved'
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.cancelReason is string
+          && request.resource.data.cancelReason.size() > 0
+          && request.resource.data.deleted == false
+        );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // Legacy Spendings (kept read-only / legacy-compatible for migration)
+    match /spendings/{spendingId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // Immutable Audit Logs

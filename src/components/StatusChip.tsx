@@ -4,12 +4,15 @@ export type ChipVariant =
   | 'approved'
   | 'active'
   | 'draft'
+  | 'listed'
+  | 'billed'
   | 'nearLimit'
   | 'invited'
   | 'submitted'
   | 'executed'
   | 'withdrawn'
   | 'voided'
+  | 'cancelled'
   | 'rejected'
   | 'disabled'
   | 'roleAccent'
@@ -18,14 +21,17 @@ export type ChipVariant =
 const VARIANT_CLASSES: Record<ChipVariant, string> = {
   approved: 'bg-[var(--accent-soft)] text-[var(--accent)]',
   active: 'bg-[var(--accent-soft)] text-[var(--accent)]',
+  billed: 'bg-[var(--accent-soft)] text-[var(--accent)]',
   roleAccent: 'bg-[var(--accent-soft)] text-[var(--accent)]',
   draft: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
+  listed: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
   nearLimit: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
   invited: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
   submitted: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
   executed: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
   withdrawn: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
   voided: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
+  cancelled: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
   roleNeutral: 'border border-[var(--line)] text-[var(--text)] bg-transparent',
   rejected: 'bg-[var(--danger-bg)] text-[var(--danger-text)]',
   disabled: 'bg-[var(--danger-bg)] text-[var(--danger-text)]',

@@ -22,7 +22,9 @@ const ACTION_LABELS: Record<string, string> = {
   submit: 'Submitted',
   approve: 'Approved',
   reject: 'Rejected',
+  cancel: 'Cancelled',
   void: 'Voided',
+  migrate: 'Migrated',
 };
 
 export function ActivityList({

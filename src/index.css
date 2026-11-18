@@ -2,8 +2,34 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
+  font-family: 'NikoshBAN';
+  src: local('NikoshBAN'), url('/fonts/NikoshBAN.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
   font-family: 'Nikosh';
   src: local('Nikosh'), url('/fonts/Nikosh.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans Bengali';
+  src: local('Noto Sans Bengali'), url('/fonts/NotoSansBengali-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans Bengali';
+  src: local('Noto Sans Bengali Bold'), url('/fonts/NotoSansBengali-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
   font-display: swap;
 }
 
@@ -183,4 +209,103 @@ body {
 
 .print-only {
   display: none;
+}
+
+/* T.R. Form No. 21 (2-page A4 Portrait official form) */
+.tr21-document {
+  font-family: 'NikoshBAN', 'Nikosh', 'Noto Sans Bengali', sans-serif;
+  color: #000000;
+  background: #ffffff;
+  line-height: 1.42;
+}
+
+.tr21-page {
+  position: relative;
+  width: 794px;
+  min-height: 1122px;
+  padding: 36px 40px 32px 42px;
+  background: #ffffff;
+  color: #000000;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+}
+
+.tr21-page-2 {
+  break-before: page;
+  page-break-before: always;
+}
+
+.tr21-avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.tr21-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.tr21-table th,
+.tr21-table td {
+  border: 1px solid #000000;
+  color: #000000;
+  vertical-align: top;
+}
+
+.tr21-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+#tr21-print-root {
+  display: none;
+}
+
+@media print {
+  @page tr21-portrait {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  body.tr21-printing {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    page: tr21-portrait;
+  }
+
+  body.tr21-printing .app-shell-root {
+    display: none !important;
+  }
+
+  body.tr21-printing #tr21-print-root {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    background: #ffffff !important;
+  }
+
+  body.tr21-printing [data-no-export="true"] {
+    display: none !important;
+  }
+
+  body.tr21-printing .tr21-page {
+    width: 100% !important;
+    min-height: auto !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  body.tr21-printing .tr21-table {
+    width: 100% !important;
+  }
+
+  body.tr21-printing .tr21-table th,
+  body.tr21-printing .tr21-table td {
+    border: 1px solid #000000 !important;
+    color: #000000 !important;
+  }
 }

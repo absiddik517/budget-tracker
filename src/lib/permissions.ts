@@ -1,11 +1,23 @@
 import type { Role } from '../types';
 
-export function canCreateDraftSpending(role: Role): boolean {
+export function canCreateExpenseItems(role: Role): boolean {
   return role === 'employee' || role === 'ddo' || role === 'superAdmin';
 }
 
+export function canCreateDraftBill(role: Role): boolean {
+  return role === 'employee' || role === 'ddo' || role === 'superAdmin';
+}
+
+export function canApproveRejectCancelBill(role: Role): boolean {
+  return role === 'ddo';
+}
+
+export function canCreateDraftSpending(role: Role): boolean {
+  return canCreateDraftBill(role);
+}
+
 export function canApproveRejectVoid(role: Role): boolean {
-  return role === 'ddo' || role === 'superAdmin';
+  return canApproveRejectCancelBill(role);
 }
 
 export function canEditDeleteApprovedSpending(role: Role): boolean {
