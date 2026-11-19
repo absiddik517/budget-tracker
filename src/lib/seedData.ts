@@ -1,11 +1,8 @@
-import {
-  doc,
-  serverTimestamp,
-  writeBatch,
-} from 'firebase/firestore';
+import { doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from './firebase';
 import { writeAuditLogInBatch, type AuditActor } from './audit';
-import type { VatVariant } from '../types';
+import { buildCounterId, buildFyCodeTotalId } from './firestoreOps';
+import type { ActorRef, ActorSnapshot, VatVariant } from '../types';
 
 interface SeedRate {
   economicCode: string;
@@ -112,24 +109,65 @@ export const SAMPLE_VAT_TAX_RATES_2025_26: SeedRate[] = [
   },
 ];
 
-export async function loadSampleData(actor: AuditActor): Promise<void> {
+function actorToRef(actor: AuditActor | ActorSnapshot): ActorRef {
+  if ('role' in actor && actor.role) {
+    return {
+      uid: actor.uid,
+      name: actor.name,
+      designation: actor.designation || '',
+      officeId: actor.officeId ?? null,
+      role: actor.role,
+      kind: actor.kind ?? null,
+      workHistoryId: actor.workHistoryId ?? null,
+    };
+  }
+  return actor.uid;
+}
+
+export async function loadSampleData(
+  actor: AuditActor | ActorSnapshot,
+  targetOfficeId?: string | null
+): Promise<string> {
   const fy = '2025-26';
+  const officeId = targetOfficeId && targetOfficeId !== 'ALL' ? targetOfficeId : 'sample_office';
+  const actorRef = actorToRef(actor);
   const batch = writeBatch(db);
 
-  // 1. Ensure settings/office has 2025-26
-  const officeRef = doc(db, 'settings', 'office');
-  batch.set(
-    officeRef,
-    {
-      activeFiscalYear: fy,
-      fiscalYears: ['2025-26', '2026-27'],
-      updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
-    },
-    { merge: true }
-  );
+  // 1. Ensure target office doc has FY 2025-26 (or create sample_office)
+  const officeRef = doc(db, 'offices', officeId);
+  if (officeId === 'sample_office') {
+    batch.set(
+      officeRef,
+      {
+        name: 'Sample District Office',
+        nameBn: 'নমুনা জেলা কার্যালয়',
+        code: 'OFF-SAMPLE',
+        address: 'জেলা সদর, বাংলাদেশ',
+        status: 'active',
+        activeFiscalYear: fy,
+        fiscalYears: ['2024-25', '2025-26', '2026-27'],
+        language: 'bn',
+        createdAt: serverTimestamp(),
+        createdBy: actorRef,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorRef,
+      },
+      { merge: true }
+    );
+  } else {
+    batch.set(
+      officeRef,
+      {
+        activeFiscalYear: fy,
+        fiscalYears: ['2024-25', '2025-26', '2026-27'],
+        updatedAt: serverTimestamp(),
+        updatedBy: actorRef,
+      },
+      { merge: true }
+    );
+  }
 
-  // 2. Insert all 13 vatTaxRates for FY 2025-26 and master economicCodes
+  // 2. Global Economic Codes & FY 2025-26 VAT/IT Rates
   for (const r of SAMPLE_VAT_TAX_RATES_2025_26) {
     batch.set(doc(db, 'economicCodes', r.economicCode), {
       code: r.economicCode,
@@ -138,9 +176,9 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
       active: true,
       special: r.economicCode === 'GENERAL-CONSTRUCTION',
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorRef,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorRef,
     });
 
     const id = `${fy}_${r.economicCode}`;
@@ -152,18 +190,20 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
       incomeTax: r.incomeTax,
       vat: r.vat,
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorRef,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorRef,
     });
   }
 
-  // 3. Two sample budgets with consistent fyCodeTotals (including pendingAmount)
-  const b1Ref = doc(db, 'budgets', 'sample_budget_3211106');
-  const b1Allocated = 30000000; // ৳ 3,00,000
-  const b1Spent = 18000000;     // ৳ 1,80,000 (approved bill #1)
-  const b1Pending = 1000000;    // ৳ 10,000 (submitted bill #3)
+  // 3. Two sample budgets for this office with consistent fyCodeTotals
+  const b1Id = `${officeId}_sample_budget_3211106`;
+  const b1Ref = doc(db, 'budgets', b1Id);
+  const b1Allocated = 30000000;
+  const b1Spent = 18000000;
+  const b1Pending = 1000000;
   batch.set(b1Ref, {
+    officeId,
     fiscalYear: fy,
     memoNo: 'Memo 01/26',
     memoDate: '2025-07-05',
@@ -189,16 +229,18 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     status: 'active',
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  const b2Ref = doc(db, 'budgets', 'sample_budget_3255102');
-  const b2Allocated = 20000000; // ৳ 2,00,000
-  const b2Spent = 17000000;     // ৳ 1,70,000 (approved bill #2)
+  const b2Id = `${officeId}_sample_budget_3255102`;
+  const b2Ref = doc(db, 'budgets', b2Id);
+  const b2Allocated = 20000000;
+  const b2Spent = 17000000;
   const b2Pending = 0;
   batch.set(b2Ref, {
+    officeId,
     fiscalYear: fy,
     memoNo: 'Memo 02/26',
     memoDate: '2025-07-18',
@@ -221,12 +263,13 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     status: 'active',
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  batch.set(doc(db, 'fyCodeTotals', `${fy}_3211106`), {
+  batch.set(doc(db, 'fyCodeTotals', buildFyCodeTotalId(officeId, fy, '3211106')), {
+    officeId,
     fiscalYear: fy,
     economicCode: '3211106',
     allocated: b1Allocated,
@@ -234,11 +277,12 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     approvedSpent: b1Spent,
     pendingAmount: b1Pending,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
-  batch.set(doc(db, 'fyCodeTotals', `${fy}_3255102`), {
+  batch.set(doc(db, 'fyCodeTotals', buildFyCodeTotalId(officeId, fy, '3255102')), {
+    officeId,
     fiscalYear: fy,
     economicCode: '3255102',
     allocated: b2Allocated,
@@ -246,93 +290,93 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     approvedSpent: b2Spent,
     pendingAmount: b2Pending,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  // 4. Sample Expense Items (billed + listed ready for bill preparation)
+  // 4. Sample Expense Items
   const items = [
     {
-      id: 'sample_ei_1',
+      id: `${officeId}_sample_ei_1`,
       economicCode: '3211106',
       headName: 'Entertainment',
       headNameBn: 'আপ্যায়ন ব্যয়',
       date: '2025-11-10',
       description: 'মাসিক সমন্বয় সভার আপ্যায়ন',
-      amount: 10000000, // 1,00,000
+      amount: 10000000,
       responsibleEmployee: { userId: actor.uid, name: actor.name, designation: 'Admin Officer' },
       status: 'billed',
-      billId: 'sample_bill_1',
+      billId: `${officeId}_sample_bill_1`,
     },
     {
-      id: 'sample_ei_2',
+      id: `${officeId}_sample_ei_2`,
       economicCode: '3211106',
       headName: 'Entertainment',
       headNameBn: 'আপ্যায়ন ব্যয়',
       date: '2025-11-12',
       description: 'অডিট টিমের মধ্যাহ্নভোজ ও চা-নাস্তা',
-      amount: 8000000, // 80,000
+      amount: 8000000,
       responsibleEmployee: { userId: actor.uid, name: actor.name, designation: 'Admin Officer' },
       status: 'billed',
-      billId: 'sample_bill_1',
+      billId: `${officeId}_sample_bill_1`,
     },
     {
-      id: 'sample_ei_3',
+      id: `${officeId}_sample_ei_3`,
       economicCode: '3255102',
       headName: 'Printing and binding',
       headNameBn: 'মুদ্রণ ও বাঁধাই',
       date: '2025-10-08',
       description: 'বার্ষিক প্রতিবেদন ও ফরম মুদ্রণ',
-      amount: 17000000, // 1,70,000
+      amount: 17000000,
       responsibleEmployee: { userId: null, name: 'Md. Karim', designation: 'Office Assistant' },
       status: 'billed',
-      billId: 'sample_bill_2',
+      billId: `${officeId}_sample_bill_2`,
     },
     {
-      id: 'sample_ei_4',
+      id: `${officeId}_sample_ei_4`,
       economicCode: '3211106',
       headName: 'Entertainment',
       headNameBn: 'আপ্যায়ন ব্যয়',
       date: '2026-01-10',
       description: 'জরুরি স্টাফ মিটিং রিফ্রেশমেন্ট',
-      amount: 1000000, // 10,000
+      amount: 1000000,
       responsibleEmployee: { userId: actor.uid, name: actor.name, designation: 'Admin Officer' },
       status: 'billed',
-      billId: 'sample_bill_3',
+      billId: `${officeId}_sample_bill_3`,
     },
     {
-      id: 'sample_ei_5',
+      id: `${officeId}_sample_ei_5`,
       economicCode: '3255102',
       headName: 'Printing and binding',
       headNameBn: 'মুদ্রণ ও বাঁধাই',
       date: '2026-01-14',
       description: 'রেজিস্টার খাতা বাঁধাই ও স্টেশনারি ছাপা',
-      amount: 600000, // 6,000
+      amount: 600000,
       responsibleEmployee: { userId: null, name: 'Md. Karim', designation: 'Office Assistant' },
       status: 'billed',
-      billId: 'sample_bill_4',
+      billId: `${officeId}_sample_bill_4`,
     },
     {
-      id: 'sample_ei_6',
+      id: `${officeId}_sample_ei_6`,
       economicCode: '3211106',
       headName: 'Entertainment',
       headNameBn: 'আপ্যায়ন ব্যয়',
       date: '2026-01-20',
       description: 'জেলা পর্যায়ের কর্মশালা নাস্তা খরচ',
-      amount: 1200000, // 12,000
+      amount: 1200000,
       responsibleEmployee: { userId: null, name: 'Fatema Begum', designation: 'Accountant' },
       status: 'listed',
       billId: null,
     },
     {
-      id: 'sample_ei_7',
+      id: `${officeId}_sample_ei_7`,
       economicCode: '3255102',
       headName: 'Printing and binding',
       headNameBn: 'মুদ্রণ ও বাঁধাই',
       date: '2026-01-22',
       description: 'অফিস প্যাড ও খাম মুদ্রণ',
-      amount: 450000, // 4,500
+      amount: 450000,
       responsibleEmployee: { userId: null, name: 'Md. Karim', designation: 'Office Assistant' },
       status: 'listed',
       billId: null,
@@ -341,6 +385,7 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
 
   for (const item of items) {
     batch.set(doc(db, 'expenseItems', item.id), {
+      officeId,
       fiscalYear: fy,
       economicCode: item.economicCode,
       headName: item.headName,
@@ -353,32 +398,33 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
       billId: item.billId,
       deleted: false,
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorRef,
       createdByName: actor.name,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorRef,
     });
   }
 
-  // 5. Sample Bills (2 approved, 1 submitted, 1 draft) + FY sequential counter
-  batch.set(doc(db, 'bills', 'sample_bill_1'), {
+  // 5. Sample Bills + Office FY Counter
+  batch.set(doc(db, 'bills', `${officeId}_sample_bill_1`), {
+    officeId,
     billNo: '2025-26/001',
     fiscalYear: fy,
     economicCode: '3211106',
     headName: 'Entertainment',
     headNameBn: 'আপ্যায়ন ব্যয়',
     date: '2025-11-12',
-    itemIds: ['sample_ei_1', 'sample_ei_2'],
+    itemIds: [`${officeId}_sample_ei_1`, `${officeId}_sample_ei_2`],
     items: [
       {
-        id: 'sample_ei_1',
+        id: `${officeId}_sample_ei_1`,
         date: '2025-11-10',
         description: 'মাসিক সমন্বয় সভার আপ্যায়ন',
         amount: 10000000,
         responsibleEmployee: { userId: actor.uid, name: actor.name, designation: 'Admin Officer' },
       },
       {
-        id: 'sample_ei_2',
+        id: `${officeId}_sample_ei_2`,
         date: '2025-11-12',
         description: 'অডিট টিমের মধ্যাহ্নভোজ ও চা-নাস্তা',
         amount: 8000000,
@@ -396,8 +442,8 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     netPayable: 15300000,
     status: 'approved',
     submittedAt: serverTimestamp(),
-    submittedBy: actor.uid,
-    approvedBy: actor.uid,
+    submittedBy: actorRef,
+    approvedBy: actorRef,
     approvedAt: serverTimestamp(),
     rejectReason: null,
     cancelledBy: null,
@@ -408,23 +454,24 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     migratedFromSpendingId: null,
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     createdByName: actor.name,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  batch.set(doc(db, 'bills', 'sample_bill_2'), {
+  batch.set(doc(db, 'bills', `${officeId}_sample_bill_2`), {
+    officeId,
     billNo: '2025-26/002',
     fiscalYear: fy,
     economicCode: '3255102',
     headName: 'Printing and binding',
     headNameBn: 'মুদ্রণ ও বাঁধাই',
     date: '2025-10-08',
-    itemIds: ['sample_ei_3'],
+    itemIds: [`${officeId}_sample_ei_3`],
     items: [
       {
-        id: 'sample_ei_3',
+        id: `${officeId}_sample_ei_3`,
         date: '2025-10-08',
         description: 'বার্ষিক প্রতিবেদন ও ফরম মুদ্রণ',
         amount: 17000000,
@@ -442,8 +489,8 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     netPayable: 14450000,
     status: 'approved',
     submittedAt: serverTimestamp(),
-    submittedBy: actor.uid,
-    approvedBy: actor.uid,
+    submittedBy: actorRef,
+    approvedBy: actorRef,
     approvedAt: serverTimestamp(),
     rejectReason: null,
     cancelledBy: null,
@@ -454,23 +501,24 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     migratedFromSpendingId: null,
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     createdByName: actor.name,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  batch.set(doc(db, 'bills', 'sample_bill_3'), {
+  batch.set(doc(db, 'bills', `${officeId}_sample_bill_3`), {
+    officeId,
     billNo: '2025-26/003',
     fiscalYear: fy,
     economicCode: '3211106',
     headName: 'Entertainment',
     headNameBn: 'আপ্যায়ন ব্যয়',
     date: '2026-01-10',
-    itemIds: ['sample_ei_4'],
+    itemIds: [`${officeId}_sample_ei_4`],
     items: [
       {
-        id: 'sample_ei_4',
+        id: `${officeId}_sample_ei_4`,
         date: '2026-01-10',
         description: 'জরুরি স্টাফ মিটিং রিফ্রেশমেন্ট',
         amount: 1000000,
@@ -488,7 +536,7 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     netPayable: 850000,
     status: 'submitted',
     submittedAt: serverTimestamp(),
-    submittedBy: actor.uid,
+    submittedBy: actorRef,
     approvedBy: null,
     approvedAt: null,
     rejectReason: null,
@@ -500,23 +548,24 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     migratedFromSpendingId: null,
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     createdByName: actor.name,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  batch.set(doc(db, 'bills', 'sample_bill_4'), {
+  batch.set(doc(db, 'bills', `${officeId}_sample_bill_4`), {
+    officeId,
     billNo: '',
     fiscalYear: fy,
     economicCode: '3255102',
     headName: 'Printing and binding',
     headNameBn: 'মুদ্রণ ও বাঁধাই',
     date: '2026-01-14',
-    itemIds: ['sample_ei_5'],
+    itemIds: [`${officeId}_sample_ei_5`],
     items: [
       {
-        id: 'sample_ei_5',
+        id: `${officeId}_sample_ei_5`,
         date: '2026-01-14',
         description: 'রেজিস্টার খাতা বাঁধাই ও স্টেশনারি ছাপা',
         amount: 600000,
@@ -546,22 +595,22 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     migratedFromSpendingId: null,
     deleted: false,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     createdByName: actor.name,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  batch.set(doc(db, 'counters', `${fy}_bill`), {
+  batch.set(doc(db, 'counters', buildCounterId(officeId, fy)), {
+    officeId,
     fiscalYear: fy,
     nextNumber: 4,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
-  // 6. One sample code-level spending limit (3211106, 80%)
-  const limitRef = doc(db, 'spendingLimits', 'sample_limit_3211106');
-  batch.set(limitRef, {
+  batch.set(doc(db, 'spendingLimits', `${officeId}_sample_limit_3211106`), {
+    officeId,
     type: 'code',
     budgetId: null,
     fiscalYear: fy,
@@ -574,19 +623,21 @@ export async function loadSampleData(actor: AuditActor): Promise<void> {
     refNo: 'Ref-001',
     status: 'active',
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorRef,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorRef,
   });
 
   writeAuditLogInBatch(batch, {
-    collection: 'settings',
-    docId: 'seed_2025_26',
+    officeId,
+    collection: 'offices',
+    docId: officeId,
     action: 'create',
     before: null,
-    after: { seededFiscalYear: fy, ratesCount: SAMPLE_VAT_TAX_RATES_2025_26.length },
+    after: { seededFiscalYear: fy, ratesCount: SAMPLE_VAT_TAX_RATES_2025_26.length, officeId },
     actor,
   });
 
   await batch.commit();
+  return officeId;
 }

@@ -20,10 +20,11 @@ import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useActiveUsers } from '../hooks/useActiveUsers';
+import { formatActorBrief, getActorUid } from '../lib/actor';
 import { computeCodeAvailable } from '../lib/computeAvailable';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { isDateInFiscalYear } from '../lib/fy';
@@ -43,7 +44,11 @@ import {
   fromPaisa,
   toPaisa,
 } from '../lib/money';
-import { canCreateExpenseItems } from '../lib/permissions';
+import {
+  canApproveRejectCancelBill,
+  canCreateDraftBill,
+  canCreateExpenseItems,
+} from '../lib/permissions';
 import {
   DEFAULT_IT_CODE,
   DEFAULT_NET_PAYABLE_CODE,
@@ -97,14 +102,58 @@ function normalizeDesc(s: string): string {
 
 export function ExpenseItemsPage() {
   const navigate = useNavigate();
-  const { userDoc } = useAuth();
-  const { selectedFy, officeSettings, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    officeSettings,
+    currentOfficeId,
+    currentOfficeRole,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    actorSnapshot,
+    officesById,
+    pushToast,
+    t,
+  } = useApp();
   const { budgets, expenseItems, vatTaxRates, spendingLimits, fyCodeTotals, loading } =
     useFyData(selectedFy);
   const { getCodeEntry, getHead } = useEconomicCodes();
   const { users: activeUsers } = useActiveUsers();
 
-  const canCreate = userDoc ? canCreateExpenseItems(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const permCtx = { isSuperAdmin, officeRole: currentOfficeRole };
+  const isDdo =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canApproveRejectCancelBill(permCtx);
+  const canCreate =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canCreateExpenseItems(permCtx);
+  const canDraftBill =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canCreateDraftBill(permCtx);
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
+
+  const canModifyItem = (item: ExpenseItemDoc) =>
+    !isSuperAdmin &&
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    item.status === 'listed' &&
+    (isDdo || !item.createdBy || getActorUid(item.createdBy) === userDoc?.id);
 
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -418,7 +467,11 @@ export function ExpenseItemsPage() {
             err instanceof Error ? err.message : 'মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।';
         }
 
-        const fyTotal = fyCodeTotals.find((f) => f.economicCode === economicCode);
+        const fyTotal = fyCodeTotals.find(
+          (f) =>
+            f.economicCode === economicCode &&
+            (!realOfficeId || !f.officeId || f.officeId === realOfficeId)
+        );
         const avail = computeCodeAvailable({
           fiscalYear: selectedFy,
           economicCode,
@@ -462,6 +515,7 @@ export function ExpenseItemsPage() {
     vatTaxRates,
     budgets,
     fyCodeTotals,
+    realOfficeId,
     spendingLimits,
     selectedFy,
     billDate,
@@ -509,7 +563,11 @@ export function ExpenseItemsPage() {
     }
 
     const codeStatuses = Array.from(totalsByCode.entries()).map(([code, info]) => {
-      const fyTotal = fyCodeTotals.find((f) => f.economicCode === code);
+      const fyTotal = fyCodeTotals.find(
+        (f) =>
+          f.economicCode === code &&
+          (!realOfficeId || !f.officeId || f.officeId === realOfficeId)
+      );
       const avail = computeCodeAvailable({
         fiscalYear: selectedFy,
         economicCode: code,
@@ -569,11 +627,11 @@ export function ExpenseItemsPage() {
       hasBudgetWarning: codeStatuses.some((c) => c.exceeds),
       duplicateWarnings,
     };
-  }, [rows, budgets, fyCodeTotals, spendingLimits, selectedFy, expenseItems, getHead]);
+  }, [rows, budgets, fyCodeTotals, realOfficeId, spendingLimits, selectedFy, expenseItems, getHead]);
 
   const handleSaveBatch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userDoc || !canCreate) return;
+    if (!userDoc || !canCreate || !realOfficeId || !effectiveActor) return;
 
     const prepared = [];
     for (let i = 0; i < rows.length; i++) {
@@ -601,6 +659,7 @@ export function ExpenseItemsPage() {
         return;
       }
       prepared.push({
+        officeId: realOfficeId,
         fiscalYear: selectedFy,
         economicCode: master.code,
         headName: master.headName,
@@ -618,7 +677,7 @@ export function ExpenseItemsPage() {
 
     setSavingBatch(true);
     try {
-      await createExpenseItemsBatch(prepared, { uid: userDoc.id, name: userDoc.name });
+      await createExpenseItemsBatch(prepared, effectiveActor);
       pushToast('success', `${prepared.length}টি খরচ আইটেম তালিকায় যুক্ত হয়েছে।`);
       setEntryModalOpen(false);
     } catch (err) {
@@ -654,7 +713,7 @@ export function ExpenseItemsPage() {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userDoc || !editingItem) return;
+    if (!userDoc || !editingItem || !effectiveActor || !canModifyItem(editingItem)) return;
     const master = getCodeEntry(editCode.trim());
     if (!master || master.special) {
       pushToast('error', 'বৈধ অর্থনৈতিক কোড নির্বাচন করুন।');
@@ -670,6 +729,7 @@ export function ExpenseItemsPage() {
       await updateExpenseItem(
         editingItem,
         {
+          officeId: editingItem.officeId || realOfficeId,
           fiscalYear: selectedFy,
           economicCode: master.code,
           headName: master.headName,
@@ -683,7 +743,7 @@ export function ExpenseItemsPage() {
             designation: editEmpDesig,
           },
         },
-        { uid: userDoc.id, name: userDoc.name }
+        effectiveActor
       );
       pushToast('success', 'খরচ আইটেম হালনাগাদ হয়েছে।');
       setEditingItem(null);
@@ -695,9 +755,9 @@ export function ExpenseItemsPage() {
   };
 
   const handleDeleteItem = async (item: ExpenseItemDoc) => {
-    if (!userDoc || item.status !== 'listed') return;
+    if (!userDoc || !effectiveActor || !canModifyItem(item)) return;
     try {
-      await deleteExpenseItem(item, { uid: userDoc.id, name: userDoc.name });
+      await deleteExpenseItem(item, effectiveActor);
       pushToast('success', 'খরচ আইটেম মুছে ফেলা হয়েছে।');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'মুছে ফেলা ব্যর্থ হয়েছে।');
@@ -781,7 +841,15 @@ export function ExpenseItemsPage() {
   };
 
   const handleCreateBills = async (mode: 'draft' | 'submit') => {
-    if (!userDoc || billPreviewGroups.length === 0) return;
+    if (
+      !userDoc ||
+      !canDraftBill ||
+      !realOfficeId ||
+      !effectiveActor ||
+      billPreviewGroups.length === 0
+    ) {
+      return;
+    }
     if (billPreviewGroups.length > 1) {
       pushToast(
         'error',
@@ -814,6 +882,7 @@ export function ExpenseItemsPage() {
           : null;
 
       const groupInputs: DraftBillGroupInput[] = billPreviewGroups.map((g) => ({
+        officeId: realOfficeId,
         fiscalYear: selectedFy,
         economicCode: g.economicCode,
         headName: g.headName,
@@ -833,15 +902,12 @@ export function ExpenseItemsPage() {
         vatVariantLabel: g.selectedVariant.label,
       }));
 
-      const createdBillIds = await createDraftBillsFromItems(groupInputs, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      const createdBillIds = await createDraftBillsFromItems(groupInputs, effectiveActor);
 
       if (mode === 'submit') {
         const assignedNumbers: string[] = [];
         for (const billId of createdBillIds) {
-          const res = await submitBillTx(billId, { uid: userDoc.id, name: userDoc.name });
+          const res = await submitBillTx(billId, effectiveActor);
           assignedNumbers.push(res.billNo);
         }
         pushToast(
@@ -906,6 +972,7 @@ export function ExpenseItemsPage() {
           Description: item.description,
           'Responsible Employee': item.responsibleEmployee.name,
           Designation: item.responsibleEmployee.designation,
+          'Entered By': formatActorBrief(item.createdBy, officesById, item.createdByName),
           'Amount (BDT)': fromPaisa(item.amount),
           Status: item.status,
           'Bill ID': item.billId || '',
@@ -969,9 +1036,30 @@ export function ExpenseItemsPage() {
     </div>
   );
 
+  if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
+    return (
+      <Layout title={t('navExpenseItems')}>
+        <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto">
+          <h2 className="text-base font-bold text-[var(--text)]">একটি অফিস নির্বাচন করুন</h2>
+          <p className="text-xs sm:text-sm text-[var(--muted)]">
+            {isSuperAdmin
+              ? 'খরচের তালিকা দেখতে এবং প্রিন্ট/এক্সপোর্ট করতে উপরের অফিস সুইচার থেকে যেকোনো একটি নির্দিষ্ট অফিস নির্বাচন করুন।'
+              : 'আপনার জন্য কোনো সক্রিয় অফিস নির্ধারিত নেই। অনুগ্রহ করে সুপার অ্যাডমিন বা দপ্তর প্রধানের সাথে যোগাযোগ করুন।'}
+          </p>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout title={t('navExpenseItems')} actions={actions}>
-      <div className={`space-y-3.5 md:space-y-4 ${selectedItems.length > 0 ? 'pb-24' : ''}`}>
+      <div className={`space-y-3.5 md:space-y-4 ${selectedItems.length > 0 && canDraftBill ? 'pb-24' : ''}`}>
+        {isLegacyPreMigration && (
+          <div className="px-3.5 py-2.5 rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium">
+            মাল্টি-অফিস মাইগ্রেশন সম্পন্ন হয়নি। নতুন খরচ এন্ট্রি বা বিল তৈরি করতে সুপার অ্যাডমিন সেটিংস থেকে &ldquo;Migrate to multi-office&rdquo; চালান।
+          </div>
+        )}
+
         {!isOnline && (
           <div className="px-3.5 py-2.5 rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
@@ -1005,7 +1093,7 @@ export function ExpenseItemsPage() {
               );
             })}
 
-            {selectableFilteredItems.length > 0 && (
+            {canDraftBill && selectableFilteredItems.length > 0 && (
               <button
                 type="button"
                 onClick={toggleSelectAllFiltered}
@@ -1083,7 +1171,7 @@ export function ExpenseItemsPage() {
                     }`}
                   >
                     <div className="flex items-start gap-2.5">
-                      {isListed ? (
+                      {canDraftBill && isListed ? (
                         <button
                           type="button"
                           onClick={() => toggleSelectOne(item.id)}
@@ -1139,26 +1227,34 @@ export function ExpenseItemsPage() {
                           </div>
                         </div>
 
+                        {(item.createdBy || item.createdByName) && (
+                          <div className="text-[11px] text-[var(--muted)] mt-1 truncate">
+                            এন্ট্রি: {formatActorBrief(item.createdBy, officesById, item.createdByName)}
+                          </div>
+                        )}
+
                         <div className="flex items-center justify-end gap-2 mt-2">
                           {isListed ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(item)}
-                                className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                                <span>{t('edit')}</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteItem(item)}
-                                className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] inline-flex items-center gap-1"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>{t('delete')}</span>
-                              </button>
-                            </>
+                            canModifyItem(item) ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(item)}
+                                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                  <span>{t('edit')}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteItem(item)}
+                                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] inline-flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>{t('delete')}</span>
+                                </button>
+                              </>
+                            ) : null
                           ) : (
                             <Link
                               to="/bills"
@@ -1183,19 +1279,21 @@ export function ExpenseItemsPage() {
               <thead>
                 <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                   <th className="py-3 pl-4 pr-2 w-10">
-                    <button
-                      type="button"
-                      onClick={toggleSelectAllFiltered}
-                      disabled={selectableFilteredItems.length === 0}
-                      aria-label="Toggle select all listed items"
-                      className="inline-flex items-center justify-center p-1 rounded disabled:opacity-40"
-                    >
-                      {allFilteredListedSelected ? (
-                        <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
-                      ) : (
-                        <Square className="w-4 h-4" />
-                      )}
-                    </button>
+                    {canDraftBill && (
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllFiltered}
+                        disabled={selectableFilteredItems.length === 0}
+                        aria-label="Toggle select all listed items"
+                        className="inline-flex items-center justify-center p-1 rounded disabled:opacity-40"
+                      >
+                        {allFilteredListedSelected ? (
+                          <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
+                        ) : (
+                          <Square className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
                   </th>
                   <th className="py-3 px-3 font-medium whitespace-nowrap">{t('date')}</th>
                   <th className="py-3 px-3 font-medium">{t('head')}</th>
@@ -1240,7 +1338,7 @@ export function ExpenseItemsPage() {
                         }`}
                       >
                         <td className="py-3 pl-4 pr-2">
-                          {isListed && (
+                          {canDraftBill && isListed && (
                             <button
                               type="button"
                               onClick={() => toggleSelectOne(item.id)}
@@ -1272,7 +1370,12 @@ export function ExpenseItemsPage() {
                           </div>
                         </td>
                         <td className="py-3 px-3 bn max-w-[240px] break-words">
-                          {item.description}
+                          <div>{item.description}</div>
+                          {(item.createdBy || item.createdByName) && (
+                            <div className="text-[11px] text-[var(--muted)] mt-0.5">
+                              এন্ট্রি: {formatActorBrief(item.createdBy, officesById, item.createdByName)}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-3">
                           <div className="font-medium bn">{item.responsibleEmployee.name}</div>
@@ -1290,22 +1393,26 @@ export function ExpenseItemsPage() {
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
                           {isListed ? (
-                            <div className="inline-flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(item)}
-                                className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
-                              >
-                                {t('edit')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteItem(item)}
-                                className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
-                              >
-                                {t('delete')}
-                              </button>
-                            </div>
+                            canModifyItem(item) ? (
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditModal(item)}
+                                  className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
+                                >
+                                  {t('edit')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteItem(item)}
+                                  className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
+                                >
+                                  {t('delete')}
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-[var(--muted)]">—</span>
+                            )
                           ) : (
                             <Link
                               to="/bills"
@@ -1328,7 +1435,7 @@ export function ExpenseItemsPage() {
       </div>
 
       {/* Sticky Bottom Bill Selection Bar */}
-      {selectedItems.length > 0 && (
+      {canDraftBill && selectedItems.length > 0 && (
         <div className="sticky bottom-2 z-20 mt-3 card-surface border-2 border-[var(--accent)] p-3 md:p-4 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="min-w-0">
             <div className="text-sm font-bold text-[var(--text)] tabular-nums">

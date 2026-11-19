@@ -22,24 +22,38 @@ service cloud.firestore {
       return userExists() && userData().status == 'active';
     }
 
-    function role() {
-      return userData().role;
-    }
-
     function isSuperAdmin() {
-      return isActiveUser() && role() == 'superAdmin';
+      return isActiveUser()
+        && (
+          userData().globalRole == 'superAdmin'
+          || userData().role == 'superAdmin'
+        );
     }
 
-    function isDdo() {
-      return isActiveUser() && role() == 'ddo';
+    function isOfficeMemberStrict(officeId) {
+      return isActiveUser()
+        && !isSuperAdmin()
+        && officeId is string
+        && userData().access != null
+        && officeId in userData().access;
     }
 
-    function isDdoOrSuperAdmin() {
-      return isActiveUser() && (role() == 'ddo' || role() == 'superAdmin');
+    function isOfficeDdo(officeId) {
+      return isOfficeMemberStrict(officeId)
+        && userData().access[officeId] == 'ddo';
     }
 
-    function officeInitialized() {
-      return exists(/databases/$(database)/documents/settings/office);
+    function isOfficeMemberOrAdmin(officeId) {
+      return isSuperAdmin() || isOfficeMemberStrict(officeId);
+    }
+
+    function actorUid(val) {
+      return val is map ? val.uid : val;
+    }
+
+    function appInitialized() {
+      return exists(/databases/$(database)/documents/settings/office)
+        || exists(/databases/$(database)/documents/settings/bootstrap);
     }
 
     function hasEmail() {
@@ -50,20 +64,74 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    // Users collection (all active office users can list staff directory for responsibleEmployee selection)
+    function sharesAnyOfficeWith(targetUser) {
+      return isActiveUser()
+        && targetUser.officeIds is list
+        && userData().officeIds is list
+        && targetUser.officeIds.hasAny(userData().officeIds);
+    }
+
+    // Offices collection (replaces settings/office)
+    match /offices/{officeId} {
+      allow read: if isSuperAdmin() || isOfficeMemberStrict(officeId);
+      allow create, delete: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (
+          isOfficeDdo(officeId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'address',
+            'activeFiscalYear',
+            'fiscalYears',
+            'language',
+            'ministryName',
+            'officeMobileNo',
+            'institutionalCode',
+            'defaultPayeeText',
+            'placeName',
+            'defaultNetPayableCode',
+            'defaultItCode',
+            'defaultVatCode',
+            'defaultSecurityCode',
+            'tr21FooterText',
+            'tr21FontFamily',
+            'tr21FontSize',
+            'tr21P1S3Mode',
+            'tr21VoucherLabel',
+            'tr21Clauses',
+            'updatedAt',
+            'updatedBy'
+          ])
+        );
+    }
+
+    // Users collection (never deleted, only disabled)
     match /users/{uid} {
-      allow get: if isSignedIn() && (request.auth.uid == uid || isActiveUser());
-      allow list: if isActiveUser() || (isSignedIn() && !officeInitialized());
+      allow get: if isSignedIn()
+        && (
+          request.auth.uid == uid
+          || isSuperAdmin()
+          || (resource != null && sharesAnyOfficeWith(resource.data))
+        );
+      allow list: if isSuperAdmin()
+        || (isActiveUser() && sharesAnyOfficeWith(resource.data))
+        || (isSignedIn() && !appInitialized());
 
       allow create: if isSignedIn()
         && request.auth.uid == uid
         && request.resource.data.status == 'active'
         && (
-          (!officeInitialized() && request.resource.data.role == 'superAdmin')
+          (
+            !appInitialized()
+            && request.resource.data.globalRole == 'superAdmin'
+          )
           || (
             hasEmail()
             && exists(/databases/$(database)/documents/invites/$(ownEmailLower()))
-            && request.resource.data.role == get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.role
+            && request.resource.data.globalRole == null
+            && request.resource.data.access is map
+            && request.resource.data.access[
+                 get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.officeId
+               ] == get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.role
           )
         );
 
@@ -71,116 +139,215 @@ service cloud.firestore {
         || (
           isActiveUser()
           && request.auth.uid == uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastActiveAt'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'lastActiveAt',
+            'name',
+            'phone',
+            'updatedAt'
+          ])
+        )
+        || (
+          isActiveUser()
+          && resource.data.globalRole == null
+          && resource.data.homeOfficeId is string
+          && isOfficeDdo(resource.data.homeOfficeId)
+          && resource.data.access[resource.data.homeOfficeId] == 'employee'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'designation',
+            'phone',
+            'access',
+            'officeIds',
+            'homeOfficeId',
+            'updatedAt',
+            'updatedBy'
+          ])
         );
 
-      allow delete: if isSuperAdmin();
+      allow delete: if false;
+    }
+
+    // Work History (append-only posting ledger; never deleted)
+    match /workHistory/{whId} {
+      allow read: if isSuperAdmin()
+        || (
+          isActiveUser()
+          && (
+            resource.data.userId == request.auth.uid
+            || (
+              resource.data.officeId is string
+              && userData().access != null
+              && resource.data.officeId in userData().access
+            )
+          )
+        );
+
+      allow create: if isSuperAdmin()
+        || (
+          isOfficeDdo(request.resource.data.officeId)
+          && request.resource.data.role == 'employee'
+          && request.resource.data.kind == 'regular'
+        )
+        || (
+          hasEmail()
+          && exists(/databases/$(database)/documents/invites/$(ownEmailLower()))
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.officeId == get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.officeId
+          && request.resource.data.role == get(/databases/$(database)/documents/invites/$(ownEmailLower())).data.role
+        );
+
+      allow update: if isSuperAdmin()
+        || (
+          isOfficeDdo(resource.data.officeId)
+          && resource.data.role == 'employee'
+          && resource.data.kind == 'regular'
+          && request.resource.data.officeId == resource.data.officeId
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.kind == resource.data.kind
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'endDate',
+            'endReason',
+            'designation',
+            'remarks',
+            'updatedAt',
+            'updatedBy'
+          ])
+        );
+
+      allow delete: if false;
     }
 
     // Invites collection (keyed by email lowercase)
     match /invites/{emailLower} {
       allow get: if isSuperAdmin()
-        || (hasEmail() && ownEmailLower() == emailLower);
-      allow list: if isSuperAdmin();
-      allow create, update: if isSuperAdmin();
+        || (hasEmail() && ownEmailLower() == emailLower)
+        || (resource != null && isOfficeDdo(resource.data.officeId));
+      allow list: if isSuperAdmin()
+        || (isActiveUser() && resource.data.officeId is string && isOfficeDdo(resource.data.officeId));
+      allow create, update: if isSuperAdmin()
+        || (
+          isOfficeDdo(request.resource.data.officeId)
+          && request.resource.data.role == 'employee'
+          && request.resource.data.kind == 'regular'
+        );
       allow delete: if isSuperAdmin()
-        || (hasEmail() && ownEmailLower() == emailLower);
+        || (hasEmail() && ownEmailLower() == emailLower)
+        || (
+          resource != null
+          && isOfficeDdo(resource.data.officeId)
+          && resource.data.role == 'employee'
+          && resource.data.kind == 'regular'
+        );
     }
 
-    // Office settings
+    // Legacy settings & bootstrap sentinel
     match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isSuperAdmin()
+        || (
+          isSignedIn()
+          && !appInitialized()
+          && (docId == 'office' || docId == 'bootstrap')
+        );
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Global Master Economic Codes (Super Admin edits; office users read)
+    match /economicCodes/{code} {
       allow read: if isActiveUser();
       allow create, update, delete: if isSuperAdmin();
     }
 
-    // Master Economic Codes
-    match /economicCodes/{code} {
-      allow read: if isActiveUser();
-      allow create, update: if isDdoOrSuperAdmin();
-      allow delete: if isSuperAdmin();
-    }
-
-    // VAT & Tax Model
+    // Global VAT & Tax Model (Super Admin edits; office users read)
     match /vatTaxRates/{rateId} {
       allow read: if isActiveUser();
-      allow create, update, delete: if isDdoOrSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
-    // Spending Limits (Maximum Spending Rate)
+    // Office-scoped Spending Limits
     match /spendingLimits/{limitId} {
-      allow read: if isActiveUser();
-      allow create, update, delete: if isDdoOrSuperAdmin();
-    }
-
-    // Aggregated FY + Economic Code totals
-    match /fyCodeTotals/{totalId} {
-      allow read: if isActiveUser();
-      allow create: if isDdoOrSuperAdmin()
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
+      allow create: if isSuperAdmin() || isOfficeDdo(request.resource.data.officeId);
+      allow update: if isSuperAdmin()
         || (
-          isActiveUser()
-          && request.resource.data.keys().hasOnly([
-            'fiscalYear',
-            'economicCode',
-            'allocated',
-            'spent',
-            'approvedSpent',
-            'pendingAmount',
-            'updatedAt',
-            'updatedBy'
-          ])
-        );
-      allow update: if isDdoOrSuperAdmin()
-        || (
-          isActiveUser()
-          && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['pendingAmount', 'approvedSpent', 'updatedAt', 'updatedBy'])
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
         );
       allow delete: if isSuperAdmin();
     }
 
-    // Budgets (allocations and revisions)
-    match /budgets/{budgetId} {
-      allow read: if isActiveUser();
-      allow create: if isDdoOrSuperAdmin();
+    // Office-scoped Aggregated FY + Economic Code totals ({officeId}_{fy}_{code})
+    match /fyCodeTotals/{totalId} {
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
+      allow create: if isSuperAdmin() || isOfficeMemberStrict(request.resource.data.officeId);
       allow update: if isSuperAdmin()
         || (
-          isDdo()
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
+        );
+      allow delete: if isSuperAdmin();
+    }
+
+    // Office-scoped Budgets (DDO creates/executes; Super Admin corrects)
+    match /budgets/{budgetId} {
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
+      allow create: if isOfficeDdo(request.resource.data.officeId)
+        || isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['spent', 'approvedSpent', 'pendingAmount', 'remaining', 'status', 'updatedAt', 'updatedBy'])
         )
         || (
-          isActiveUser()
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['pendingAmount', 'remaining', 'updatedAt', 'updatedBy'])
         );
       allow delete: if isSuperAdmin();
     }
 
-    // Sequential Bill Number Counters (per FY)
+    // Sequential Bill Number Counters ({officeId}_{fy}_bill)
     match /counters/{counterId} {
-      allow read: if isActiveUser();
-      allow create, update: if isActiveUser();
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
+      allow create: if isSuperAdmin() || isOfficeMemberStrict(request.resource.data.officeId);
+      allow update: if isSuperAdmin()
+        || (
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
+        );
       allow delete: if isSuperAdmin();
     }
 
-    // Expense Items (খরচ তালিকা)
+    // Office-scoped Expense Items
     match /expenseItems/{itemId} {
-      allow read: if isActiveUser();
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
 
-      allow create: if (
-          isSuperAdmin()
-          && request.resource.data.deleted == false
-        )
+      allow create: if (isSuperAdmin() && request.resource.data.deleted == false)
         || (
-          isActiveUser()
-          && request.resource.data.createdBy == request.auth.uid
+          isOfficeMemberStrict(request.resource.data.officeId)
+          && actorUid(request.resource.data.createdBy) == request.auth.uid
           && request.resource.data.status == 'listed'
           && request.resource.data.deleted == false
         );
 
       allow update: if (
+          // Super Admin audited corrections (e.g. reverting billed item when soft-deleting bill)
+          isSuperAdmin()
+          && request.resource.data.officeId == resource.data.officeId
+        )
+        || (
           // Link a 'listed' item to a newly drafted bill
-          isActiveUser()
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'listed'
           && request.resource.data.status == 'billed'
           && request.resource.data.billId is string
@@ -189,7 +356,8 @@ service cloud.firestore {
         )
         || (
           // Return 'billed' item back to 'listed' on DDO reject/cancel or draft delete
-          isActiveUser()
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'billed'
           && request.resource.data.status == 'listed'
           && request.resource.data.billId == null
@@ -198,10 +366,11 @@ service cloud.firestore {
         )
         || (
           // Edit or soft-delete ONLY while status == 'listed'
-          isActiveUser()
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'listed'
           && request.resource.data.status == 'listed'
-          && (isDdoOrSuperAdmin() || resource.data.createdBy == request.auth.uid)
+          && (isOfficeDdo(resource.data.officeId) || actorUid(resource.data.createdBy) == request.auth.uid)
           && (
             request.resource.data.deleted == false
             || (
@@ -215,26 +384,30 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
-    // Bills (বিল) - Strictly DDO-only for Approve / Reject / Cancel
+    // Office-scoped Bills - DDO-only for Approve / Reject / Cancel; Super Admin for audited corrections
     match /bills/{billId} {
-      allow read: if isActiveUser();
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
 
-      allow create: if (
-          isSuperAdmin()
-          && request.resource.data.deleted == false
-        )
+      allow create: if (isSuperAdmin() && request.resource.data.deleted == false)
         || (
-          isActiveUser()
-          && request.resource.data.createdBy == request.auth.uid
+          isOfficeMemberStrict(request.resource.data.officeId)
+          && actorUid(request.resource.data.createdBy) == request.auth.uid
           && request.resource.data.status == 'draft'
           && request.resource.data.deleted == false
         );
 
       allow update: if (
-          // Creator, DDO, or Super Admin can edit/submit/soft-delete ONLY while draft
-          isActiveUser()
+          // Super Admin audited corrections on approved/locked records
+          isSuperAdmin()
+          && request.resource.data.officeId == resource.data.officeId
+        )
+        || (
+          // Creator or DDO in that office can edit/submit/soft-delete ONLY while draft
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'draft'
-          && (resource.data.createdBy == request.auth.uid || isDdoOrSuperAdmin())
+          && (actorUid(resource.data.createdBy) == request.auth.uid || isOfficeDdo(resource.data.officeId))
           && (
             (request.resource.data.status in ['draft', 'submitted'] && request.resource.data.deleted == false)
             || (
@@ -245,15 +418,17 @@ service cloud.firestore {
           )
         )
         || (
-          // Strictly DDO ONLY: Approve submitted bill
-          isDdo()
+          // Strictly office DDO ONLY: Approve submitted bill
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'submitted'
           && request.resource.data.status == 'approved'
           && request.resource.data.deleted == false
         )
         || (
-          // Strictly DDO ONLY: Reject submitted bill with reason
-          isDdo()
+          // Strictly office DDO ONLY: Reject submitted bill with reason
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'submitted'
           && request.resource.data.status == 'rejected'
           && request.resource.data.rejectReason is string
@@ -261,8 +436,9 @@ service cloud.firestore {
           && request.resource.data.deleted == false
         )
         || (
-          // Strictly DDO ONLY: Cancel approved bill with reason
-          isDdo()
+          // Strictly office DDO ONLY: Cancel approved bill with reason
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'approved'
           && request.resource.data.status == 'cancelled'
           && request.resource.data.cancelReason is string
@@ -273,16 +449,18 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
-    // Legacy Spendings (kept read-only / legacy-compatible for migration)
+    // Legacy Spendings (kept for migration)
     match /spendings/{spendingId} {
-      allow read: if isActiveUser();
+      allow read: if isSuperAdmin()
+        || (resource.data.officeId is string && isOfficeMemberStrict(resource.data.officeId));
       allow create, update, delete: if isSuperAdmin();
     }
 
-    // Immutable Audit Logs
+    // Immutable Audit Logs (scoped by officeId or null for global)
     match /auditLogs/{logId} {
-      allow read: if isActiveUser();
-      allow create: if isActiveUser()
+      allow read: if isSuperAdmin()
+        || (resource.data.officeId is string && isOfficeMemberStrict(resource.data.officeId));
+      allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
     }

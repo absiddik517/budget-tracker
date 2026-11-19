@@ -1,28 +1,142 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Layout } from '../components/Layout';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { StatusChip } from '../components/StatusChip';
-import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useAllOfficesSummary } from '../hooks/useAllOfficesSummary';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
+import { formatActorBrief, formatApprovedByLine } from '../lib/actor';
 import { formatDateDisplay } from '../lib/dates';
 import { fromPaisa, formatNumberIN } from '../lib/money';
-import { exportReportPdf, type ReportTabKey } from '../utils/exportPdf';
+import {
+  exportReportPdf,
+  type OfficesOverviewRowPdf,
+  type ReportTabKey,
+} from '../utils/exportPdf';
 import { saveAndShareFile } from '../utils/saveFile';
 
 export function ReportsPage() {
-  const { selectedFy, officeSettings, pushToast, t } = useApp();
-  const { budgets, bills, expenseItems, loading } = useFyData(selectedFy);
+  const { isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    currentOfficeId,
+    offices,
+    officesById,
+    officeSettings,
+    pushToast,
+    t,
+  } = useApp();
+
+  const [reportOfficeId, setReportOfficeId] = useState<string>(
+    currentOfficeId || (isSuperAdmin ? ALL_OFFICES_ID : '')
+  );
+
+  useEffect(() => {
+    if (currentOfficeId) {
+      setReportOfficeId(currentOfficeId);
+    }
+  }, [currentOfficeId]);
+
+  const effectiveReportOfficeId = isSuperAdmin ? reportOfficeId : currentOfficeId || undefined;
+  const isAllOfficesReport = Boolean(isSuperAdmin && effectiveReportOfficeId === ALL_OFFICES_ID);
+
+  const { budgets, bills, expenseItems, loading } = useFyData(
+    selectedFy,
+    isSuperAdmin ? effectiveReportOfficeId : undefined
+  );
+  const { totals: allOfficesTotals, loading: allOfficesLoading } = useAllOfficesSummary(
+    selectedFy,
+    isAllOfficesReport
+  );
   const { getHead } = useEconomicCodes();
 
-  const [tab, setTab] = useState<ReportTabKey>('allocations');
+  const [tab, setTab] = useState<ReportTabKey>(
+    isAllOfficesReport ? 'officesOverview' : 'allocations'
+  );
   const [selectedCode, setSelectedCode] = useState('');
   const [budgetStatusFilter, setBudgetStatusFilter] = useState<'all' | 'active' | 'executed'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
+
+  useEffect(() => {
+    if (isAllOfficesReport) {
+      setTab('officesOverview');
+    } else if (tab === 'officesOverview') {
+      setTab('allocations');
+    }
+  }, [isAllOfficesReport, tab]);
+
+  const reportOfficeObj =
+    effectiveReportOfficeId &&
+    effectiveReportOfficeId !== ALL_OFFICES_ID &&
+    effectiveReportOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? officesById.get(effectiveReportOfficeId) || null
+      : null;
+
+  const reportOfficeName = isAllOfficesReport
+    ? `All Offices (${offices.filter((o) => o.status === 'active').length})`
+    : reportOfficeObj
+    ? reportOfficeObj.nameBn || reportOfficeObj.name
+    : officeSettings.officeName;
+
+  const reportOfficeAddress = isAllOfficesReport
+    ? undefined
+    : reportOfficeObj
+    ? reportOfficeObj.address
+    : officeSettings.address;
+
+  const officesOverviewRows = useMemo<OfficesOverviewRowPdf[]>(() => {
+    if (!isAllOfficesReport) return [];
+    const byOffice = new Map<
+      string,
+      { allocated: number; approvedSpent: number; pendingAmount: number }
+    >();
+    for (const tot of allOfficesTotals) {
+      const oid = tot.officeId || '__LEGACY__';
+      const cur = byOffice.get(oid) || { allocated: 0, approvedSpent: 0, pendingAmount: 0 };
+      cur.allocated += tot.allocated || 0;
+      cur.approvedSpent += tot.spent || 0;
+      cur.pendingAmount += Math.max(0, tot.pendingAmount || 0);
+      byOffice.set(oid, cur);
+    }
+    const officeIds = new Set<string>([
+      ...offices.map((o) => o.id),
+      ...Array.from(byOffice.keys()),
+    ]);
+    return Array.from(officeIds)
+      .map((oid) => {
+        const off = officesById.get(oid);
+        const agg = byOffice.get(oid) || { allocated: 0, approvedSpent: 0, pendingAmount: 0 };
+        const available = agg.allocated - agg.approvedSpent - agg.pendingAmount;
+        const usedPct =
+          agg.allocated > 0 ? Math.round((agg.approvedSpent / agg.allocated) * 100) : 0;
+        return {
+          officeId: oid,
+          officeName: off ? off.nameBn || off.name : oid === '__LEGACY__' ? 'Legacy' : oid,
+          officeCode: off?.code || '—',
+          allocated: agg.allocated,
+          approvedSpent: agg.approvedSpent,
+          pendingAmount: agg.pendingAmount,
+          available,
+          usedPct,
+        };
+      })
+      .sort((a, b) => a.officeName.localeCompare(b.officeName));
+  }, [isAllOfficesReport, allOfficesTotals, offices, officesById]);
+
+  const officesOverviewTotals = useMemo(() => {
+    const allocated = officesOverviewRows.reduce((s, r) => s + r.allocated, 0);
+    const approvedSpent = officesOverviewRows.reduce((s, r) => s + r.approvedSpent, 0);
+    const pendingAmount = officesOverviewRows.reduce((s, r) => s + r.pendingAmount, 0);
+    const available = allocated - approvedSpent - pendingAmount;
+    const usedPct = allocated > 0 ? Math.round((approvedSpent / allocated) * 100) : 0;
+    return { allocated, approvedSpent, pendingAmount, available, usedPct };
+  }, [officesOverviewRows]);
 
   const filteredBudgets = useMemo(() => {
     return budgets.filter((b) => {
@@ -215,8 +329,11 @@ export function ReportsPage() {
       const outcome = await exportReportPdf({
         tab,
         selectedFy,
-        officeName: officeSettings.officeName,
-        officeAddress: officeSettings.address,
+        officeName: reportOfficeName,
+        officeAddress: reportOfficeAddress,
+        officesById,
+        officesOverviewRows,
+        officesOverviewTotals,
         selectedCode,
         budgetStatusFilter,
         fromDate,
@@ -252,7 +369,18 @@ export function ReportsPage() {
       let rows: Array<Record<string, string | number>> = [];
       let sheetName = 'Report';
 
-      if (tab === 'allocations') {
+      if (tab === 'officesOverview') {
+        sheetName = 'All Offices Overview';
+        rows = officesOverviewRows.map((r) => ({
+          Office: r.officeName,
+          Code: r.officeCode,
+          'Allocated (BDT)': fromPaisa(r.allocated),
+          'Approved Spent (BDT)': fromPaisa(r.approvedSpent),
+          'Pending (BDT)': fromPaisa(r.pendingAmount),
+          'Available (BDT)': fromPaisa(r.available),
+          'Used (%)': `${r.usedPct}%`,
+        }));
+      } else if (tab === 'allocations') {
         sheetName = 'FY Allocations';
         rows = filteredBudgets.map((b) => {
           const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
@@ -262,6 +390,7 @@ export function ReportsPage() {
             'Memo No': b.memoNo,
             'Memo Date': formatDateDisplay(b.memoDate),
             Type: b.entryType,
+            Responsible: formatActorBrief(b.createdBy, officesById),
             'Allocated (BDT)': fromPaisa(b.allocated),
             'Approved Spent (BDT)': fromPaisa(b.spent),
             'Pending (BDT)': fromPaisa(b.pendingAmount || 0),
@@ -287,6 +416,8 @@ export function ReportsPage() {
             Date: formatDateDisplay(b.date),
             'Bill No': b.billNo || 'Draft',
             'ব্যয়ের খাত': `${b.economicCode} ${head.displayName}`,
+            Responsible: formatActorBrief(b.createdBy, officesById, b.createdByName),
+            'Approved By': b.approvedBy ? formatApprovedByLine(b.approvedBy, officesById) : '—',
             'Items Count': b.items.length,
             'Gross (BDT)': fromPaisa(b.grossAmount),
             'VAT (BDT)': fromPaisa(b.vatAmount),
@@ -376,14 +507,15 @@ export function ReportsPage() {
       <div className="space-y-3.5 md:space-y-4">
         {/* Report Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 no-print">
-          {(
-            [
-              { id: 'allocations', label: 'FY Allocations' },
-              { id: 'summary', label: 'Budget Summary' },
-              { id: 'headBills', label: 'Head-wise Bills' },
-              { id: 'deductions', label: 'VAT / IT Deductions' },
-              { id: 'expenseItems', label: 'খরচ তালিকা' },
-            ] as const
+          {(isAllOfficesReport
+            ? ([{ id: 'officesOverview', label: 'All Offices Overview' }] as const)
+            : ([
+                { id: 'allocations', label: 'FY Allocations' },
+                { id: 'summary', label: 'Budget Summary' },
+                { id: 'headBills', label: 'Head-wise Bills' },
+                { id: 'deductions', label: 'VAT / IT Deductions' },
+                { id: 'expenseItems', label: 'খরচ তালিকা' },
+              ] as const)
           ).map((item) => {
             const active = tab === item.id;
             return (
@@ -410,7 +542,25 @@ export function ReportsPage() {
               FY {selectedFy}
             </span>
 
-            {(tab === 'allocations' || tab === 'summary') && (
+            {isSuperAdmin && offices.length > 0 && (
+              <select
+                value={reportOfficeId}
+                onChange={(e) => setReportOfficeId(e.target.value)}
+                aria-label="Select report office"
+                className="min-h-[44px] md:min-h-[36px] px-3 rounded-lg md:rounded-full text-base md:text-xs border border-[var(--line)] bg-[var(--card)] text-[var(--text)] bn"
+              >
+                <option value={ALL_OFFICES_ID}>
+                  সকল অফিস ({offices.filter((o) => o.status === 'active').length})
+                </option>
+                {offices.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.nameBn || o.name} ({o.code})
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {!isAllOfficesReport && (tab === 'allocations' || tab === 'summary') && (
               <select
                 value={budgetStatusFilter}
                 onChange={(e) =>
@@ -426,17 +576,19 @@ export function ReportsPage() {
             )}
           </div>
 
-          <div className="w-full md:w-72">
-            <EconomicCodeSelect
-              value={selectedCode}
-              onChange={(code) => setSelectedCode(code)}
-              placeholder="All economic codes"
-              clearable
-              includeInactive
-            />
-          </div>
+          {!isAllOfficesReport && (
+            <div className="w-full md:w-72">
+              <EconomicCodeSelect
+                value={selectedCode}
+                onChange={(code) => setSelectedCode(code)}
+                placeholder="All economic codes"
+                clearable
+                includeInactive
+              />
+            </div>
+          )}
 
-          {(tab === 'headBills' || tab === 'expenseItems') && (
+          {!isAllOfficesReport && (tab === 'headBills' || tab === 'expenseItems') && (
             <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full md:w-auto">
               <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
                 <label className="text-xs text-[var(--muted)]">From</label>
@@ -462,8 +614,154 @@ export function ReportsPage() {
 
         {/* Report Content */}
         <div className="card-surface overflow-hidden">
-          {loading ? (
+          {loading || allOfficesLoading ? (
             <p className="p-6 text-sm text-[var(--muted)]">Loading report data…</p>
+          ) : tab === 'officesOverview' ? (
+            <>
+              <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
+                <div className="p-3.5 bg-[var(--surface-subtle)] space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <span>Grand Total ({officesOverviewRows.length} offices)</span>
+                    <span className="tabular-nums text-[var(--accent)]">
+                      {officesOverviewTotals.usedPct}% used
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5 text-xs">
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-[var(--muted)]">Alloc</div>
+                      <div className="font-semibold tabular-nums truncate">
+                        {formatNumberIN(officesOverviewTotals.allocated)}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-[var(--muted)]">Appr</div>
+                      <div className="font-semibold tabular-nums truncate">
+                        {formatNumberIN(officesOverviewTotals.approvedSpent)}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-[var(--muted)]">Pend</div>
+                      <div className="font-semibold text-[var(--warn-text)] tabular-nums truncate">
+                        {formatNumberIN(officesOverviewTotals.pendingAmount)}
+                      </div>
+                    </div>
+                    <div className="min-w-0 text-right">
+                      <div className="text-[11px] text-[var(--muted)]">Avail</div>
+                      <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
+                        {formatNumberIN(officesOverviewTotals.available)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {officesOverviewRows.map((r) => (
+                  <button
+                    key={r.officeId}
+                    type="button"
+                    onClick={() => setReportOfficeId(r.officeId)}
+                    className="w-full text-left p-3.5 space-y-2 hover:bg-[var(--surface-subtle)]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-[var(--text)] bn">
+                          {r.officeName}
+                        </div>
+                        <div className="text-xs text-[var(--muted)] tabular-nums">{r.officeCode}</div>
+                      </div>
+                      <span className="text-xs font-semibold tabular-nums text-[var(--accent)]">
+                        {r.usedPct}%
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5 text-xs pt-1 border-t border-[var(--line)]/60">
+                      <div>
+                        <div className="text-[11px] text-[var(--muted)]">Alloc</div>
+                        <div className="tabular-nums">{formatNumberIN(r.allocated)}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-[var(--muted)]">Appr</div>
+                        <div className="tabular-nums">{formatNumberIN(r.approvedSpent)}</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px] text-[var(--muted)]">Pend</div>
+                        <div className="tabular-nums text-[var(--warn-text)]">
+                          {formatNumberIN(r.pendingAmount)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[11px] text-[var(--muted)]">Avail</div>
+                        <div className="tabular-nums font-semibold text-[var(--accent)]">
+                          {formatNumberIN(r.available)}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="hidden md:block print:block overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
+                      <th className="py-3 px-4 font-medium">Office</th>
+                      <th className="py-3 px-4 font-medium whitespace-nowrap">Code</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Allocated</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Approved</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Pending</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Available</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Used</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--line)]">
+                    {officesOverviewRows.map((r) => (
+                      <tr
+                        key={r.officeId}
+                        onClick={() => setReportOfficeId(r.officeId)}
+                        className="cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
+                      >
+                        <td className="py-3 px-4 font-medium bn text-[var(--text)]">
+                          {r.officeName}
+                        </td>
+                        <td className="py-3 px-4 text-xs tabular-nums text-[var(--muted)]">
+                          {r.officeCode}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums">
+                          {formatNumberIN(r.allocated)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums">
+                          {formatNumberIN(r.approvedSpent)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums text-[var(--warn-text)]">
+                          {formatNumberIN(r.pendingAmount)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums font-semibold text-[var(--accent)]">
+                          {formatNumberIN(r.available)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums">{r.usedPct}%</td>
+                      </tr>
+                    ))}
+                    <tr className="font-bold bg-[var(--surface-subtle)]">
+                      <td colSpan={2} className="py-3 px-4">
+                        Grand Total ({officesOverviewRows.length} offices)
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums">
+                        {formatNumberIN(officesOverviewTotals.allocated)}
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums">
+                        {formatNumberIN(officesOverviewTotals.approvedSpent)}
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums">
+                        {formatNumberIN(officesOverviewTotals.pendingAmount)}
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums">
+                        {formatNumberIN(officesOverviewTotals.available)}
+                      </td>
+                      <td className="py-3 px-4 text-right tabular-nums">
+                        {officesOverviewTotals.usedPct}%
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : tab === 'allocations' ? (
             <>
               <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
@@ -499,6 +797,9 @@ export function ReportsPage() {
                               <span className="tabular-nums text-[var(--muted)]">
                                 {formatDateDisplay(entry.memoDate)}
                               </span>
+                            </div>
+                            <div className="text-[11px] text-[var(--muted)] bn">
+                              Responsible: {formatActorBrief(entry.createdBy, officesById)}
                             </div>
                             <div className="grid grid-cols-4 gap-1.5">
                               <div className="min-w-0">
@@ -573,6 +874,7 @@ export function ReportsPage() {
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Memo No</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Type</th>
+                      <th className="py-3 px-4 font-medium whitespace-nowrap">Responsible</th>
                       <th className="py-3 px-4 font-medium text-right whitespace-nowrap">
                         Allocated
                       </th>
@@ -591,7 +893,7 @@ export function ReportsPage() {
                     {allocationsGrouped.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className="py-8 px-4 text-center text-sm text-[var(--muted)]"
                         >
                           {t('noDataFound')}
@@ -619,6 +921,9 @@ export function ReportsPage() {
                               <td className="py-2.5 px-4 capitalize text-xs text-[var(--muted)]">
                                 {entry.entryType}
                               </td>
+                              <td className="py-2.5 px-4 text-xs text-[var(--muted)] bn">
+                                {formatActorBrief(entry.createdBy, officesById)}
+                              </td>
                               <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
                                 {formatNumberIN(entry.allocated)}
                               </td>
@@ -639,7 +944,7 @@ export function ReportsPage() {
                             key={`${group.economicCode}_subtotal`}
                             className="bg-[var(--surface-subtle)] font-semibold"
                           >
-                            <td colSpan={4} className="py-2 px-4 text-xs">
+                            <td colSpan={5} className="py-2 px-4 text-xs">
                               Subtotal · {group.economicCode}{' '}
                               <span className="bn">{group.headNameBn || group.headName}</span>
                             </td>
@@ -916,6 +1221,128 @@ export function ReportsPage() {
                   </tbody>
                 </table>
               </div>
+
+              {approvedBills.length > 0 && (
+                <div className="border-t border-[var(--line)]">
+                  <div className="px-4 py-3 bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)]">
+                    Approved Bills Detail ({approvedBills.length})
+                  </div>
+                  <div className="md:hidden print:hidden divide-y divide-[var(--line)]">
+                    {approvedBills.map((b) => {
+                      const head = getHead(b.economicCode, {
+                        headName: b.headName,
+                        headNameBn: b.headNameBn,
+                      });
+                      return (
+                        <div key={b.id} className="p-3.5 space-y-1 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-[var(--text)]">
+                              {b.billNo || 'Draft'}
+                            </span>
+                            <span className="tabular-nums text-[var(--muted)]">
+                              {formatDateDisplay(b.date)}
+                            </span>
+                          </div>
+                          <div className="bn text-[var(--text)]">
+                            <span className="tabular-nums font-medium">{b.economicCode}</span>{' '}
+                            {head.displayName}
+                          </div>
+                          <div className="text-[11px] text-[var(--muted)] bn">
+                            Prepared: {formatActorBrief(b.createdBy, officesById, b.createdByName)}
+                          </div>
+                          {b.approvedBy && (
+                            <div className="text-[11px] text-[var(--accent)] bn">
+                              Approved by: {formatApprovedByLine(b.approvedBy, officesById)}
+                              {b.approvedAt
+                                ? ` (${formatDateDisplay(
+                                    `${b.approvedAt.toDate().getFullYear()}-${String(
+                                      b.approvedAt.toDate().getMonth() + 1
+                                    ).padStart(2, '0')}-${String(
+                                      b.approvedAt.toDate().getDate()
+                                    ).padStart(2, '0')}`
+                                  )})`
+                                : ''}
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[var(--muted)]">
+                              Gross {formatNumberIN(b.grossAmount)}
+                            </span>
+                            <span className="font-semibold text-[var(--accent)] tabular-nums">
+                              Net {formatNumberIN(b.netPayable)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="hidden md:block print:block overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                          <th className="py-2.5 px-4 font-medium whitespace-nowrap">Bill No</th>
+                          <th className="py-2.5 px-4 font-medium whitespace-nowrap">Date</th>
+                          <th className="py-2.5 px-4 font-medium">ব্যয়ের খাত</th>
+                          <th className="py-2.5 px-4 font-medium">Responsible</th>
+                          <th className="py-2.5 px-4 font-medium">Approved By</th>
+                          <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">
+                            Gross
+                          </th>
+                          <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">
+                            Net Paid
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--line)]">
+                        {approvedBills.map((b) => {
+                          const head = getHead(b.economicCode, {
+                            headName: b.headName,
+                            headNameBn: b.headNameBn,
+                          });
+                          return (
+                            <tr key={b.id}>
+                              <td className="py-2.5 px-4 font-medium whitespace-nowrap">
+                                {b.billNo || 'Draft'}
+                              </td>
+                              <td className="py-2.5 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                                {formatDateDisplay(b.date)}
+                              </td>
+                              <td className="py-2.5 px-4">
+                                <span className="tabular-nums font-medium">{b.economicCode}</span>{' '}
+                                <span className="bn">{head.displayName}</span>
+                              </td>
+                              <td className="py-2.5 px-4 bn text-[var(--muted)]">
+                                {formatActorBrief(b.createdBy, officesById, b.createdByName)}
+                              </td>
+                              <td className="py-2.5 px-4 bn text-[var(--accent)]">
+                                {b.approvedBy
+                                  ? `${formatApprovedByLine(b.approvedBy, officesById)}${
+                                      b.approvedAt
+                                        ? ` (${formatDateDisplay(
+                                            `${b.approvedAt.toDate().getFullYear()}-${String(
+                                              b.approvedAt.toDate().getMonth() + 1
+                                            ).padStart(2, '0')}-${String(
+                                              b.approvedAt.toDate().getDate()
+                                            ).padStart(2, '0')}`
+                                          )})`
+                                        : ''
+                                    }`
+                                  : '—'}
+                              </td>
+                              <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                {formatNumberIN(b.grossAmount)}
+                              </td>
+                              <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
+                                {formatNumberIN(b.netPayable)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           ) : tab === 'expenseItems' ? (
             <>

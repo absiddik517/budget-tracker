@@ -25,10 +25,11 @@ import { ActivityList } from '../components/ActivityList';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
+import { formatActorBrief, formatApprovedByLine, getActorUid } from '../lib/actor';
 import {
   buildTr21FormData,
   buildTr21IntroText,
@@ -40,8 +41,10 @@ import { formatDateDisplay } from '../lib/dates';
 import {
   approveBillTx,
   cancelApprovedBillTx,
+  correctApprovedBillTx,
   deleteDraftBill,
   rejectBillTx,
+  softDeleteApprovedBillTx,
   submitBillTx,
   updateDraftBillRates,
 } from '../lib/firestoreOps';
@@ -54,7 +57,11 @@ import {
   fromPaisa,
   toPaisa,
 } from '../lib/money';
-import { canApproveRejectCancelBill } from '../lib/permissions';
+import {
+  canApproveRejectCancelBill,
+  canCreateDraftBill,
+  canEditDeleteApprovedSpending,
+} from '../lib/permissions';
 import {
   DEFAULT_IT_CODE,
   DEFAULT_NET_PAYABLE_CODE,
@@ -83,14 +90,58 @@ function billStatusToChip(status: BillStatus): ChipVariant {
 }
 
 export function BillsPage() {
-  const { userDoc } = useAuth();
-  const { selectedFy, officeSettings, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    officeSettings,
+    currentOfficeId,
+    currentOfficeRole,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    actorSnapshot,
+    officesById,
+    pushToast,
+    t,
+  } = useApp();
   const { budgets, bills, vatTaxRates, spendingLimits, fyCodeTotals, loading } =
     useFyData(selectedFy);
   const { getHead } = useEconomicCodes();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const isDdo = userDoc ? canApproveRejectCancelBill(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const permCtx = { isSuperAdmin, officeRole: currentOfficeRole };
+  const isDdo =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canApproveRejectCancelBill(permCtx);
+  const canDraftBill =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canCreateDraftBill(permCtx);
+  const canSuperCorrect =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canEditDeleteApprovedSpending(permCtx);
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
+
+  const canModifyDraft = (bill: BillDoc) =>
+    !isSuperAdmin &&
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    bill.status === 'draft' &&
+    (isDdo || !bill.createdBy || getActorUid(bill.createdBy) === userDoc?.id);
 
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -173,6 +224,10 @@ export function BillsPage() {
   const [reasonMode, setReasonMode] = useState<'reject' | 'cancel' | null>(null);
   const [reasonText, setReasonText] = useState('');
 
+  // Super Admin audited correction state on approved bills
+  const [superCorrectMode, setSuperCorrectMode] = useState<'edit' | 'delete' | null>(null);
+  const [superReason, setSuperReason] = useState('');
+
   // Export state
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
@@ -181,6 +236,8 @@ export function BillsPage() {
     if (!selectedBill) {
       setReasonMode(null);
       setReasonText('');
+      setSuperCorrectMode(null);
+      setSuperReason('');
       return;
     }
     setEditDraftDate(selectedBill.date);
@@ -218,6 +275,8 @@ export function BillsPage() {
     );
     setReasonMode(null);
     setReasonText('');
+    setSuperCorrectMode(null);
+    setSuperReason('');
   }, [
     selectedBill,
     officeSettings.defaultPayeeText,
@@ -379,7 +438,11 @@ export function BillsPage() {
   // Live availability check for draft/submitted selected bill
   const selectedBillAvailability = useMemo(() => {
     if (!selectedBill) return null;
-    const fyTotal = fyCodeTotals.find((f) => f.economicCode === selectedBill.economicCode);
+    const fyTotal = fyCodeTotals.find(
+      (f) =>
+        f.economicCode === selectedBill.economicCode &&
+        (!realOfficeId || !f.officeId || f.officeId === realOfficeId)
+    );
     const effectiveGross =
       selectedBill.status === 'draft' && previewDraftRate && !previewDraftRate.rateError
         ? previewDraftRate.grossAmount
@@ -394,7 +457,7 @@ export function BillsPage() {
       gross: effectiveGross,
       excludePendingAmount: selectedBill.status === 'submitted' ? selectedBill.grossAmount : 0,
     });
-  }, [selectedBill, previewDraftRate, fyCodeTotals, budgets, spendingLimits]);
+  }, [selectedBill, previewDraftRate, fyCodeTotals, realOfficeId, budgets, spendingLimits]);
 
   const handleDirectTr21Output = async (
     bill: BillDoc,
@@ -440,7 +503,15 @@ export function BillsPage() {
   };
 
   const handleSaveDraftRates = async () => {
-    if (!userDoc || !selectedBill || selectedBill.status !== 'draft' || !selectedBillRates) return;
+    if (
+      !userDoc ||
+      !effectiveActor ||
+      !selectedBill ||
+      !canModifyDraft(selectedBill) ||
+      !selectedBillRates
+    ) {
+      return;
+    }
     if (previewDraftRate?.rateError) {
       pushToast('error', previewDraftRate.rateError);
       return;
@@ -474,7 +545,7 @@ export function BillsPage() {
           supplier: supplierPayload,
           deductions: editDeductions,
         },
-        { uid: userDoc.id, name: userDoc.name }
+        effectiveActor
       );
       pushToast('success', 'খসড়া বিল ও টি.আর. ২১ তথ্য হালনাগাদ হয়েছে।');
     } catch (err) {
@@ -484,11 +555,108 @@ export function BillsPage() {
     }
   };
 
-  const handleDeleteDraft = async (bill: BillDoc) => {
-    if (!userDoc || bill.status !== 'draft') return;
+  const handleSaveSuperCorrection = async () => {
+    if (
+      !userDoc ||
+      !effectiveActor ||
+      !canSuperCorrect ||
+      !selectedBill ||
+      selectedBill.status !== 'approved' ||
+      !selectedBillRates
+    ) {
+      return;
+    }
+    if (!isOnline) {
+      pushToast('error', 'অনুমোদিত বিল সংশোধন করতে ইন্টারনেট সংযোগ প্রয়োজন।');
+      return;
+    }
+    if (!superReason.trim()) {
+      pushToast('error', 'সংশোধনের কারণ উল্লেখ করা আবশ্যক।');
+      return;
+    }
+    if (previewDraftRate?.rateError) {
+      pushToast('error', previewDraftRate.rateError);
+      return;
+    }
+    const variant =
+      selectedBillRates.vat.find((v) => v.key === editDraftVariantKey) || selectedBillRates.vat[0];
+    setSavingDraftEdit(true);
+    try {
+      const supplierPayload =
+        editSupplierName.trim() || editSupplierAddress.trim() || editSupplierTinBin.trim()
+          ? {
+              name: editSupplierName.trim(),
+              address: editSupplierAddress.trim(),
+              tinBin: editSupplierTinBin.trim(),
+            }
+          : null;
+
+      await correctApprovedBillTx(
+        selectedBill.id,
+        {
+          date: editDraftDate,
+          billDate: editDraftDate,
+          vatVariant: variant.key,
+          vatVariantLabel: variant.label,
+          vatRate: variant.rate,
+          itRate: selectedBillRates.incomeTax,
+          tokenNo: editTokenNo.trim(),
+          purposeText: editPurposeText.trim(),
+          payeeText: editPayeeText.trim(),
+          netPayableCode: editNetPayableCode.trim() || DEFAULT_NET_PAYABLE_CODE,
+          supplier: supplierPayload,
+          deductions: editDeductions,
+          correctionReason: superReason.trim(),
+        },
+        effectiveActor
+      );
+      pushToast('success', `বিল ${selectedBill.billNo || ''} অডিটেড সংশোধিত হয়েছে।`);
+      setSuperCorrectMode(null);
+      setSuperReason('');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'সংশোধন ব্যর্থ হয়েছে।');
+    } finally {
+      setSavingDraftEdit(false);
+    }
+  };
+
+  const handleConfirmSuperDelete = async () => {
+    if (
+      !userDoc ||
+      !effectiveActor ||
+      !canSuperCorrect ||
+      !selectedBill ||
+      selectedBill.status !== 'approved'
+    ) {
+      return;
+    }
+    if (!isOnline) {
+      pushToast('error', 'অনুমোদিত বিল মুছে ফেলতে ইন্টারনেট সংযোগ প্রয়োজন।');
+      return;
+    }
+    if (!superReason.trim()) {
+      pushToast('error', 'কারণ উল্লেখ করা আবশ্যক।');
+      return;
+    }
     setActing(true);
     try {
-      await deleteDraftBill(bill, { uid: userDoc.id, name: userDoc.name });
+      await softDeleteApprovedBillTx(selectedBill.id, superReason.trim(), effectiveActor);
+      pushToast('success', `অনুমোদিত বিল ${selectedBill.billNo || ''} অডিটেড মুছে ফেলা হয়েছে।`);
+      setSuperCorrectMode(null);
+      setSuperReason('');
+      setSelectedBillId(null);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'মুছে ফেলা ব্যর্থ হয়েছে।');
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const handleDeleteDraft = async (bill: BillDoc) => {
+    if (!userDoc || !effectiveActor || !canModifyDraft(bill)) return;
+    setActing(true);
+    try {
+      await deleteDraftBill(bill, effectiveActor);
       pushToast('success', 'খসড়া বিল মুছে ফেলা হয়েছে; খরচ আইটেম তালিকায় ফিরে গেছে।');
       setSelectedBillId(null);
     } catch (err) {
@@ -499,14 +667,14 @@ export function BillsPage() {
   };
 
   const handleSubmitDraft = async (bill: BillDoc) => {
-    if (!userDoc || bill.status !== 'draft') return;
+    if (!userDoc || !effectiveActor || !canModifyDraft(bill)) return;
     if (!isOnline) {
       pushToast('error', 'বিল জমা দিতে ইন্টারনেট সংযোগ প্রয়োজন।');
       return;
     }
     setActing(true);
     try {
-      const res = await submitBillTx(bill.id, { uid: userDoc.id, name: userDoc.name });
+      const res = await submitBillTx(bill.id, effectiveActor);
       pushToast('success', `বিল নং ${res.billNo} অনুমোদনের জন্য জমা হয়েছে।`);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'বিল জমা দেওয়া যায়নি।');
@@ -516,14 +684,14 @@ export function BillsPage() {
   };
 
   const handleApproveBill = async (bill: BillDoc) => {
-    if (!userDoc || !isDdo || bill.status !== 'submitted') return;
+    if (!userDoc || !effectiveActor || !isDdo || bill.status !== 'submitted') return;
     if (!isOnline) {
       pushToast('error', 'বিল অনুমোদন করতে ইন্টারনেট সংযোগ প্রয়োজন।');
       return;
     }
     setActing(true);
     try {
-      await approveBillTx(bill.id, { uid: userDoc.id, name: userDoc.name });
+      await approveBillTx(bill.id, effectiveActor);
       pushToast('success', `বিল নং ${bill.billNo} অনুমোদিত হয়েছে ও বাজেট থেকে কর্তন হয়েছে।`);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'বিল অনুমোদন করা যায়নি।');
@@ -533,7 +701,7 @@ export function BillsPage() {
   };
 
   const handleConfirmReasonAction = async () => {
-    if (!userDoc || !isDdo || !selectedBill || !reasonMode) return;
+    if (!userDoc || !effectiveActor || !isDdo || !selectedBill || !reasonMode) return;
     if (!isOnline) {
       pushToast('error', 'এই কাজটি করতে ইন্টারনেট সংযোগ প্রয়োজন।');
       return;
@@ -545,16 +713,10 @@ export function BillsPage() {
     setActing(true);
     try {
       if (reasonMode === 'reject') {
-        await rejectBillTx(selectedBill.id, reasonText, {
-          uid: userDoc.id,
-          name: userDoc.name,
-        });
+        await rejectBillTx(selectedBill.id, reasonText, effectiveActor);
         pushToast('success', `বিল ${selectedBill.billNo} প্রত্যাখ্যাত হয়েছে; আইটেম তালিকায় ফিরে গেছে।`);
       } else {
-        await cancelApprovedBillTx(selectedBill.id, reasonText, {
-          uid: userDoc.id,
-          name: userDoc.name,
-        });
+        await cancelApprovedBillTx(selectedBill.id, reasonText, effectiveActor);
         pushToast(
           'success',
           `অনুমোদিত বিল ${selectedBill.billNo} বাতিল হয়েছে; বাজেট ফেরত যোগ হয়েছে।`
@@ -578,6 +740,7 @@ export function BillsPage() {
         selectedFy,
         officeName: officeSettings.officeName,
         officeAddress: officeSettings.address,
+        officesById,
         selectedCode: codeFilter,
         statusFilter,
         getHead,
@@ -605,6 +768,8 @@ export function BillsPage() {
           Date: formatDateDisplay(b.date),
           'Economic Code': b.economicCode,
           'ব্যয়ের খাত': head.displayName,
+          প্রস্তুতকারী: formatActorBrief(b.createdBy, officesById, b.createdByName),
+          অনুমোদনকারী: b.approvedBy ? formatApprovedByLine(b.approvedBy, officesById) : '',
           'Items Count': b.items.length,
           'Gross (BDT)': fromPaisa(b.grossAmount),
           'VAT %': b.vatRate,
@@ -663,20 +828,42 @@ export function BillsPage() {
         <FileSpreadsheet className="w-4 h-4 shrink-0" />
         <span className="hidden sm:inline">{exportingExcel ? 'Excel…' : 'Excel'}</span>
       </button>
-      <Link
-        to="/expense-items"
-        className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
-      >
-        <Plus className="w-4 h-4 shrink-0" />
-        <span>খরচ থেকে বিল</span>
-      </Link>
+      {canDraftBill && (
+        <Link
+          to="/expense-items"
+          className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
+        >
+          <Plus className="w-4 h-4 shrink-0" />
+          <span>খরচ থেকে বিল</span>
+        </Link>
+      )}
     </div>
   );
 
+  if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
+    return (
+      <Layout title={t('navBills')}>
+        <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto">
+          <h2 className="text-base font-bold text-[var(--text)]">একটি অফিস নির্বাচন করুন</h2>
+          <p className="text-xs sm:text-sm text-[var(--muted)]">
+            {isSuperAdmin
+              ? 'বিলসমূহ দেখতে, প্রিন্ট/এক্সপোর্ট করতে অথবা অনুমোদিত বিল সংশোধন করতে উপরের অফিস সুইচার থেকে একটি নির্দিষ্ট অফিস নির্বাচন করুন।'
+              : 'আপনার জন্য কোনো সক্রিয় অফিস নির্ধারিত নেই। অনুগ্রহ করে সুপার অ্যাডমিন বা দপ্তর প্রধানের সাথে যোগাযোগ করুন।'}
+          </p>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout title={t('navBills')} actions={actions}>
       <div className="space-y-3.5 md:space-y-4">
+        {isLegacyPreMigration && (
+          <div className="px-3.5 py-2.5 rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium">
+            মাল্টি-অফিস মাইগ্রেশন সম্পন্ন হয়নি। বিল অনুমোদন বা নতুন বিল তৈরি করতে সুপার অ্যাডমিন সেটিংস থেকে &ldquo;Migrate to multi-office&rdquo; চালান।
+          </div>
+        )}
+
         {!isOnline && (
           <div className="px-3.5 py-2.5 rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
@@ -790,6 +977,10 @@ export function BillsPage() {
                         <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
                           <span className="tabular-nums font-semibold">{b.economicCode}</span>{' '}
                           <span className="bn">{head.displayName}</span>
+                        </div>
+                        <div className="text-[11px] text-[var(--muted)] mt-1 truncate">
+                          প্রস্তুত: {formatActorBrief(b.createdBy, officesById, b.createdByName)}
+                          {b.approvedBy && ` · অনুমোদন: ${formatApprovedByLine(b.approvedBy, officesById)}`}
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -916,6 +1107,10 @@ export function BillsPage() {
                             <span className="tabular-nums">{b.economicCode}</span>{' '}
                             <span className="bn">{head.displayName}</span>
                           </div>
+                          <div className="text-[11px] text-[var(--muted)] mt-0.5 truncate max-w-[260px]">
+                            প্রস্তুত: {formatActorBrief(b.createdBy, officesById, b.createdByName)}
+                            {b.approvedBy && ` · ✓ ${formatApprovedByLine(b.approvedBy, officesById)}`}
+                          </div>
                         </td>
                         <td className="py-3 px-4 text-right tabular-nums">{b.items.length}</td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
@@ -1023,9 +1218,29 @@ export function BillsPage() {
                     }
                   </span>
                 </div>
-                {selectedBill.createdByName && (
+                {(selectedBill.createdBy || selectedBill.createdByName) && (
                   <div className="text-xs text-[var(--muted)] mt-1">
-                    প্রস্তুতকারী: {selectedBill.createdByName}
+                    প্রস্তুতকারী: {formatActorBrief(selectedBill.createdBy, officesById, selectedBill.createdByName)}
+                  </div>
+                )}
+                {selectedBill.submittedBy && (
+                  <div className="text-xs text-[var(--muted)] mt-0.5">
+                    জমাদানকারী: {formatActorBrief(selectedBill.submittedBy, officesById)}
+                  </div>
+                )}
+                {selectedBill.approvedBy && (
+                  <div className="text-xs text-[var(--accent)] font-medium mt-0.5">
+                    অনুমোদনকারী: {formatApprovedByLine(selectedBill.approvedBy, officesById)}
+                  </div>
+                )}
+                {selectedBill.rejectedBy && (
+                  <div className="text-xs text-[var(--danger-text)] mt-0.5">
+                    প্রত্যাখ্যানকারী: {formatActorBrief(selectedBill.rejectedBy, officesById)}
+                  </div>
+                )}
+                {selectedBill.cancelledBy && (
+                  <div className="text-xs text-[var(--muted)] mt-0.5">
+                    বাতিলকারী: {formatActorBrief(selectedBill.cancelledBy, officesById)}
                   </div>
                 )}
               </div>
@@ -1120,11 +1335,25 @@ export function BillsPage() {
               </div>
             </div>
 
-            {/* Draft Edit VAT Variant, TR 21 Metadata & Custom Deductions */}
-            {selectedBill.status === 'draft' && selectedBillRates && (
+            {/* Draft Edit (authorized draft owner/DDO) OR Super Admin Audited Edit on Approved Bill */}
+            {((selectedBill.status === 'draft' && canModifyDraft(selectedBill)) ||
+              (selectedBill.status === 'approved' && canSuperCorrect && superCorrectMode === 'edit')) &&
+              selectedBillRates && (
               <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] space-y-3">
-                <div className="text-xs font-semibold text-[var(--text)]">
-                  খসড়া বিল সম্পাদনা (তারিখ, ভ্যাট/কর্তন ও টি.আর. ২১ তথ্য)
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-[var(--text)]">
+                    {selectedBill.status === 'approved'
+                      ? 'সুপার অ্যাডমিন অডিটেড সংশোধন (অনুমোদিত বিল)'
+                      : 'খসড়া বিল সম্পাদনা (তারিখ, ভ্যাট/কর্তন ও টি.আর. ২১ তথ্য)'}
+                  </div>
+                  {selectedBill.status === 'draft' &&
+                    isDdo &&
+                    selectedBill.createdBy &&
+                    getActorUid(selectedBill.createdBy) !== userDoc?.id && (
+                      <span className="px-2 py-0.5 rounded bg-[var(--warn-bg)] text-[var(--warn-text)] text-[11px] font-medium">
+                        DDO হিসেবে অন্য কর্মচারীর খসড়া সম্পাদনা করছেন
+                      </span>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1450,16 +1679,69 @@ export function BillsPage() {
                   </div>
                 )}
 
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={savingDraftEdit || Boolean(previewDraftRate?.rateError)}
-                    onClick={handleSaveDraftRates}
-                    className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-semibold hover:bg-[var(--bg)] disabled:opacity-60"
-                  >
-                    {savingDraftEdit ? 'সংরক্ষণ হচ্ছে…' : 'হার ও ফর্ম তথ্য সংরক্ষণ করুন'}
-                  </button>
-                </div>
+                {selectedBill.status === 'approved' && superCorrectMode === 'edit' ? (
+                  <div className="space-y-2.5 pt-1 border-t border-[var(--line)]">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--text)] mb-1">
+                        সংশোধনের কারণ (অডিট লগে সংরক্ষিত হবে · বাধ্যতামূলক)
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={superReason}
+                        onChange={(e) => setSuperReason(e.target.value)}
+                        placeholder="কেন অনুমোদিত বিলটি সংশোধন করা হচ্ছে তা লিখুন…"
+                        className="w-full p-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs bn"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSuperCorrectMode(null);
+                          setSuperReason('');
+                        }}
+                        className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium"
+                      >
+                        {t('cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          savingDraftEdit ||
+                          !isOnline ||
+                          !superReason.trim() ||
+                          Boolean(previewDraftRate?.rateError)
+                        }
+                        onClick={handleSaveSuperCorrection}
+                        className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold disabled:opacity-60"
+                      >
+                        {savingDraftEdit ? 'সংশোধন সংরক্ষণ হচ্ছে…' : 'সংশোধন সংরক্ষণ করুন'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={savingDraftEdit || Boolean(previewDraftRate?.rateError)}
+                      onClick={handleSaveDraftRates}
+                      className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-semibold hover:bg-[var(--bg)] disabled:opacity-60"
+                    >
+                      {savingDraftEdit ? 'সংরক্ষণ হচ্ছে…' : 'হার ও ফর্ম তথ্য সংরক্ষণ করুন'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedBill.status === 'draft' && !canModifyDraft(selectedBill) && (
+              <div className="p-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] text-xs text-[var(--muted)] flex items-center gap-2">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>
+                  {isSuperAdmin
+                    ? 'সুপার অ্যাডমিন খসড়া বিল সম্পাদনা বা জমা দেন না (শুধু দেখতে পারবেন)।'
+                    : 'শুধুমাত্র এই খসড়া বিলের প্রস্তুতকারী অথবা দপ্তরের DDO এটি সম্পাদনা বা জমা দিতে পারবেন।'}
+                </span>
               </div>
             )}
 
@@ -1606,9 +1888,48 @@ export function BillsPage() {
               </div>
             )}
 
+            {/* Super Admin Audited Soft Delete Confirmation on Approved Bill */}
+            {selectedBill.status === 'approved' && canSuperCorrect && superCorrectMode === 'delete' && (
+              <div className="p-3.5 rounded-xl border border-[var(--danger-text)]/40 bg-[var(--danger-bg)]/30 space-y-2.5">
+                <label className="block text-xs font-semibold text-[var(--danger-text)]">
+                  সুপার অ্যাডমিন অডিটেড বিল মুছে ফেলা — কারণ লিখুন (বাধ্যতামূলক)
+                </label>
+                <p className="text-[11px] text-[var(--muted)]">
+                  বিলটি মুছে ফেলা হলে বাজেটের ব্যয়িত অর্থ ফেরত আসবে, অন্তর্ভুক্ত খরচ আইটেমগুলো তালিকাভুক্ত অবস্থায় ফিরে যাবে এবং অডিট লগে রেকর্ড থাকবে।
+                </p>
+                <textarea
+                  rows={2}
+                  value={superReason}
+                  onChange={(e) => setSuperReason(e.target.value)}
+                  placeholder="মুছে ফেলার সুনির্দিষ্ট কারণ লিখুন…"
+                  className="w-full p-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs bn"
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSuperCorrectMode(null);
+                      setSuperReason('');
+                    }}
+                    className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium"
+                  >
+                    {t('cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={acting || !superReason.trim() || !isOnline}
+                    onClick={handleConfirmSuperDelete}
+                    className="min-h-[40px] px-4 rounded-lg bg-[var(--danger-text)] text-white text-xs font-semibold disabled:opacity-60"
+                  >
+                    {acting ? 'মুছে ফেলা হচ্ছে…' : 'অডিটেড মুছুন নিশ্চিত করুন'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--line)]">
-              {selectedBill.status === 'draft' && (
+              {selectedBill.status === 'draft' && canModifyDraft(selectedBill) && (
                 <>
                   <button
                     type="button"
@@ -1656,7 +1977,7 @@ export function BillsPage() {
                   ) : (
                     <div className="w-full p-2.5 rounded-lg bg-[var(--surface-subtle)] text-xs text-[var(--muted)] flex items-center gap-2">
                       <Lock className="w-4 h-4 shrink-0" />
-                      <span>শুধুমাত্র DDO এই বিলটি অনুমোদন বা প্রত্যাখ্যান করতে পারবেন।</span>
+                      <span>শুধুমাত্র এই অফিসের DDO এই বিলটি অনুমোদন বা প্রত্যাখ্যান করতে পারবেন।</span>
                     </div>
                   )}
                 </>
@@ -1668,16 +1989,44 @@ export function BillsPage() {
                     <Lock className="w-3.5 h-3.5" />
                     <span>অনুমোদিত বিল অপরিবর্তনীয় (Immutable)</span>
                   </div>
-                  {isDdo && !reasonMode && (
-                    <button
-                      type="button"
-                      disabled={acting || !isOnline}
-                      onClick={() => setReasonMode('cancel')}
-                      className="min-h-[44px] px-4 rounded-lg border border-[var(--danger-text)]/50 text-[var(--danger-text)] text-xs font-semibold hover:bg-[var(--danger-bg)]/40 disabled:opacity-60"
-                    >
-                      {t('cancelBill')}
-                    </button>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isDdo && !reasonMode && (
+                      <button
+                        type="button"
+                        disabled={acting || !isOnline}
+                        onClick={() => setReasonMode('cancel')}
+                        className="min-h-[44px] px-4 rounded-lg border border-[var(--danger-text)]/50 text-[var(--danger-text)] text-xs font-semibold hover:bg-[var(--danger-bg)]/40 disabled:opacity-60"
+                      >
+                        {t('cancelBill')}
+                      </button>
+                    )}
+                    {canSuperCorrect && !superCorrectMode && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={acting || !isOnline}
+                          onClick={() => {
+                            setSuperReason('');
+                            setSuperCorrectMode('edit');
+                          }}
+                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--accent)] text-[var(--accent)] text-xs font-semibold hover:bg-[var(--accent-soft)] disabled:opacity-60"
+                        >
+                          সুপার অ্যাডমিন সংশোধন
+                        </button>
+                        <button
+                          type="button"
+                          disabled={acting || !isOnline}
+                          onClick={() => {
+                            setSuperReason('');
+                            setSuperCorrectMode('delete');
+                          }}
+                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--danger-text)]/50 text-[var(--danger-text)] text-xs font-semibold hover:bg-[var(--danger-bg)]/40 disabled:opacity-60"
+                        >
+                          অডিটেড মুছুন
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

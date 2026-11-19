@@ -1,54 +1,100 @@
-import type { Role } from '../types';
+import type { OfficeRole, Role } from '../types';
 
-export function canCreateExpenseItems(role: Role): boolean {
-  return role === 'employee' || role === 'ddo' || role === 'superAdmin';
+export interface PermissionContext {
+  isSuperAdmin: boolean;
+  officeRole: OfficeRole | null;
 }
 
-export function canCreateDraftBill(role: Role): boolean {
-  return role === 'employee' || role === 'ddo' || role === 'superAdmin';
+function normalizeCtx(roleOrCtx: Role | PermissionContext | null | undefined): PermissionContext {
+  if (!roleOrCtx) return { isSuperAdmin: false, officeRole: null };
+  if (typeof roleOrCtx === 'string') {
+    if (roleOrCtx === 'superAdmin') return { isSuperAdmin: true, officeRole: null };
+    return { isSuperAdmin: false, officeRole: roleOrCtx };
+  }
+  return roleOrCtx;
 }
 
-export function canApproveRejectCancelBill(role: Role): boolean {
-  return role === 'ddo';
+// --- Multi-office & Role matrix (Section 3) ---
+
+export function canManageOffices(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
 }
 
-export function canCreateDraftSpending(role: Role): boolean {
-  return canCreateDraftBill(role);
+export function canEditOfficeBasic(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return ctx.isSuperAdmin || ctx.officeRole === 'ddo';
 }
 
-export function canApproveRejectVoid(role: Role): boolean {
-  return canApproveRejectCancelBill(role);
+export function canManageAllPostings(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
 }
 
-export function canEditDeleteApprovedSpending(role: Role): boolean {
-  return role === 'superAdmin';
+export function canManageOfficeStaff(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return ctx.isSuperAdmin || ctx.officeRole === 'ddo';
 }
 
-export function canCreateBudgets(role: Role): boolean {
-  return role === 'ddo' || role === 'superAdmin';
+export function canCreateBudgets(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  // Super Admin does NOT run day-to-day budgets; only office DDO creates budgets & revisions
+  return !ctx.isSuperAdmin && ctx.officeRole === 'ddo';
 }
 
-export function canEditDeleteBudgets(role: Role): boolean {
-  return role === 'superAdmin';
+export function canMarkBudgetExecuted(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return !ctx.isSuperAdmin && ctx.officeRole === 'ddo';
 }
 
-export function canMarkBudgetExecuted(role: Role): boolean {
-  return role === 'ddo' || role === 'superAdmin';
+export function canCorrectApprovedRecords(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
 }
 
-export function canManageRates(role: Role): boolean {
-  return role === 'ddo' || role === 'superAdmin';
+export function canEditDeleteBudgets(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
 }
 
-export function canManageLimits(role: Role): boolean {
-  return role === 'ddo' || role === 'superAdmin';
+export function canCreateExpenseItems(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return !ctx.isSuperAdmin && (ctx.officeRole === 'ddo' || ctx.officeRole === 'employee');
 }
 
-export function canManageUsersSettings(role: Role): boolean {
-  return role === 'superAdmin';
+export function canCreateDraftBill(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return !ctx.isSuperAdmin && (ctx.officeRole === 'ddo' || ctx.officeRole === 'employee');
 }
 
-export function formatRoleLabel(role: Role): string {
+export function canApproveRejectCancelBill(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return !ctx.isSuperAdmin && ctx.officeRole === 'ddo';
+}
+
+export function canEditDeleteApprovedSpending(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
+}
+
+export function canCreateDraftSpending(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return canCreateDraftBill(roleOrCtx);
+}
+
+export function canApproveRejectVoid(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return canApproveRejectCancelBill(roleOrCtx);
+}
+
+export function canManageLimits(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  const ctx = normalizeCtx(roleOrCtx);
+  return ctx.isSuperAdmin || ctx.officeRole === 'ddo';
+}
+
+export function canManageRates(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  // Global Economic Codes and VAT/Tax Rates: Super Admin only
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
+}
+
+export function canManageUsersSettings(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
+  return normalizeCtx(roleOrCtx).isSuperAdmin;
+}
+
+export function formatRoleLabel(role: Role | null | undefined): string {
   switch (role) {
     case 'superAdmin':
       return 'Super Admin';
@@ -56,5 +102,7 @@ export function formatRoleLabel(role: Role): string {
       return 'DDO';
     case 'employee':
       return 'Employee';
+    default:
+      return '—';
   }
 }

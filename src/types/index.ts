@@ -1,15 +1,65 @@
 import { Timestamp } from 'firebase/firestore';
 
-export type Role = 'superAdmin' | 'ddo' | 'employee';
+export type OfficeRole = 'ddo' | 'employee';
+export type Role = 'superAdmin' | OfficeRole;
+export type GlobalRole = 'superAdmin' | null;
+export type PostingKind = 'regular' | 'additionalCharge';
+export type WorkHistoryStatus = 'active' | 'ended';
+export type WorkHistoryEndReason =
+  | 'transferred'
+  | 'charge withdrawn'
+  | 'retired'
+  | 'relieved'
+  | 'other';
+export type OfficeStatus = 'active' | 'inactive';
 export type UserStatus = 'invited' | 'active' | 'disabled';
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type LanguageCode = 'en' | 'bn';
 
+export interface ActorSnapshot {
+  uid: string;
+  name: string;
+  designation: string;
+  officeId: string | null;
+  role: Role;
+  kind: PostingKind | null;
+  workHistoryId: string | null;
+}
+
+export type ActorRef = ActorSnapshot | string;
+
 export interface BaseAuditFields {
   createdAt?: Timestamp | null;
-  createdBy?: string;
+  createdBy?: ActorRef;
   updatedAt?: Timestamp | null;
-  updatedBy?: string;
+  updatedBy?: ActorRef;
+}
+
+export interface OfficeDoc extends BaseAuditFields {
+  id: string;
+  name: string;
+  nameBn: string;
+  code: string;
+  address: string;
+  status: OfficeStatus;
+  activeFiscalYear: string;
+  fiscalYears: string[];
+  language?: LanguageCode;
+  ministryName?: string;
+  officeMobileNo?: string;
+  institutionalCode?: string;
+  defaultPayeeText?: string;
+  placeName?: string;
+  defaultNetPayableCode?: string;
+  defaultItCode?: string;
+  defaultVatCode?: string;
+  defaultSecurityCode?: string;
+  tr21FooterText?: string;
+  tr21FontFamily?: string;
+  tr21FontSize?: number;
+  tr21P1S3Mode?: Tr21P1S3Mode;
+  tr21VoucherLabel?: string;
+  tr21Clauses?: CertificationClause[];
 }
 
 export interface UserDoc extends BaseAuditFields {
@@ -17,18 +67,51 @@ export interface UserDoc extends BaseAuditFields {
   name: string;
   designation: string;
   email: string;
-  role: Role;
+  phone?: string;
   status: UserStatus;
+  globalRole: GlobalRole;
+  homeOfficeId: string | null;
+  access: Record<string, OfficeRole>;
+  officeIds?: string[];
+  /** Legacy pre-migration single role; removed during migration */
+  role?: Role;
   lastActiveAt?: Timestamp | null;
+}
+
+export interface WorkHistoryDoc extends BaseAuditFields {
+  id: string;
+  userId: string;
+  userName: string;
+  officeId: string;
+  officeName?: string;
+  role: OfficeRole;
+  kind: PostingKind;
+  designation: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string | null;
+  status: WorkHistoryStatus;
+  orderNo: string;
+  orderDate: string;
+  endReason: WorkHistoryEndReason | null;
+  assignedBy: {
+    uid: string;
+    name: string;
+  };
+  remarks: string;
 }
 
 export interface InviteDoc extends BaseAuditFields {
   id: string; // emailLowercase
   email: string;
   name?: string;
-  role: Role;
+  phone?: string;
+  officeId: string;
+  role: OfficeRole;
+  kind: PostingKind;
   designation: string;
-  invitedBy: string;
+  orderNo?: string;
+  orderDate?: string;
+  invitedBy: ActorRef;
 }
 
 export type Tr21P1S3Mode = 'voucher' | 'items';
@@ -42,7 +125,10 @@ export interface CertificationClause {
 }
 
 export interface OfficeSettings extends BaseAuditFields {
+  officeId?: string;
   officeName: string;
+  officeNameBn?: string;
+  officeCode?: string;
   address: string;
   activeFiscalYear: string;
   fiscalYears: string[];
@@ -101,6 +187,7 @@ export type BudgetStatus = 'active' | 'executed';
 
 export interface BudgetDoc extends BaseAuditFields {
   id: string;
+  officeId: string;
   fiscalYear: string;
   memoNo: string;
   memoDate: string; // YYYY-MM-DD
@@ -129,6 +216,7 @@ export type ExpenseItemStatus = 'listed' | 'billed';
 
 export interface ExpenseItemDoc extends BaseAuditFields {
   id: string;
+  officeId: string;
   fiscalYear: string;
   economicCode: string;
   headName: string;
@@ -175,7 +263,8 @@ export interface BillSupplierInfo {
 
 export interface BillDoc extends BaseAuditFields {
   id: string;
-  billNo: string; // sequential per FY on submit e.g. "2025-26/001"
+  officeId: string;
+  billNo: string; // sequential per office+FY on submit e.g. "2025-26/001"
   fiscalYear: string;
   economicCode: string;
   headName: string;
@@ -203,11 +292,13 @@ export interface BillDoc extends BaseAuditFields {
   netPayable: number; // integer paisa (grossAmount - totalDeduction)
   status: BillStatus;
   submittedAt: Timestamp | null;
-  submittedBy?: string | null;
-  approvedBy: string | null;
+  submittedBy?: ActorRef | null;
+  approvedBy: ActorRef | null;
   approvedAt: Timestamp | null;
+  rejectedBy?: ActorRef | null;
+  rejectedAt?: Timestamp | null;
   rejectReason: string | null;
-  cancelledBy: string | null;
+  cancelledBy: ActorRef | null;
   cancelledAt: Timestamp | null;
   cancelReason: string | null;
   pendingSlices?: BillBudgetSlice[];
@@ -218,11 +309,12 @@ export interface BillDoc extends BaseAuditFields {
 }
 
 export interface FyCounterDoc {
-  id: string; // `${fiscalYear}_bill`
+  id: string; // `${officeId}_${fiscalYear}_bill`
+  officeId: string;
   fiscalYear: string;
   nextNumber: number;
   updatedAt?: Timestamp | null;
-  updatedBy?: string;
+  updatedBy?: ActorRef;
 }
 
 // Legacy Spending types preserved for Settings migration utility
@@ -248,6 +340,7 @@ export interface DeductionsApplied {
 
 export interface SpendingDoc extends BaseAuditFields {
   id: string;
+  officeId?: string;
   budgetId: string;
   fiscalYear: string;
   economicCode: string;
@@ -264,10 +357,12 @@ export interface SpendingDoc extends BaseAuditFields {
   deductionsApplied: DeductionsApplied;
   status: SpendingStatus;
   submittedAt: Timestamp | null;
-  approvedBy: string | null;
+  submittedBy?: ActorRef | null;
+  approvedBy: ActorRef | null;
   approvedAt: Timestamp | null;
+  rejectedBy?: ActorRef | null;
   rejectReason: string | null;
-  voidedBy: string | null;
+  voidedBy: ActorRef | null;
   voidedAt: Timestamp | null;
   voidReason: string | null;
   deleted: boolean;
@@ -279,6 +374,7 @@ export type SpendingLimitStatus = 'active' | 'withdrawn';
 
 export interface SpendingLimitDoc extends BaseAuditFields {
   id: string;
+  officeId: string;
   type: SpendingLimitType;
   budgetId: string | null;
   fiscalYear: string;
@@ -293,7 +389,8 @@ export interface SpendingLimitDoc extends BaseAuditFields {
 }
 
 export interface FyCodeTotalDoc extends BaseAuditFields {
-  id: string; // `${fiscalYear}_${economicCode}`
+  id: string; // `${officeId}_${fiscalYear}_${economicCode}`
+  officeId: string;
   fiscalYear: string;
   economicCode: string;
   allocated: number; // integer paisa
@@ -311,10 +408,18 @@ export type AuditAction =
   | 'reject'
   | 'cancel'
   | 'void'
-  | 'migrate';
+  | 'migrate'
+  | 'handover'
+  | 'transfer'
+  | 'chargeGrant'
+  | 'chargeWithdraw'
+  | 'disable'
+  | 'enable'
+  | 'correct';
 
 export interface AuditLogDoc {
   id: string;
+  officeId: string | null;
   collection: string;
   docId: string;
   action: AuditAction;
@@ -322,5 +427,6 @@ export interface AuditLogDoc {
   after: Record<string, unknown> | null;
   userId: string;
   userName: string;
+  actor?: ActorSnapshot | null;
   timestamp: Timestamp | null;
 }

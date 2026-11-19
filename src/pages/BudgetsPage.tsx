@@ -7,10 +7,11 @@ import { StatusChip } from '../components/StatusChip';
 import { ActivityList } from '../components/ActivityList';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
+import { formatActorBrief } from '../lib/actor';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import {
   createBudgetsBatchTx,
@@ -56,14 +57,47 @@ function makeEmptyAllocationRow(): BudgetAllocationRowDraft {
 }
 
 export function BudgetsPage() {
-  const { userDoc } = useAuth();
-  const { selectedFy, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    currentOfficeId,
+    currentOfficeRole,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    actorSnapshot,
+    officesById,
+    pushToast,
+    t,
+  } = useApp();
   const { budgets, bills, vatTaxRates, spendingLimits, loading } = useFyData(selectedFy);
   const { getCodeEntry, getHead } = useEconomicCodes();
 
-  const canCreate = userDoc ? canCreateBudgets(userDoc.role) : false;
-  const canEditDelete = userDoc ? canEditDeleteBudgets(userDoc.role) : false;
-  const canExecute = userDoc ? canMarkBudgetExecuted(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const permCtx = { isSuperAdmin, officeRole: currentOfficeRole };
+  const canCreate =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canCreateBudgets(permCtx);
+  const canEditDelete =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canEditDeleteBudgets(permCtx);
+  const canExecute =
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canMarkBudgetExecuted(permCtx);
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
 
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'executed'>('all');
   const [search, setSearch] = useState('');
@@ -87,7 +121,13 @@ export function BudgetsPage() {
   const [allocationRows, setAllocationRows] = useState<BudgetAllocationRowDraft[]>([
     makeEmptyAllocationRow(),
   ]);
+  const [correctionReason, setCorrectionReason] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Super Admin audited delete confirmation modal
+  const [deletingBudget, setDeletingBudget] = useState<BudgetDoc | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deletingSaving, setDeletingSaving] = useState(false);
 
   const sameMemoBudgets = useMemo(() => {
     const trimmed = memoNo.trim();
@@ -200,6 +240,7 @@ export function BudgetsPage() {
     setRevisionOf('');
     setDeductionRates(DEFAULT_DEDUCTION_RATES);
     setAllocationRows([makeEmptyAllocationRow()]);
+    setCorrectionReason('');
     setFormOpen(true);
   };
 
@@ -216,6 +257,7 @@ export function BudgetsPage() {
     setEntryType(b.entryType);
     setRevisionOf(b.revisionOf || '');
     setDeductionRates(JSON.parse(JSON.stringify(b.deductionRates)) as DeductionRates);
+    setCorrectionReason('');
     setMobileDetailOpen(false);
     setFormOpen(true);
   };
@@ -243,10 +285,13 @@ export function BudgetsPage() {
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userDoc) return;
-    const actor = { uid: userDoc.id, name: userDoc.name };
+    if (!effectiveActor) return;
 
     if (editingBudget) {
+      if (isSuperAdmin && !correctionReason.trim()) {
+        pushToast('error', 'সংশোধনের কারণ উল্লেখ করা আবশ্যক।');
+        return;
+      }
       const allocatedPaisa = toPaisa(amountStr);
       if (Number.isNaN(allocatedPaisa)) {
         pushToast('error', 'Enter a valid taka amount.');
@@ -265,8 +310,9 @@ export function BudgetsPage() {
             headNameBn: resolvedHead.headNameBn,
             allocated: allocatedPaisa,
             deductionRates,
+            correctionReason: correctionReason.trim() || undefined,
           },
-          actor
+          effectiveActor
         );
         pushToast('success', 'Budget updated.');
         setFormOpen(false);
@@ -275,6 +321,11 @@ export function BudgetsPage() {
       } finally {
         setSaving(false);
       }
+      return;
+    }
+
+    if (!realOfficeId) {
+      pushToast('error', 'প্রথমে একটি নির্দিষ্ট দপ্তর নির্বাচন করুন।');
       return;
     }
 
@@ -301,6 +352,7 @@ export function BudgetsPage() {
       try {
         const newId = await createBudgetTx(
           {
+            officeId: realOfficeId,
             fiscalYear: selectedFy,
             memoNo,
             memoDate,
@@ -312,7 +364,7 @@ export function BudgetsPage() {
             revisionOf,
             deductionRates: resolveDeductionRatesForCode(code),
           },
-          actor
+          effectiveActor
         );
         setSelectedBudgetId(newId);
         pushToast('success', 'Budget revision created.');
@@ -365,6 +417,7 @@ export function BudgetsPage() {
       });
 
       batchInputs.push({
+        officeId: realOfficeId,
         fiscalYear: selectedFy,
         memoNo,
         memoDate,
@@ -386,7 +439,7 @@ export function BudgetsPage() {
 
     setSaving(true);
     try {
-      const createdIds = await createBudgetsBatchTx(batchInputs, actor);
+      const createdIds = await createBudgetsBatchTx(batchInputs, effectiveActor);
       if (createdIds[0]) setSelectedBudgetId(createdIds[0]);
       pushToast(
         'success',
@@ -403,13 +456,10 @@ export function BudgetsPage() {
   };
 
   const handleMarkExecuted = async (b: BudgetDoc) => {
-    if (!userDoc || !canExecute) return;
+    if (!effectiveActor || !canExecute) return;
     const nextStatus = b.status === 'active' ? 'executed' : 'active';
     try {
-      await markBudgetStatusTx(b.id, nextStatus, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      await markBudgetStatusTx(b.id, nextStatus, effectiveActor);
       pushToast(
         'success',
         nextStatus === 'executed' ? 'Budget marked Executed.' : 'Budget reopened as Active.'
@@ -419,15 +469,30 @@ export function BudgetsPage() {
     }
   };
 
-  const handleDeleteBudget = async (b: BudgetDoc) => {
-    if (!userDoc || !canEditDelete) return;
+  const openDeleteBudgetModal = (b: BudgetDoc) => {
+    if (!canEditDelete) return;
+    setDeletingBudget(b);
+    setDeleteReason('');
+  };
+
+  const handleConfirmDeleteBudget = async () => {
+    if (!effectiveActor || !canEditDelete || !deletingBudget) return;
+    if (!deleteReason.trim()) {
+      pushToast('error', 'বাজেট মুছার কারণ লিখুন।');
+      return;
+    }
+    setDeletingSaving(true);
     try {
-      await softDeleteBudgetTx(b.id, { uid: userDoc.id, name: userDoc.name });
-      if (selectedBudgetId === b.id) setSelectedBudgetId(null);
+      await softDeleteBudgetTx(deletingBudget.id, effectiveActor, deleteReason.trim());
+      if (selectedBudgetId === deletingBudget.id) setSelectedBudgetId(null);
+      setDeletingBudget(null);
+      setDeleteReason('');
       setMobileDetailOpen(false);
       pushToast('success', 'Budget deleted.');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to delete budget.');
+    } finally {
+      setDeletingSaving(false);
     }
   };
 
@@ -503,6 +568,10 @@ export function BudgetsPage() {
           Rates are saved with this budget, so later rate changes will not alter it.
         </p>
 
+        <div className="text-xs text-[var(--muted)] bn pt-1 border-t border-[var(--line)]/60">
+          প্রস্তুতকারী: <span className="font-medium text-[var(--text)]">{formatActorBrief(selectedBudget.createdBy, officesById)}</span>
+        </div>
+
         <div className="flex flex-wrap gap-2 pt-2">
           {canEditDelete && (
             <button
@@ -525,7 +594,7 @@ export function BudgetsPage() {
           {canEditDelete && (
             <button
               type="button"
-              onClick={() => handleDeleteBudget(selectedBudget)}
+              onClick={() => openDeleteBudgetModal(selectedBudget)}
               className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
             >
               {t('delete')}
@@ -623,9 +692,29 @@ export function BudgetsPage() {
     </div>
   );
 
+  if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
+    return (
+      <Layout title={t('navBudgets')}>
+        <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto my-6">
+          <h2 className="text-base font-semibold text-[var(--text)] bn">
+            একটি নির্দিষ্ট দপ্তর নির্বাচন করুন
+          </h2>
+          <p className="text-xs text-[var(--muted)] bn">
+            বাজেট বরাদ্দ দেখতে বা পরিচালনা করতে উপরের হেডার অফিস সুইচার থেকে একটি নির্দিষ্ট দপ্তর বাছাই করুন। সামগ্রিক তুলনা দেখতে ড্যাশবোর্ড বা রিপোর্ট ব্যবহার করুন।
+          </p>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout title={t('navBudgets')} actions={actions}>
       <div className="space-y-3.5 md:space-y-4">
+        {isLegacyPreMigration && (
+          <div className="card-surface px-4 py-3 border-l-4 border-[var(--warn)] text-xs text-[var(--text)]">
+            মাল্টি-অফিস মাইগ্রেশন সম্পন্ন করার আগে নতুন বাজেট এন্ট্রি তৈরি করা যাবে না। Settings থেকে মাইগ্রেশন সম্পন্ন করুন।
+          </div>
+        )}
         {/* Filter chips and search */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-3">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
@@ -1208,7 +1297,7 @@ export function BudgetsPage() {
                       />
                     </div>
                   </div>
-                  <div className="space-y-2">
+                    <div className="space-y-2">
                     <div className="text-[11px] text-[var(--muted)]">VAT rates (%)</div>
                     {deductionRates.vat.map((v, idx) => (
                       <div key={v.key} className="flex items-center gap-2">
@@ -1237,11 +1326,77 @@ export function BudgetsPage() {
                       </div>
                     ))}
                   </div>
+
+                  <div>
+                    <label
+                      htmlFor="budget-correction-reason"
+                      className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                    >
+                      সংশোধনের কারণ (অডিট লগের জন্য বাধ্যতামূলক)
+                    </label>
+                    <textarea
+                      id="budget-correction-reason"
+                      rows={2}
+                      required={isSuperAdmin}
+                      value={correctionReason}
+                      onChange={(e) => setCorrectionReason(e.target.value)}
+                      placeholder="সংশোধনের স্পষ্ট কারণ লিখুন…"
+                      className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+                    />
+                  </div>
                 </div>
               )}
             </>
           )}
         </form>
+      </Modal>
+
+      {/* Super Admin Audited Delete Budget Modal */}
+      <Modal
+        open={Boolean(deletingBudget)}
+        onClose={() => !deletingSaving && setDeletingBudget(null)}
+        title={deletingBudget ? `বাজেট মুছুন · ${deletingBudget.memoNo}` : ''}
+        subtitle={deletingBudget ? `${deletingBudget.economicCode} · অডিট লগসহ মুছা হবে` : ''}
+        maxWidthClass="md:max-w-md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={deletingSaving}
+              onClick={() => setDeletingBudget(null)}
+              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={deletingSaving || !deleteReason.trim()}
+              onClick={handleConfirmDeleteBudget}
+              className="min-h-[44px] px-4 rounded-lg bg-[var(--danger-text)] text-white text-sm font-semibold disabled:opacity-45"
+            >
+              {deletingSaving ? 'মুছা হচ্ছে…' : 'নিশ্চিত মুছুন'}
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-[var(--muted)] bn">
+            অনুমোদিত/সক্রিয় বাজেট রেকর্ড মুছার জন্য সুস্পষ্ট কারণ প্রদান করতে হবে, যা অডিট লগে সংরক্ষিত থাকবে।
+          </p>
+          <div>
+            <label htmlFor="budget-delete-reason" className="block text-xs font-medium text-[var(--muted)] mb-1">
+              কারণ (আবশ্যক)
+            </label>
+            <textarea
+              id="budget-delete-reason"
+              rows={3}
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="কেন এই বাজেটটি মুছা হচ্ছে…"
+              className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+            />
+          </div>
+        </div>
       </Modal>
     </Layout>
   );

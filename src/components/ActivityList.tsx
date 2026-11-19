@@ -1,3 +1,5 @@
+import { formatActorBrief } from '../lib/actor';
+import { useApp } from '../contexts/AppContext';
 import type { AuditLogDoc } from '../types';
 
 function formatTimestamp(ts: AuditLogDoc['timestamp']): string {
@@ -25,15 +27,26 @@ const ACTION_LABELS: Record<string, string> = {
   cancel: 'Cancelled',
   void: 'Voided',
   migrate: 'Migrated',
+  handover: 'DDO Handover',
+  transfer: 'Transferred',
+  chargeGrant: 'Granted Addl. Charge',
+  chargeWithdraw: 'Withdrew Charge',
+  disable: 'Disabled',
+  enable: 'Enabled',
+  correct: 'Corrected (Audited)',
 };
 
 export function ActivityList({
   logs,
   loading,
+  showContext = false,
 }: {
   logs: AuditLogDoc[];
   loading: boolean;
+  showContext?: boolean;
 }) {
+  const { officesById } = useApp();
+
   if (loading) {
     return <p className="text-xs text-[var(--muted)] py-2">Loading activity…</p>;
   }
@@ -42,19 +55,33 @@ export function ActivityList({
   }
   return (
     <ul className="divide-y divide-[var(--line)]">
-      {logs.map((log) => (
-        <li key={log.id} className="py-2.5 text-xs flex items-start justify-between gap-3">
-          <div>
-            <span className="font-medium text-[var(--text)]">
-              {ACTION_LABELS[log.action] || log.action}
-            </span>{' '}
-            <span className="text-[var(--muted)]">by {log.userName || log.userId}</span>
-          </div>
-          <span className="text-[var(--muted)] tabular-nums whitespace-nowrap shrink-0">
-            {formatTimestamp(log.timestamp)}
-          </span>
-        </li>
-      ))}
+      {logs.map((log) => {
+        const actorText = log.actor
+          ? formatActorBrief(log.actor, officesById, log.userName)
+          : log.userName || log.userId;
+        const office = log.officeId ? officesById.get(log.officeId) : null;
+        return (
+          <li key={log.id} className="py-2.5 text-xs flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-0.5">
+              <div>
+                <span className="font-semibold text-[var(--text)]">
+                  {ACTION_LABELS[log.action] || log.action}
+                </span>{' '}
+                {showContext && (
+                  <span className="text-[var(--muted)]">
+                    · <span className="font-mono text-[11px]">{log.collection}</span>
+                    {office ? ` (${office.nameBn || office.name})` : log.officeId === null ? ' (Global)' : ''}
+                  </span>
+                )}
+              </div>
+              <div className="text-[var(--muted)] break-words">by {actorText}</div>
+            </div>
+            <span className="text-[var(--muted)] tabular-nums whitespace-nowrap shrink-0">
+              {formatTimestamp(log.timestamp)}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }

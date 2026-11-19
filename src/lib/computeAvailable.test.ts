@@ -21,6 +21,7 @@ const baseCodeTotal = {
 
 const codeLimit80: SpendingLimitDoc = {
   id: 'l1',
+  officeId: 'office-1',
   type: 'code',
   budgetId: null,
   fiscalYear: '2025-26',

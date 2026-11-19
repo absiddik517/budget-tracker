@@ -14,19 +14,34 @@ import { VatTaxModelPage } from './pages/VatTaxModelPage';
 import { SpendingLimitsPage } from './pages/SpendingLimitsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { Tr21SetupPage } from './pages/Tr21SetupPage';
+import { OfficesPage } from './pages/OfficesPage';
+import { StaffPage } from './pages/StaffPage';
+import { MyWorkHistoryPage } from './pages/MyWorkHistoryPage';
+import { ActivityPage } from './pages/ActivityPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { useApp } from './contexts/AppContext';
 
 function RequireSuperAdmin({ children }: { children: React.ReactNode }) {
-  const { userDoc } = useAuth();
-  if (!userDoc || userDoc.role !== 'superAdmin') {
+  const { isSuperAdmin } = useAuth();
+  if (!isSuperAdmin) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
+function RequireDdo({ children }: { children: React.ReactNode }) {
+  const { isSuperAdmin } = useAuth();
+  const { currentOfficeRole } = useApp();
+  if (isSuperAdmin || currentOfficeRole !== 'ddo') {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;
 }
 
 function AppGate() {
-  const { accessState, needsOfficeSetup } = useAuth();
+  const { accessState, needsOfficeSetup, isSuperAdmin } = useAuth();
+  const { offices, officesLoading } = useApp();
 
   if (accessState === 'loading') {
     return (
@@ -41,11 +56,14 @@ function AppGate() {
     return <LoginPage />;
   }
 
+  const shouldPromptInitialSetup =
+    needsOfficeSetup && isSuperAdmin && !officesLoading && offices.length === 0;
+
   return (
     <Routes>
       <Route
         path="/"
-        element={needsOfficeSetup ? <Navigate to="/settings" replace /> : <DashboardPage />}
+        element={shouldPromptInitialSetup ? <Navigate to="/settings" replace /> : <DashboardPage />}
       />
       <Route path="/budgets" element={<BudgetsPage />} />
       <Route path="/expense-items" element={<ExpenseItemsPage />} />
@@ -57,10 +75,35 @@ function AppGate() {
       <Route path="/reports" element={<ReportsPage />} />
       <Route path="/tr21-setup" element={<Tr21SetupPage />} />
       <Route
+        path="/offices"
+        element={
+          <RequireSuperAdmin>
+            <OfficesPage />
+          </RequireSuperAdmin>
+        }
+      />
+      <Route
         path="/users"
         element={
           <RequireSuperAdmin>
             <UsersPage />
+          </RequireSuperAdmin>
+        }
+      />
+      <Route
+        path="/staff"
+        element={
+          <RequireDdo>
+            <StaffPage />
+          </RequireDdo>
+        }
+      />
+      <Route path="/work-history" element={<MyWorkHistoryPage />} />
+      <Route
+        path="/activity"
+        element={
+          <RequireSuperAdmin>
+            <ActivityPage />
           </RequireSuperAdmin>
         }
       />

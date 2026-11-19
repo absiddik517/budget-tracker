@@ -16,7 +16,7 @@ import {
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
 import { db } from '../lib/firebase';
@@ -32,18 +32,56 @@ import {
   type MigrationPreviewReport,
   type MigrationRunResult,
 } from '../lib/firestoreOps';
+import {
+  previewMultiOfficeMigration,
+  runMultiOfficeMigration,
+  type MultiOfficeMigrationPreview,
+  type MultiOfficeMigrationResult,
+} from '../lib/migration';
 import { isValidFiscalYear } from '../lib/fy';
-import { canManageUsersSettings } from '../lib/permissions';
 import { loadSampleData } from '../lib/seedData';
 import { saveAndShareFile } from '../utils/saveFile';
 import type { LanguageCode, ThemeMode } from '../types';
 
 export function SettingsPage() {
-  const { userDoc, needsOfficeSetup, clearOfficeSetupFlag } = useAuth();
-  const { officeSettings, language, setLanguage, setSelectedFy, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin, needsOfficeSetup, clearOfficeSetupFlag } = useAuth();
+  const {
+    currentOfficeId,
+    currentOfficeRole,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    offices,
+    actorSnapshot,
+    officeSettings,
+    language,
+    setLanguage,
+    setSelectedFy,
+    pushToast,
+    t,
+  } = useApp();
   const { theme, setTheme } = useTheme();
 
-  const isSuperAdmin = userDoc ? canManageUsersSettings(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const isOfficeDdo =
+    !isSuperAdmin &&
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    currentOfficeRole === 'ddo' &&
+    Boolean(realOfficeId);
+
+  const canEditOfficeConfig = Boolean(
+    (isSuperAdmin || isOfficeDdo) &&
+      (realOfficeId || (isLegacyPreMigration && isSuperAdmin))
+  );
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
 
   const [officeName, setOfficeName] = useState(officeSettings.officeName);
   const [address, setAddress] = useState(officeSettings.address);
@@ -56,6 +94,12 @@ export function SettingsPage() {
   const [exporting, setExporting] = useState(false);
   const [activityModalOpen, setActivityModalOpen] = useState(false);
 
+  // Multi-office migration state (Super Admin only)
+  const [multiPreviewLoading, setMultiPreviewLoading] = useState(false);
+  const [multiRunning, setMultiRunning] = useState(false);
+  const [multiPreview, setMultiPreview] = useState<MultiOfficeMigrationPreview | null>(null);
+  const [multiResult, setMultiResult] = useState<MultiOfficeMigrationResult | null>(null);
+
   // Legacy spendings -> bills + expenseItems migration state
   const [previewLoading, setPreviewLoading] = useState(false);
   const [runningMigration, setRunningMigration] = useState(false);
@@ -63,6 +107,7 @@ export function SettingsPage() {
   const [migrationResult, setMigrationResult] = useState<MigrationRunResult | null>(null);
 
   // Table-wise DB cleanup state (Super Admin only)
+  const [wipeOfficeFilter, setWipeOfficeFilter] = useState<string>(ALL_OFFICES_ID);
   const [tableCounts, setTableCounts] = useState<Partial<Record<DeletableDbTableKey, number>>>({});
   const [countsLoading, setCountsLoading] = useState(false);
   const [selectedTables, setSelectedTables] = useState<Set<DeletableDbTableKey>>(new Set());
@@ -72,6 +117,7 @@ export function SettingsPage() {
 
   const { logs: globalLogs, loading: logsLoading } = useGlobalAuditLogs(
     isSuperAdmin && activityModalOpen,
+    'ALL',
     120
   );
 
@@ -79,14 +125,14 @@ export function SettingsPage() {
     if (!isSuperAdmin) return;
     setCountsLoading(true);
     try {
-      const counts = await fetchDbTableCounts();
+      const counts = await fetchDbTableCounts(wipeOfficeFilter);
       setTableCounts(counts);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'টেবিলের তথ্য লোড করা যায়নি।');
     } finally {
       setCountsLoading(false);
     }
-  }, [isSuperAdmin, pushToast]);
+  }, [isSuperAdmin, wipeOfficeFilter, pushToast]);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -115,23 +161,33 @@ export function SettingsPage() {
   };
 
   const handleSave = async () => {
-    if (!userDoc || !isSuperAdmin) return;
-    if (!officeName.trim()) {
+    if (!effectiveActor || !canEditOfficeConfig) return;
+    if (isSuperAdmin && !officeName.trim()) {
       pushToast('error', 'Office name is required.');
       return;
     }
     setSaving(true);
     try {
       const mergedFys = Array.from(new Set([...fiscalYears, activeFiscalYear])).sort();
+      const targetOfficeId = isLegacyPreMigration ? undefined : realOfficeId || undefined;
       await saveOfficeSettings(
-        {
-          officeName: officeName.trim(),
-          address: address.trim(),
-          activeFiscalYear,
-          fiscalYears: mergedFys,
-          language,
-        },
-        { uid: userDoc.id, name: userDoc.name }
+        isSuperAdmin
+          ? {
+              officeName: officeName.trim(),
+              address: address.trim(),
+              activeFiscalYear,
+              fiscalYears: mergedFys,
+              language,
+            }
+          : {
+              // DDO rules strictly disallow modifying office name/code
+              address: address.trim(),
+              activeFiscalYear,
+              fiscalYears: mergedFys,
+              language,
+            },
+        effectiveActor,
+        targetOfficeId
       );
       setSelectedFy(activeFiscalYear);
       clearOfficeSetupFlag();
@@ -144,12 +200,17 @@ export function SettingsPage() {
   };
 
   const handleLoadSampleData = async () => {
-    if (!userDoc || !isSuperAdmin) return;
+    if (!effectiveActor || !isSuperAdmin) return;
+    if (!realOfficeId && !isLegacyPreMigration) {
+      pushToast('error', 'স্যাম্পল ডেটা লোড করতে হেডার থেকে একটি নির্দিষ্ট অফিস নির্বাচন করুন।');
+      return;
+    }
     setSeeding(true);
     try {
-      await loadSampleData({ uid: userDoc.id, name: userDoc.name });
+      await loadSampleData(effectiveActor, realOfficeId || undefined);
       setSelectedFy('2025-26');
       pushToast('success', 'Sample data loaded for FY 2025-26.');
+      loadTableCounts();
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to load sample data.');
     } finally {
@@ -158,13 +219,10 @@ export function SettingsPage() {
   };
 
   const handleBuildEconomicCodes = async () => {
-    if (!userDoc || !isSuperAdmin) return;
+    if (!effectiveActor || !isSuperAdmin) return;
     setMigratingCodes(true);
     try {
-      const res = await buildEconomicCodesFromExistingData({
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      const res = await buildEconomicCodesFromExistingData(effectiveActor);
       pushToast(
         'success',
         `Economic codes synced: ${res.created} created, ${res.skipped} already existed.`
@@ -176,6 +234,43 @@ export function SettingsPage() {
       );
     } finally {
       setMigratingCodes(false);
+    }
+  };
+
+  const handlePreviewMultiOfficeMigration = async () => {
+    if (!isSuperAdmin) return;
+    setMultiPreviewLoading(true);
+    setMultiResult(null);
+    try {
+      const report = await previewMultiOfficeMigration();
+      setMultiPreview(report);
+    } catch (err) {
+      pushToast(
+        'error',
+        err instanceof Error ? err.message : 'Failed to scan multi-office migration.'
+      );
+    } finally {
+      setMultiPreviewLoading(false);
+    }
+  };
+
+  const handleRunMultiOfficeMigration = async () => {
+    if (!effectiveActor || !isSuperAdmin) return;
+    setMultiRunning(true);
+    try {
+      const res = await runMultiOfficeMigration(effectiveActor);
+      setMultiResult(res);
+      const updated = await previewMultiOfficeMigration();
+      setMultiPreview(updated);
+      await loadTableCounts();
+      pushToast(
+        'success',
+        `মাল্টি-অফিস মাইগ্রেশন সম্পন্ন: ${res.usersMigrated} জন ব্যবহারকারী ও ${res.budgetsUpdated + res.billsUpdated}টি রেকর্ড আপডেট হয়েছে।`
+      );
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Multi-office migration failed.');
+    } finally {
+      setMultiRunning(false);
     }
   };
 
@@ -197,13 +292,13 @@ export function SettingsPage() {
   };
 
   const handleRunMigration = async () => {
-    if (!userDoc || !isSuperAdmin) return;
+    if (!effectiveActor || !isSuperAdmin) return;
     setRunningMigration(true);
     try {
-      const res = await runLegacySpendingsMigration({
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      const res = await runLegacySpendingsMigration(
+        effectiveActor,
+        realOfficeId || undefined
+      );
       setMigrationResult(res);
       const updatedPreview = await previewLegacySpendingsMigration();
       setMigrationPreview(updatedPreview);
@@ -219,8 +314,13 @@ export function SettingsPage() {
   };
 
   const handleExportBackup = async () => {
+    if (!isSuperAdmin && !realOfficeId) {
+      pushToast('error', 'ব্যাকআপ নিতে একটি নির্দিষ্ট অফিস নির্বাচন করুন।');
+      return;
+    }
     setExporting(true);
     try {
+      const scopedOffice = !isAllOfficesMode && realOfficeId ? realOfficeId : null;
       const [
         budgetsSnap,
         itemsSnap,
@@ -231,17 +331,54 @@ export function SettingsPage() {
         totalsSnap,
         codesSnap,
       ] = await Promise.all([
-        getDocs(query(collection(db, 'budgets'), where('deleted', '==', false))),
-        getDocs(query(collection(db, 'expenseItems'), where('deleted', '==', false))),
-        getDocs(query(collection(db, 'bills'), where('deleted', '==', false))),
-        getDocs(collection(db, 'counters')),
+        getDocs(
+          scopedOffice
+            ? query(
+                collection(db, 'budgets'),
+                where('officeId', '==', scopedOffice),
+                where('deleted', '==', false)
+              )
+            : query(collection(db, 'budgets'), where('deleted', '==', false))
+        ),
+        getDocs(
+          scopedOffice
+            ? query(
+                collection(db, 'expenseItems'),
+                where('officeId', '==', scopedOffice),
+                where('deleted', '==', false)
+              )
+            : query(collection(db, 'expenseItems'), where('deleted', '==', false))
+        ),
+        getDocs(
+          scopedOffice
+            ? query(
+                collection(db, 'bills'),
+                where('officeId', '==', scopedOffice),
+                where('deleted', '==', false)
+              )
+            : query(collection(db, 'bills'), where('deleted', '==', false))
+        ),
+        getDocs(
+          scopedOffice
+            ? query(collection(db, 'counters'), where('officeId', '==', scopedOffice))
+            : collection(db, 'counters')
+        ),
         getDocs(collection(db, 'vatTaxRates')),
-        getDocs(collection(db, 'spendingLimits')),
-        getDocs(collection(db, 'fyCodeTotals')),
+        getDocs(
+          scopedOffice
+            ? query(collection(db, 'spendingLimits'), where('officeId', '==', scopedOffice))
+            : collection(db, 'spendingLimits')
+        ),
+        getDocs(
+          scopedOffice
+            ? query(collection(db, 'fyCodeTotals'), where('officeId', '==', scopedOffice))
+            : collection(db, 'fyCodeTotals')
+        ),
         getDocs(collection(db, 'economicCodes')),
       ]);
       const backup = {
         exportedAt: new Date().toISOString(),
+        officeScope: scopedOffice || 'ALL',
         officeSettings,
         economicCodes: codesSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
         budgets: budgetsSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
@@ -255,7 +392,9 @@ export function SettingsPage() {
       const jsonText = JSON.stringify(backup, null, 2);
       const outcome = await saveAndShareFile({
         data: jsonText,
-        fileName: `budget-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        fileName: `budget-tracker-backup-${scopedOffice || 'all'}-${new Date()
+          .toISOString()
+          .slice(0, 10)}.json`,
         mimeType: 'application/json',
         title: 'Budget Tracker Backup',
       });
@@ -313,15 +452,16 @@ export function SettingsPage() {
   })();
 
   const handleConfirmClearTables = async () => {
-    if (!userDoc || !isSuperAdmin || !confirmTables || confirmTables.length === 0) return;
+    if (!effectiveActor || !isSuperAdmin || !confirmTables || confirmTables.length === 0) return;
     if (!confirmPhraseValid) return;
 
     setClearingTables(true);
     try {
-      const results = await clearDbTables(confirmTables, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      const results = await clearDbTables(
+        confirmTables,
+        effectiveActor,
+        wipeOfficeFilter
+      );
       const totalDeleted = results.reduce((sum, r) => sum + r.deletedCount, 0);
       setSelectedTables((prev) => {
         const next = new Set(prev);
@@ -342,7 +482,7 @@ export function SettingsPage() {
     }
   };
 
-  const headerActions = isSuperAdmin ? (
+  const headerActions = canEditOfficeConfig ? (
     <button
       type="button"
       onClick={handleSave}
@@ -357,12 +497,18 @@ export function SettingsPage() {
     <Layout title={t('navSettings')} actions={headerActions}>
       {needsOfficeSetup && isSuperAdmin && (
         <div className="mb-4 md:mb-5 px-3.5 md:px-4 py-3 rounded-[14px] bg-[var(--accent-soft)] text-[var(--accent)] text-sm font-medium">
-          Welcome! You are the first administrator. Please fill in your office name and fiscal year below and save.
+          Welcome! You are the first administrator. Please fill in your office name and fiscal year below and save, or create offices in the Offices page.
+        </div>
+      )}
+
+      {isSuperAdmin && isAllOfficesMode && (
+        <div className="mb-4 md:mb-5 px-3.5 md:px-4 py-3 rounded-[14px] bg-[var(--surface-subtle)] border border-[var(--line)] text-xs text-[var(--muted)]">
+          একটি নির্দিষ্ট দপ্তরের ঠিকানা, অর্থবছর ও টি.আর. ফরম-২১ সেটআপ সম্পাদনা করতে হেডার অফিস সুইচার থেকে সেই দপ্তরটি নির্বাচন করুন অথবা <Link to="/offices" className="text-[var(--accent)] font-semibold hover:underline">দপ্তরসমূহ</Link> পেইজে যান।
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 md:gap-5">
-        {isSuperAdmin && (
+        {canEditOfficeConfig && (
           <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('office')}</h2>
             <div>
@@ -372,10 +518,16 @@ export function SettingsPage() {
               <input
                 id="office-name"
                 type="text"
+                disabled={!isSuperAdmin}
                 value={officeName}
                 onChange={(e) => setOfficeName(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] disabled:opacity-65 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
+              {!isSuperAdmin && (
+                <p className="text-[11px] text-[var(--muted)] mt-1 bn">
+                  দপ্তরের নাম ও কোড শুধুমাত্র সুপার অ্যাডমিন পরিবর্তন করতে পারবেন।
+                </p>
+              )}
             </div>
             <div>
               <label htmlFor="office-address" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
@@ -411,7 +563,7 @@ export function SettingsPage() {
           </section>
         )}
 
-        {isSuperAdmin && (
+        {canEditOfficeConfig && (
           <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('fiscalYear')}</h2>
             <div>
@@ -513,12 +665,13 @@ export function SettingsPage() {
           </div>
         </section>
 
-        {/* Data card: Super Admin only */}
-        {isSuperAdmin && (
+        {/* Data card: Super Admin + Office backup for DDO */}
+        {(isSuperAdmin || isOfficeDdo) && (
           <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('data')}</h2>
             <p className="text-xs text-[var(--muted)]">
-              Download a JSON backup of budgets, expense items, and bills, or load sample FY 2025-26 data.
+              Download a JSON backup of budgets, expense items, and bills
+              {isSuperAdmin ? ', or manage sample data & global codes.' : '.'}
             </p>
             <div className="flex flex-wrap gap-2.5">
               <button
@@ -531,43 +684,118 @@ export function SettingsPage() {
                 <span>{exporting ? 'Exporting…' : t('exportBackup')}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleLoadSampleData}
-                disabled={seeding}
-                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
-              >
-                <Database className="w-4 h-4 shrink-0" />
-                <span>{seeding ? 'Loading…' : t('loadSampleData')}</span>
-              </button>
+              {isSuperAdmin && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleData}
+                    disabled={seeding}
+                    className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60"
+                  >
+                    <Database className="w-4 h-4 shrink-0" />
+                    <span>{seeding ? 'Loading…' : t('loadSampleData')}</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={handleBuildEconomicCodes}
-                disabled={migratingCodes}
-                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60 text-left"
-              >
-                <Database className="w-4 h-4 shrink-0" />
-                <span>
-                  {migratingCodes
-                    ? 'Building codes…'
-                    : 'Build economic codes from existing data'}
-                </span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={handleBuildEconomicCodes}
+                    disabled={migratingCodes}
+                    className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors disabled:opacity-60 text-left"
+                  >
+                    <Database className="w-4 h-4 shrink-0" />
+                    <span>
+                      {migratingCodes
+                        ? 'Building codes…'
+                        : 'Build economic codes from existing data'}
+                    </span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => setActivityModalOpen(true)}
-                className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors"
-              >
-                <History className="w-4 h-4 shrink-0" />
-                <span>{t('globalActivity')}</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setActivityModalOpen(true)}
+                    className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 transition-colors"
+                  >
+                    <History className="w-4 h-4 shrink-0" />
+                    <span>{t('globalActivity')}</span>
+                  </button>
+                </>
+              )}
             </div>
           </section>
         )}
 
-        {/* Certification Clauses Editor moved to dedicated /tr21-setup page */}
+        {/* Multi-Office Migration (Super Admin only) */}
+        {isSuperAdmin && (
+          <section className="lg:col-span-2 card-surface p-4 md:p-5 space-y-4 border border-[var(--accent)]/25">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold text-[var(--text)]">
+                  Multi-Office Migration (Single Office → Multi-Office)
+                </h2>
+                <p className="text-xs text-[var(--muted)]">
+                  পুরনো এক-অফিস ডেটা (<code className="font-mono">settings/office</code>,{' '}
+                  <code className="font-mono">users.role</code>,{' '}
+                  <code className="font-mono">budgets</code>, <code className="font-mono">bills</code>,{' '}
+                  <code className="font-mono">fyCodeTotals</code>, <code className="font-mono">counters</code>)
+                  নিরাপদ ও Idempotent ভাবে <code className="font-mono">offices</code>,{' '}
+                  <code className="font-mono">workHistory</code>, <code className="font-mono">access</code> ও{' '}
+                  <code className="font-mono">officeId</code>-এ রূপান্তর করে।
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handlePreviewMultiOfficeMigration}
+                  disabled={multiPreviewLoading || multiRunning}
+                  className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium hover:bg-[var(--surface-subtle)] inline-flex items-center gap-2 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-4 h-4 ${multiPreviewLoading ? 'animate-spin' : ''}`} />
+                  <span>{multiPreviewLoading ? 'স্ক্যান হচ্ছে…' : 'Dry-Run প্রিভিউ'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRunMultiOfficeMigration}
+                  disabled={multiRunning || multiPreviewLoading}
+                  className="min-h-[44px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+                >
+                  {multiRunning ? 'মাইগ্রেশন চলছে…' : 'Migrate to multi-office'}
+                </button>
+              </div>
+            </div>
+
+            {multiPreview && (
+              <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] text-xs space-y-2">
+                <div className="font-semibold text-[var(--text)]">
+                  Dry-Run ফলাফল: বিদ্যমান অফিস {multiPreview.alreadyHasOffices}টি ·{' '}
+                  {multiPreview.willCreateDefaultOffice
+                    ? `নতুন ডিফল্ট অফিস "${multiPreview.defaultOfficeName}" তৈরি হবে`
+                    : 'প্রথম অফিসকে ডিফল্ট হিসেবে ব্যবহার করা হবে'}
+                </div>
+                <div className="flex flex-wrap gap-3 text-[var(--muted)] tabular-nums">
+                  <span>Users: {multiPreview.usersNeedingMigration}</span>
+                  <span>Work History: {multiPreview.workHistoryToCreate}</span>
+                  <span>Budgets: {multiPreview.budgetsToTag}</span>
+                  <span>Expense Items: {multiPreview.expenseItemsToTag}</span>
+                  <span>Bills: {multiPreview.billsToTag}</span>
+                  <span>Limits: {multiPreview.limitsToTag}</span>
+                  <span>Spendings: {multiPreview.spendingsToTag}</span>
+                  <span>FY Totals re-key: {multiPreview.fyTotalsToRekey}</span>
+                  <span>Counters re-key: {multiPreview.countersToRekey}</span>
+                  <span>Actor snapshots: {multiPreview.docsWithStringActorSnapshots}</span>
+                </div>
+              </div>
+            )}
+
+            {multiResult && (
+              <div className="p-3 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium tabular-nums">
+                মাইগ্রেশন সম্পন্ন: অফিস {multiResult.officeId} · Users: {multiResult.usersMigrated} · WorkHistory:{' '}
+                {multiResult.workHistoryCreated} · Budgets: {multiResult.budgetsUpdated} · Items:{' '}
+                {multiResult.expenseItemsUpdated} · Bills: {multiResult.billsUpdated} · FY Totals:{' '}
+                {multiResult.fyTotalsRekeyed} · Counters: {multiResult.countersRekeyed}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Legacy Spendings -> Bills + Expense Items Migration (Super Admin only) */}
         {isSuperAdmin && (
@@ -643,11 +871,27 @@ export function SettingsPage() {
                   </h2>
                 </div>
                 <p className="text-xs text-[var(--muted)]">
-                  নির্দিষ্ট কোনো টেবিল বা একাধিক টেবিলের সকল রেকর্ড স্থায়ীভাবে মুছে ফেলুন। ব্যবহারকারী (users), অফিস সেটিংস (settings) ও অডিট লগ (auditLogs) সুরক্ষিত থাকবে।
+                  নির্দিষ্ট দপ্তর বা সকল দপ্তরের টেবিলের রেকর্ড স্থায়ীভাবে মুছে ফেলুন। ব্যবহারকারী (users), কর্ম-ইতিহাস (workHistory), দপ্তর (offices) ও অডিট লগ (auditLogs) সুরক্ষিত থাকবে।
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <select
+                  value={wipeOfficeFilter}
+                  onChange={(e) => {
+                    setWipeOfficeFilter(e.target.value);
+                    setSelectedTables(new Set());
+                  }}
+                  aria-label="Filter wipe by office"
+                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs bn"
+                >
+                  <option value={ALL_OFFICES_ID}>সকল দপ্তর + গ্লোবাল</option>
+                  {offices.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.nameBn || o.name} ({o.code})
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={loadTableCounts}
@@ -723,6 +967,9 @@ export function SettingsPage() {
                           <code className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[var(--surface-subtle)] text-[var(--muted)]">
                             {tbl.key}
                           </code>
+                          {wipeOfficeFilter !== ALL_OFFICES_ID && tbl.officeScoped && (
+                            <span className="text-[11px] text-[var(--accent)]">· Filtered</span>
+                          )}
                         </div>
                         <p className="text-xs text-[var(--muted)] mt-0.5 bn">
                           {tbl.descriptionBn}
@@ -949,3 +1196,4 @@ export function SettingsPage() {
     </Layout>
   );
 }
+

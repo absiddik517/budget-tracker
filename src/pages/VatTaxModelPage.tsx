@@ -18,12 +18,12 @@ import { canManageRates } from '../lib/permissions';
 import type { EconomicCodeDoc, VatTaxRateDoc, VatVariant } from '../types';
 
 export function VatTaxModelPage() {
-  const { userDoc } = useAuth();
-  const { selectedFy, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin } = useAuth();
+  const { selectedFy, currentOfficeRole, actorSnapshot, pushToast, t } = useApp();
   const { vatTaxRates, loading } = useFyData(selectedFy);
   const { getCodeEntry, getHead } = useEconomicCodes();
 
-  const canEdit = userDoc ? canManageRates(userDoc.role) : false;
+  const canEdit = canManageRates({ isSuperAdmin, officeRole: currentOfficeRole });
 
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
@@ -116,6 +116,7 @@ export function VatTaxModelPage() {
           }))
         : [{ key: 'default', label: 'Standard', rate: parseFloat(singleVat) || 0 }];
 
+      const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
       await upsertVatTaxRate(
         {
           fiscalYear: selectedFy,
@@ -126,7 +127,7 @@ export function VatTaxModelPage() {
           vat: vatArr,
         },
         !editingRate,
-        { uid: userDoc.id, name: userDoc.name }
+        actor
       );
       pushToast('success', editingRate ? 'Rate updated.' : 'Rate added.');
       setModalOpen(false);
@@ -140,12 +141,10 @@ export function VatTaxModelPage() {
   const handleCopyNextFy = async () => {
     if (!userDoc || !canEdit || vatTaxRates.length === 0) return;
     const nextFy = getNextFiscalYear(selectedFy);
+    const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     setCopying(true);
     try {
-      const count = await copyVatTaxRatesToFy(vatTaxRates, nextFy, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      const count = await copyVatTaxRatesToFy(vatTaxRates, nextFy, actor);
       pushToast('success', `Copied ${count} rates to FY ${nextFy}.`);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to copy rates.');
@@ -179,7 +178,7 @@ export function VatTaxModelPage() {
         return;
       }
 
-      const actor = { uid: userDoc.id, name: userDoc.name };
+      const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
       let imported = 0;
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(',').map((c) => c.trim());
@@ -250,7 +249,9 @@ export function VatTaxModelPage() {
       <div className="space-y-3.5 md:space-y-4">
         <div className="card-surface px-3.5 md:px-4 py-3 text-xs text-[var(--muted)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <p>
-            Rates are copied into a budget when it is created. Changing a rate here does not change existing budgets.
+            {canEdit
+              ? 'গ্লোবাল ভ্যাট ও আয়কর হার — বিল তৈরির সময় এখান থেকে হার নেওয়া হয়।'
+              : 'গ্লোবাল ভ্যাট ও আয়কর হার (পঠনযোগ্য) — শুধুমাত্র সুপার অ্যাডমিন এই হার পরিবর্তন করতে পারবেন।'}
           </p>
           {canEdit && (
             <div className="flex items-center gap-2 shrink-0 flex-wrap">

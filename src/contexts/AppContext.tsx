@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, documentId, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { buildActorSnapshot } from '../lib/actor';
 import { getCurrentFiscalYear } from '../lib/fy';
 import { translate, type TranslationKey } from '../i18n';
 import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
@@ -21,7 +22,15 @@ import {
   resolveTr21VoucherLabel,
 } from '../lib/tr21Defaults';
 import { useAuth } from './AuthContext';
-import type { EconomicCodeDoc, LanguageCode, OfficeSettings } from '../types';
+import type {
+  ActorSnapshot,
+  EconomicCodeDoc,
+  LanguageCode,
+  OfficeDoc,
+  OfficeRole,
+  OfficeSettings,
+  Role,
+} from '../types';
 
 export interface ToastMessage {
   id: string;
@@ -39,7 +48,21 @@ export interface HeadLookupResult {
   found: boolean;
 }
 
+export const ALL_OFFICES_ID = 'ALL';
+export const LEGACY_UNMIGRATED_OFFICE_ID = '__LEGACY__';
+
 interface AppContextValue {
+  offices: OfficeDoc[];
+  officesLoading: boolean;
+  officesById: Map<string, OfficeDoc>;
+  currentOfficeId: string | null;
+  setCurrentOfficeId: (officeId: string) => void;
+  currentOffice: OfficeDoc | null;
+  currentOfficeRole: OfficeRole | null;
+  effectiveRole: Role | null;
+  isAllOfficesMode: boolean;
+  isLegacyPreMigration: boolean;
+  actorSnapshot: ActorSnapshot | null;
   officeSettings: OfficeSettings;
   selectedFy: string;
   setSelectedFy: (fy: string) => void;
@@ -66,11 +89,11 @@ const LANG_STORAGE_KEY = 'bt_language';
 
 const defaultFy = getCurrentFiscalYear();
 const defaultOfficeSettings: OfficeSettings = {
-  officeName: 'Sample Office',
+  officeName: 'Government Office',
   address: '',
   activeFiscalYear: defaultFy,
   fiscalYears: [defaultFy],
-  language: 'en',
+  language: 'bn',
   institutionalCode: '',
   ministryName: '',
   officeMobileNo: '',
@@ -88,9 +111,46 @@ const defaultOfficeSettings: OfficeSettings = {
   tr21Clauses: resolveTr21Clauses(null),
 };
 
+function officeDocToSettings(office: OfficeDoc | null, fallback: OfficeSettings): OfficeSettings {
+  if (!office) return fallback;
+  const activeFy = office.activeFiscalYear || fallback.activeFiscalYear || defaultFy;
+  const fiscalYears =
+    Array.isArray(office.fiscalYears) && office.fiscalYears.length > 0
+      ? office.fiscalYears
+      : [activeFy];
+  return {
+    officeId: office.id,
+    officeName: office.nameBn || office.name || fallback.officeName,
+    officeNameBn: office.nameBn || office.name,
+    officeCode: office.code,
+    address: office.address ?? '',
+    activeFiscalYear: activeFy,
+    fiscalYears,
+    language: office.language || fallback.language || 'bn',
+    institutionalCode: office.institutionalCode ?? '',
+    ministryName: office.ministryName ?? '',
+    officeMobileNo: office.officeMobileNo ?? '',
+    defaultPayeeText: office.defaultPayeeText ?? '',
+    placeName: office.placeName ?? '',
+    defaultNetPayableCode: office.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE,
+    defaultItCode: office.defaultItCode || DEFAULT_IT_CODE,
+    defaultVatCode: office.defaultVatCode || DEFAULT_VAT_CODE,
+    defaultSecurityCode: office.defaultSecurityCode || DEFAULT_SECURITY_CODE,
+    tr21FooterText: office.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT,
+    tr21FontFamily: resolveTr21FontFamily(office.tr21FontFamily),
+    tr21FontSize: resolveTr21FontSize(office.tr21FontSize),
+    tr21P1S3Mode: resolveTr21P1S3Mode(office.tr21P1S3Mode),
+    tr21VoucherLabel: resolveTr21VoucherLabel(office.tr21VoucherLabel),
+    tr21Clauses: resolveTr21Clauses(office.tr21Clauses),
+  };
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const { accessState } = useAuth();
-  const [officeSettings, setOfficeSettings] = useState<OfficeSettings>(defaultOfficeSettings);
+  const { accessState, userDoc, isSuperAdmin, myActivePostings } = useAuth();
+  const [offices, setOffices] = useState<OfficeDoc[]>([]);
+  const [officesLoading, setOfficesLoading] = useState(true);
+  const [legacySettings, setLegacySettings] = useState<OfficeSettings>(defaultOfficeSettings);
+  const [currentOfficeIdState, setCurrentOfficeIdState] = useState<string | null>(null);
   const [selectedFy, setSelectedFy] = useState<string>(defaultFy);
   const [fyInitializedFromServer, setFyInitializedFromServer] = useState(false);
 
@@ -118,11 +178,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPermissionDeniedPaths((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : prev));
   }, []);
 
+  // Subscribe to offices (all for Super Admin, accessible subset for others)
+  const accessKeysString = useMemo(
+    () => (userDoc ? Object.keys(userDoc.access || {}).sort().join(',') : ''),
+    [userDoc]
+  );
+
   useEffect(() => {
-    if (accessState !== 'active') {
+    if (accessState !== 'active' || !userDoc) {
+      setOffices([]);
+      setOfficesLoading(false);
       setPermissionDeniedPaths([]);
       return;
     }
+
+    setOfficesLoading(true);
+    const accessibleIds = accessKeysString ? accessKeysString.split(',').filter(Boolean) : [];
+
+    if (!isSuperAdmin && accessibleIds.length === 0) {
+      setOffices([]);
+      setOfficesLoading(false);
+      return;
+    }
+
+    const q = isSuperAdmin
+      ? collection(db, 'offices')
+      : query(collection(db, 'offices'), where(documentId(), 'in', accessibleIds.slice(0, 30)));
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        clearPermissionError('offices');
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as OfficeDoc))
+          .sort((a, b) => (a.nameBn || a.name).localeCompare(b.nameBn || b.name));
+        setOffices(list);
+        setOfficesLoading(false);
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'offices');
+        if (isPermissionDeniedError(err)) reportPermissionError('offices');
+        setOfficesLoading(false);
+      }
+    );
+
+    return () => unsub();
+  }, [accessState, userDoc, isSuperAdmin, accessKeysString, clearPermissionError, reportPermissionError]);
+
+  // Listen to legacy settings/office as fallback when no offices exist yet (pre-migration)
+  useEffect(() => {
+    if (accessState !== 'active') return;
     const unsub = onSnapshot(
       doc(db, 'settings', 'office'),
       (snap) => {
@@ -134,12 +239,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             Array.isArray(data.fiscalYears) && data.fiscalYears.length > 0
               ? data.fiscalYears
               : [activeFy];
-          setOfficeSettings({
+          setLegacySettings({
             officeName: data.officeName || 'Government Office',
             address: data.address || '',
             activeFiscalYear: activeFy,
             fiscalYears,
-            language: data.language || 'en',
+            language: data.language || 'bn',
             institutionalCode: data.institutionalCode || '',
             ministryName: data.ministryName || '',
             officeMobileNo: data.officeMobileNo || '',
@@ -164,15 +269,163 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       },
       (err) => {
         logFirestoreError(err, OperationType.GET, 'settings/office');
-        if (isPermissionDeniedError(err)) {
-          reportPermissionError('settings/office');
-        }
       }
     );
     return () => unsub();
-  }, [accessState, fyInitializedFromServer, clearPermissionError, reportPermissionError]);
+  }, [accessState, fyInitializedFromServer, clearPermissionError]);
 
-  // Single Firestore listener for economicCodes across the entire app (cached offline)
+  const storageKey = userDoc ? `bt_office_id_${userDoc.id}` : '';
+
+  const setCurrentOfficeId = useCallback(
+    (officeId: string) => {
+      setCurrentOfficeIdState(officeId);
+      if (storageKey) {
+        try {
+          localStorage.setItem(storageKey, officeId);
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [storageKey]
+  );
+
+  // Resolve valid currentOfficeId whenever user/offices change
+  useEffect(() => {
+    if (accessState !== 'active' || !userDoc || officesLoading) return;
+
+    let saved: string | null = null;
+    if (storageKey) {
+      try {
+        saved = localStorage.getItem(storageKey);
+      } catch {
+        saved = null;
+      }
+    }
+
+    if (isSuperAdmin) {
+      if (offices.length === 0) {
+        // Pre-migration single-office Super Admin fallback
+        setCurrentOfficeIdState(LEGACY_UNMIGRATED_OFFICE_ID);
+        return;
+      }
+      if (
+        saved === ALL_OFFICES_ID ||
+        (saved && offices.some((o) => o.id === saved))
+      ) {
+        setCurrentOfficeIdState(saved);
+      } else {
+        setCurrentOfficeIdState(ALL_OFFICES_ID);
+      }
+      return;
+    }
+
+    // Non-SuperAdmin user
+    const accessibleIds = Object.keys(userDoc.access || {});
+    if (accessibleIds.length === 0) {
+      // Pre-migration legacy single-office role check
+      if (userDoc.role === 'ddo' || userDoc.role === 'employee') {
+        setCurrentOfficeIdState(LEGACY_UNMIGRATED_OFFICE_ID);
+      } else {
+        setCurrentOfficeIdState(null);
+      }
+      return;
+    }
+
+    if (saved && accessibleIds.includes(saved)) {
+      setCurrentOfficeIdState(saved);
+      return;
+    }
+
+    if (userDoc.homeOfficeId && accessibleIds.includes(userDoc.homeOfficeId)) {
+      setCurrentOfficeIdState(userDoc.homeOfficeId);
+      return;
+    }
+
+    setCurrentOfficeIdState(accessibleIds[0]);
+  }, [accessState, userDoc, isSuperAdmin, offices, officesLoading, storageKey]);
+
+  const officesById = useMemo(() => {
+    const map = new Map<string, OfficeDoc>();
+    for (const o of offices) map.set(o.id, o);
+    return map;
+  }, [offices]);
+
+  const isLegacyPreMigration = currentOfficeIdState === LEGACY_UNMIGRATED_OFFICE_ID;
+  const isAllOfficesMode = Boolean(isSuperAdmin && currentOfficeIdState === ALL_OFFICES_ID);
+
+  const currentOffice = useMemo(() => {
+    if (
+      !currentOfficeIdState ||
+      currentOfficeIdState === ALL_OFFICES_ID ||
+      currentOfficeIdState === LEGACY_UNMIGRATED_OFFICE_ID
+    ) {
+      return null;
+    }
+    return officesById.get(currentOfficeIdState) || null;
+  }, [currentOfficeIdState, officesById]);
+
+  const currentOfficeRole: OfficeRole | null = useMemo(() => {
+    if (!userDoc || isSuperAdmin) return null;
+    if (isLegacyPreMigration) {
+      if (userDoc.role === 'ddo' || userDoc.role === 'employee') return userDoc.role;
+      return null;
+    }
+    if (!currentOfficeIdState || currentOfficeIdState === ALL_OFFICES_ID) return null;
+    return userDoc.access?.[currentOfficeIdState] ?? null;
+  }, [userDoc, isSuperAdmin, isLegacyPreMigration, currentOfficeIdState]);
+
+  const effectiveRole: Role | null = useMemo(() => {
+    if (isSuperAdmin) return 'superAdmin';
+    return currentOfficeRole;
+  }, [isSuperAdmin, currentOfficeRole]);
+
+  const officeSettings = useMemo(
+    () => officeDocToSettings(currentOffice, legacySettings),
+    [currentOffice, legacySettings]
+  );
+
+  // Sync selectedFy when switching into a specific office
+  useEffect(() => {
+    if (currentOffice?.activeFiscalYear) {
+      setSelectedFy(currentOffice.activeFiscalYear);
+      setFyInitializedFromServer(true);
+    }
+  }, [currentOffice?.id, currentOffice?.activeFiscalYear]);
+
+  const actorSnapshot = useMemo(() => {
+    if (!userDoc) return null;
+    if (isSuperAdmin) {
+      return buildActorSnapshot({
+        user: userDoc,
+        officeId: null,
+        role: 'superAdmin',
+      });
+    }
+    const officeId =
+      currentOfficeIdState &&
+      currentOfficeIdState !== ALL_OFFICES_ID &&
+      currentOfficeIdState !== LEGACY_UNMIGRATED_OFFICE_ID
+        ? currentOfficeIdState
+        : null;
+    const role: Role = currentOfficeRole || 'employee';
+    const matchingPosting =
+      (officeId
+        ? myActivePostings.find((p) => p.officeId === officeId && p.role === role) ||
+          myActivePostings.find((p) => p.officeId === officeId)
+        : null) || null;
+
+    return buildActorSnapshot({
+      user: userDoc,
+      officeId,
+      role,
+      kind: matchingPosting?.kind ?? 'regular',
+      workHistoryId: matchingPosting?.id ?? null,
+      activePosting: matchingPosting,
+    });
+  }, [userDoc, isSuperAdmin, currentOfficeIdState, currentOfficeRole, myActivePostings]);
+
+  // Single global listener for economicCodes
   useEffect(() => {
     if (accessState !== 'active') {
       setEconomicCodes([]);
@@ -192,9 +445,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       },
       (err) => {
         logFirestoreError(err, OperationType.LIST, 'economicCodes');
-        if (isPermissionDeniedError(err)) {
-          reportPermissionError('economicCodes');
-        }
+        if (isPermissionDeniedError(err)) reportPermissionError('economicCodes');
         setEconomicCodesLoading(false);
       }
     );
@@ -271,6 +522,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppContext.Provider
       value={{
+        offices,
+        officesLoading,
+        officesById,
+        currentOfficeId: currentOfficeIdState,
+        setCurrentOfficeId,
+        currentOffice,
+        currentOfficeRole,
+        effectiveRole,
+        isAllOfficesMode,
+        isLegacyPreMigration,
+        actorSnapshot,
         officeSettings,
         selectedFy,
         setSelectedFy,

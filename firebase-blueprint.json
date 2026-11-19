@@ -1,21 +1,62 @@
 {
   "entities": {
+    "Office": {
+      "title": "Government Office",
+      "description": "Organizational boundary for budgets, expenses, bills, limits, and office-level settings.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "nameBn": { "type": "string" },
+        "code": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "activeFiscalYear": { "type": "string" },
+        "fiscalYears": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["name", "nameBn", "code", "status", "activeFiscalYear"]
+    },
     "User": {
-      "title": "Office User",
-      "description": "Authenticated office staff member with role-based permissions.",
+      "title": "User",
+      "description": "Authenticated user with optional Super Admin global role and per-office access map.",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
         "designation": { "type": "string" },
         "email": { "type": "string" },
-        "role": { "type": "string", "enum": ["superAdmin", "ddo", "employee"] },
-        "status": { "type": "string", "enum": ["invited", "active", "disabled"] }
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["invited", "active", "disabled"] },
+        "globalRole": { "type": ["string", "null"], "enum": ["superAdmin", null] },
+        "homeOfficeId": { "type": ["string", "null"] },
+        "access": { "type": "object" },
+        "officeIds": { "type": "array", "items": { "type": "string" } }
       },
-      "required": ["name", "email", "role", "status"]
+      "required": ["name", "email", "status", "access"]
+    },
+    "WorkHistory": {
+      "title": "Work History Posting",
+      "description": "Immutable record of a regular or additional-charge posting at an office.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "officeId": { "type": "string" },
+        "role": { "type": "string", "enum": ["ddo", "employee"] },
+        "kind": { "type": "string", "enum": ["regular", "additionalCharge"] },
+        "designation": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": ["string", "null"] },
+        "status": { "type": "string", "enum": ["active", "ended"] },
+        "orderNo": { "type": "string" },
+        "orderDate": { "type": "string" },
+        "endReason": { "type": ["string", "null"] },
+        "assignedBy": { "type": "object" },
+        "remarks": { "type": "string" }
+      },
+      "required": ["userId", "officeId", "role", "kind", "startDate", "status"]
     },
     "EconomicCode": {
       "title": "Economic Code",
-      "description": "Master government expenditure head code.",
+      "description": "Global master government expenditure head code.",
       "type": "object",
       "properties": {
         "code": { "type": "string" },
@@ -28,9 +69,10 @@
     },
     "Budget": {
       "title": "Budget Allocation",
-      "description": "Allocation or revision under an economic code and fiscal year.",
+      "description": "Office-scoped allocation or revision under an economic code and fiscal year.",
       "type": "object",
       "properties": {
+        "officeId": { "type": "string" },
         "fiscalYear": { "type": "string" },
         "memoNo": { "type": "string" },
         "memoDate": { "type": "string" },
@@ -42,13 +84,14 @@
         "remaining": { "type": "integer" },
         "status": { "type": "string", "enum": ["active", "executed"] }
       },
-      "required": ["fiscalYear", "memoNo", "economicCode", "allocated", "spent", "remaining", "status"]
+      "required": ["officeId", "fiscalYear", "memoNo", "economicCode", "allocated", "spent", "remaining", "status"]
     },
     "ExpenseItem": {
       "title": "Expense Item",
-      "description": "Individual expenditure item before bill preparation (no VAT/IT deduction).",
+      "description": "Office-scoped individual expenditure item before bill preparation.",
       "type": "object",
       "properties": {
+        "officeId": { "type": "string" },
         "fiscalYear": { "type": "string" },
         "economicCode": { "type": "string" },
         "date": { "type": "string" },
@@ -58,24 +101,18 @@
         "status": { "type": "string", "enum": ["listed", "billed"] },
         "billId": { "type": ["string", "null"] }
       },
-      "required": ["fiscalYear", "economicCode", "date", "description", "amount", "responsibleEmployee", "status"]
+      "required": ["officeId", "fiscalYear", "economicCode", "date", "description", "amount", "responsibleEmployee", "status"]
     },
     "Bill": {
       "title": "Bill",
-      "description": "Grouped bill for an economic code with VAT & Income Tax snapshot and DDO workflow.",
+      "description": "Office-scoped grouped bill with VAT & IT deductions and DDO approval workflow.",
       "type": "object",
       "properties": {
+        "officeId": { "type": "string" },
         "billNo": { "type": "string" },
         "fiscalYear": { "type": "string" },
         "economicCode": { "type": "string" },
         "date": { "type": "string" },
-        "billDate": { "type": "string" },
-        "tokenNo": { "type": "string" },
-        "purposeText": { "type": "string" },
-        "payeeText": { "type": "string" },
-        "netPayableCode": { "type": "string" },
-        "supplier": { "type": ["object", "null"] },
-        "deductions": { "type": "array" },
         "itemIds": { "type": "array", "items": { "type": "string" } },
         "items": { "type": "array" },
         "grossAmount": { "type": "integer" },
@@ -87,35 +124,38 @@
         "netPayable": { "type": "integer" },
         "status": { "type": "string", "enum": ["draft", "submitted", "approved", "rejected", "cancelled"] }
       },
-      "required": ["fiscalYear", "economicCode", "itemIds", "grossAmount", "vatAmount", "itAmount", "totalDeduction", "netPayable", "status"]
+      "required": ["officeId", "fiscalYear", "economicCode", "itemIds", "grossAmount", "vatAmount", "itAmount", "totalDeduction", "netPayable", "status"]
     },
     "FyCounter": {
       "title": "Fiscal Year Counter",
-      "description": "Sequential bill number generator per fiscal year.",
+      "description": "Sequential bill number generator per office and fiscal year.",
       "type": "object",
       "properties": {
+        "officeId": { "type": "string" },
         "fiscalYear": { "type": "string" },
         "nextNumber": { "type": "integer" }
       },
-      "required": ["fiscalYear", "nextNumber"]
+      "required": ["officeId", "fiscalYear", "nextNumber"]
     }
   },
   "auth": {
     "providers": ["password", "google.com"]
   },
   "firestore": {
-    "/users/{uid}": { "schema": { "$ref": "#/entities/User" }, "description": "Office users" },
-    "/invites/{emailLower}": { "description": "Pending user invitations" },
-    "/settings/{docId}": { "description": "Office settings" },
-    "/economicCodes/{code}": { "schema": { "$ref": "#/entities/EconomicCode" }, "description": "Master economic codes" },
-    "/vatTaxRates/{rateId}": { "description": "VAT and Income Tax rates per FY" },
-    "/spendingLimits/{limitId}": { "description": "Ministry spending percentage caps" },
-    "/fyCodeTotals/{totalId}": { "description": "Aggregated FY + Economic Code allocation, approvedSpent, and pendingAmount" },
-    "/budgets/{budgetId}": { "schema": { "$ref": "#/entities/Budget" }, "description": "Budget allocations and revisions" },
-    "/expenseItems/{itemId}": { "schema": { "$ref": "#/entities/ExpenseItem" }, "description": "Listed and billed expense items" },
-    "/bills/{billId}": { "schema": { "$ref": "#/entities/Bill" }, "description": "Office bills awaiting or completing DDO approval" },
-    "/counters/{counterId}": { "schema": { "$ref": "#/entities/FyCounter" }, "description": "Sequential FY bill counters" },
+    "/offices/{officeId}": { "schema": { "$ref": "#/entities/Office" }, "description": "Offices" },
+    "/users/{uid}": { "schema": { "$ref": "#/entities/User" }, "description": "Users & per-office access maps" },
+    "/workHistory/{whId}": { "schema": { "$ref": "#/entities/WorkHistory" }, "description": "Posting history records" },
+    "/invites/{emailLower}": { "description": "Pending user invitations with office/role/kind" },
+    "/settings/{docId}": { "description": "Legacy single-office settings and bootstrap sentinel" },
+    "/economicCodes/{code}": { "schema": { "$ref": "#/entities/EconomicCode" }, "description": "Global master economic codes" },
+    "/vatTaxRates/{rateId}": { "description": "Global VAT and Income Tax rates per FY" },
+    "/spendingLimits/{limitId}": { "description": "Office-scoped ministry spending percentage caps" },
+    "/fyCodeTotals/{totalId}": { "description": "Office + FY + Economic Code totals ({officeId}_{fy}_{code})" },
+    "/budgets/{budgetId}": { "schema": { "$ref": "#/entities/Budget" }, "description": "Office-scoped budget allocations" },
+    "/expenseItems/{itemId}": { "schema": { "$ref": "#/entities/ExpenseItem" }, "description": "Office-scoped expense items" },
+    "/bills/{billId}": { "schema": { "$ref": "#/entities/Bill" }, "description": "Office-scoped bills" },
+    "/counters/{counterId}": { "schema": { "$ref": "#/entities/FyCounter" }, "description": "Office + FY bill counters ({officeId}_{fy}_bill)" },
     "/spendings/{spendingId}": { "description": "Legacy spendings retained for migration" },
-    "/auditLogs/{logId}": { "description": "Immutable audit trail" }
+    "/auditLogs/{logId}": { "description": "Immutable office-scoped and global audit trail" }
   }
 }

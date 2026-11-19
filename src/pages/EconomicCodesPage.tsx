@@ -15,7 +15,7 @@ import {
   setEconomicCodeActive,
   upsertEconomicCode,
 } from '../lib/firestoreOps';
-import { canEditDeleteBudgets, canManageRates } from '../lib/permissions';
+import { canManageRates } from '../lib/permissions';
 import type { EconomicCodeDoc } from '../types';
 
 function parseCsvLine(line: string): string[] {
@@ -43,23 +43,26 @@ function parseCsvLine(line: string): string[] {
 }
 
 export function EconomicCodesPage() {
-  const { userDoc, accessState } = useAuth();
-  const { pushToast, t, reportPermissionError, clearPermissionError } = useApp();
+  const { userDoc, accessState, isSuperAdmin } = useAuth();
+  const { currentOfficeRole, actorSnapshot, pushToast, t, reportPermissionError, clearPermissionError } = useApp();
   const { economicCodes, loading } = useEconomicCodes();
 
-  const canEdit = userDoc ? canManageRates(userDoc.role) : false;
-  const isSuperAdmin = userDoc ? canEditDeleteBudgets(userDoc.role) : false;
+  const canEdit = canManageRates({ isSuperAdmin, officeRole: currentOfficeRole });
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [page, setPage] = useState(1);
 
-  // Usage counts across all FYs (budgets count + used in rates/limits)
+  // Usage counts across all offices/FYs (Super Admin only; non-admins cannot list global budgets/limits)
   const [budgetUsageMap, setBudgetUsageMap] = useState<Map<string, number>>(new Map());
   const [otherUsedCodes, setOtherUsedCodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (accessState !== 'active') return;
+    if (accessState !== 'active' || !isSuperAdmin) {
+      setBudgetUsageMap(new Map());
+      setOtherUsedCodes(new Set());
+      return;
+    }
 
     const unsubBudgets = onSnapshot(
       collection(db, 'budgets'),
@@ -123,7 +126,7 @@ export function EconomicCodesPage() {
       unsubRates();
       unsubLimits();
     };
-  }, [accessState, clearPermissionError, reportPermissionError]);
+  }, [accessState, isSuperAdmin, clearPermissionError, reportPermissionError]);
 
   const isCodeUsedAnywhere = (code: string): boolean => {
     return (
@@ -188,6 +191,7 @@ export function EconomicCodesPage() {
       return;
     }
     setSaving(true);
+    const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
       await upsertEconomicCode(
         {
@@ -196,7 +200,7 @@ export function EconomicCodesPage() {
           headNameBn: headNameBnInput,
           active: activeInput,
         },
-        { uid: userDoc.id, name: userDoc.name }
+        actor
       );
       pushToast('success', editingEntry ? 'Economic code updated.' : 'Economic code added.');
       setModalOpen(false);
@@ -209,11 +213,9 @@ export function EconomicCodesPage() {
 
   const handleToggleActive = async (entry: EconomicCodeDoc) => {
     if (!userDoc || !canEdit) return;
+    const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
-      await setEconomicCodeActive(entry, !entry.active, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      await setEconomicCodeActive(entry, !entry.active, actor);
       pushToast(
         'success',
         entry.active ? `${entry.code} deactivated.` : `${entry.code} activated.`
@@ -225,11 +227,9 @@ export function EconomicCodesPage() {
 
   const handleDelete = async (entry: EconomicCodeDoc) => {
     if (!userDoc || !isSuperAdmin) return;
+    const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
-      await deleteEconomicCodeIfUnused(entry, {
-        uid: userDoc.id,
-        name: userDoc.name,
-      });
+      await deleteEconomicCodeIfUnused(entry, actor);
       pushToast('success', `Deleted economic code ${entry.code}.`);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to delete code.');
@@ -239,6 +239,7 @@ export function EconomicCodesPage() {
   const handleCsvFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !userDoc || !canEdit) return;
+    const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
       const text = await file.text();
       const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
@@ -271,7 +272,7 @@ export function EconomicCodesPage() {
             headNameBn: finalHead,
             active: true,
           },
-          { uid: userDoc.id, name: userDoc.name }
+          actor
         );
         imported++;
       }
@@ -296,6 +297,11 @@ export function EconomicCodesPage() {
   return (
     <Layout title={t('navEconomicCodes')} actions={actions}>
       <div className="space-y-3.5 md:space-y-4">
+        {!canEdit && (
+          <div className="card-surface px-3.5 md:px-4 py-2.5 text-xs text-[var(--muted)]">
+            গ্লোবাল অর্থনৈতিক কোড তালিকা (সকল কার্যালয়ের জন্য অভিন্ন) — শুধুমাত্র সুপার অ্যাডমিন নতুন কোড যোগ বা সম্পাদনা করতে পারবেন।
+          </div>
+        )}
         {canEdit && (
           <input
             ref={fileInputRef}

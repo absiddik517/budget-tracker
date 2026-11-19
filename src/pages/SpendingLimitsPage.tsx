@@ -1,32 +1,116 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useAllOfficesSummary } from '../hooks/useAllOfficesSummary';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
-import { createSpendingLimitTx, withdrawSpendingLimit } from '../lib/firestoreOps';
+import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
+import {
+  createSpendingLimitsForAllOfficesBatch,
+  createSpendingLimitTx,
+  withdrawSpendingLimit,
+} from '../lib/firestoreOps';
 import { formatNumberIN, formatTaka } from '../lib/money';
 import { canManageLimits } from '../lib/permissions';
 import type { EconomicCodeDoc, SpendingLimitDoc, SpendingLimitType } from '../types';
 
+const ALL_ACTIVE_OFFICES_TARGET = '__ALL_ACTIVE__';
+
 export function SpendingLimitsPage() {
-  const { userDoc } = useAuth();
-  const { selectedFy, pushToast, t } = useApp();
+  const { userDoc, isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    currentOfficeId,
+    currentOfficeRole,
+    offices,
+    officesById,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    actorSnapshot,
+    reportPermissionError,
+    clearPermissionError,
+    pushToast,
+    t,
+  } = useApp();
+
   const { budgets, fyCodeTotals, spendingLimits, loading } = useFyData(selectedFy);
+  const { totals: allOfficesFyTotals, loading: allTotalsLoading } = useAllOfficesSummary(
+    selectedFy,
+    Boolean(isSuperAdmin && isAllOfficesMode)
+  );
   const { getCodeEntry, getHead } = useEconomicCodes();
 
-  const canManage = userDoc ? canManageLimits(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const permCtx = { isSuperAdmin, officeRole: currentOfficeRole };
+  const canManage =
+    canManageLimits(permCtx) &&
+    !isLegacyPreMigration &&
+    Boolean(isSuperAdmin || realOfficeId);
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
+
+  // Cross-office spendingLimits listener only when Super Admin is in All Offices mode
+  const [allOfficesLimits, setAllOfficesLimits] = useState<SpendingLimitDoc[]>([]);
+  const [allLimitsLoading, setAllLimitsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isSuperAdmin || !isAllOfficesMode || !selectedFy) {
+      setAllOfficesLimits([]);
+      setAllLimitsLoading(false);
+      return;
+    }
+    setAllLimitsLoading(true);
+    const q = query(
+      collection(db, 'spendingLimits'),
+      where('fiscalYear', '==', selectedFy)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        clearPermissionError('spendingLimits');
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as SpendingLimitDoc))
+          .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+        setAllOfficesLimits(list);
+        setAllLimitsLoading(false);
+      },
+      (err) => {
+        logFirestoreError(err, OperationType.LIST, 'spendingLimits');
+        if (isPermissionDeniedError(err)) reportPermissionError('spendingLimits');
+        setAllLimitsLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [isSuperAdmin, isAllOfficesMode, selectedFy, clearPermissionError, reportPermissionError]);
+
+  const displayedLimits =
+    isSuperAdmin && isAllOfficesMode ? allOfficesLimits : spendingLimits;
+  const displayedLoading =
+    isSuperAdmin && isAllOfficesMode ? allLimitsLoading || allTotalsLoading : loading;
 
   const [filter, setFilter] = useState<'all' | 'code' | 'budget' | 'withdrawn'>('all');
   const [page, setPage] = useState(1);
   const [mobileAddOpen, setMobileAddOpen] = useState(false);
 
   // Add limit form state
+  const [targetScope, setTargetScope] = useState<string>(
+    realOfficeId || ALL_ACTIVE_OFFICES_TARGET
+  );
   const [limitType, setLimitType] = useState<SpendingLimitType>('code');
   const [economicCode, setEconomicCode] = useState('');
   const [codeError, setCodeError] = useState('');
@@ -38,15 +122,40 @@ export function SpendingLimitsPage() {
   const [refNo, setRefNo] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Sync default targetScope when header office changes
+  useEffect(() => {
+    if (isSuperAdmin) {
+      setTargetScope(realOfficeId || ALL_ACTIVE_OFFICES_TARGET);
+    } else if (realOfficeId) {
+      setTargetScope(realOfficeId);
+    }
+  }, [isSuperAdmin, realOfficeId]);
+
+  const isBatchAllOffices =
+    isSuperAdmin && targetScope === ALL_ACTIVE_OFFICES_TARGET;
+
+  // Enforce 'code' limit type when targeting all offices or another office without loaded budgets
+  useEffect(() => {
+    if (isBatchAllOffices || (isSuperAdmin && targetScope !== realOfficeId)) {
+      setLimitType('code');
+      setBudgetId('');
+    }
+  }, [isBatchAllOffices, isSuperAdmin, targetScope, realOfficeId]);
+
+  const activeOffices = useMemo(
+    () => offices.filter((o) => o.status === 'active'),
+    [offices]
+  );
+
   const filteredLimits = useMemo(() => {
-    return spendingLimits.filter((l) => {
+    return displayedLimits.filter((l) => {
       if (filter === 'all') return true;
       if (filter === 'withdrawn') return l.status === 'withdrawn';
       if (filter === 'code') return l.type === 'code' && l.status === 'active';
       if (filter === 'budget') return l.type === 'budget' && l.status === 'active';
       return true;
     });
-  }, [spendingLimits, filter]);
+  }, [displayedLimits, filter]);
 
   const pagedLimits = useMemo(() => {
     const start = (page - 1) * 50;
@@ -83,17 +192,35 @@ export function SpendingLimitsPage() {
     let allocated = 0;
     let spent = 0;
     let pending = 0;
-    if (limitType === 'code' && economicCode.trim()) {
-      const tot = fyCodeTotals.find((f) => f.economicCode === economicCode.trim());
-      if (tot) {
-        allocated = tot.allocated;
-        spent = tot.spent;
-        pending = Math.max(0, tot.pendingAmount || 0);
-      } else {
-        const matching = budgets.filter((b) => b.economicCode === economicCode.trim());
-        allocated = matching.reduce((acc, b) => acc + b.allocated, 0);
-        spent = matching.reduce((acc, b) => acc + b.spent, 0);
-        pending = matching.reduce((acc, b) => acc + Math.max(0, b.pendingAmount || 0), 0);
+    const code = economicCode.trim();
+
+    if (limitType === 'code' && code) {
+      if (isBatchAllOffices && isAllOfficesMode) {
+        const matchingTotals = allOfficesFyTotals.filter((f) => f.economicCode === code);
+        allocated = matchingTotals.reduce((s, f) => s + f.allocated, 0);
+        spent = matchingTotals.reduce((s, f) => s + f.spent, 0);
+        pending = matchingTotals.reduce((s, f) => s + Math.max(0, f.pendingAmount || 0), 0);
+      } else if (isSuperAdmin && isAllOfficesMode && targetScope) {
+        const tot = allOfficesFyTotals.find(
+          (f) => f.officeId === targetScope && f.economicCode === code
+        );
+        if (tot) {
+          allocated = tot.allocated;
+          spent = tot.spent;
+          pending = Math.max(0, tot.pendingAmount || 0);
+        }
+      } else if (targetScope === realOfficeId) {
+        const tot = fyCodeTotals.find((f) => f.economicCode === code);
+        if (tot) {
+          allocated = tot.allocated;
+          spent = tot.spent;
+          pending = Math.max(0, tot.pendingAmount || 0);
+        } else {
+          const matching = budgets.filter((b) => b.economicCode === code);
+          allocated = matching.reduce((acc, b) => acc + b.allocated, 0);
+          spent = matching.reduce((acc, b) => acc + b.spent, 0);
+          pending = matching.reduce((acc, b) => acc + Math.max(0, b.pendingAmount || 0), 0);
+        }
       }
     } else if (limitType === 'budget' && budgetId) {
       const b = budgets.find((item) => item.id === budgetId);
@@ -108,7 +235,20 @@ export function SpendingLimitsPage() {
     const pctUsedOfCap =
       cap > 0 ? Math.min(100, Math.round(((spent + pending) / cap) * 100)) : 0;
     return { allocated, spent, pending, cap, spendable, pctUsedOfCap };
-  }, [limitType, economicCode, budgetId, rateStr, fyCodeTotals, budgets]);
+  }, [
+    limitType,
+    economicCode,
+    budgetId,
+    rateStr,
+    fyCodeTotals,
+    budgets,
+    isBatchAllOffices,
+    isAllOfficesMode,
+    isSuperAdmin,
+    targetScope,
+    realOfficeId,
+    allOfficesFyTotals,
+  ]);
 
   const resetForm = () => {
     setLimitType('code');
@@ -124,7 +264,7 @@ export function SpendingLimitsPage() {
 
   const handleSaveLimit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userDoc || !canManage) return;
+    if (!effectiveActor || !canManage) return;
     const code = economicCode.trim();
     const masterEntry = getCodeEntry(code);
     if (!masterEntry) {
@@ -140,21 +280,43 @@ export function SpendingLimitsPage() {
 
     setSaving(true);
     try {
-      await createSpendingLimitTx(
-        {
-          type: limitType,
-          budgetId: limitType === 'budget' ? budgetId : null,
-          fiscalYear: selectedFy,
-          economicCode: code,
-          headName: masterEntry.headName,
-          headNameBn: masterEntry.headNameBn,
-          rate: parseFloat(rateStr) || 0,
-          effectiveDate,
-          refNo,
-        },
-        { uid: userDoc.id, name: userDoc.name }
-      );
-      pushToast('success', 'Spending limit saved.');
+      if (isBatchAllOffices) {
+        const count = await createSpendingLimitsForAllOfficesBatch(
+          {
+            offices,
+            fiscalYear: selectedFy,
+            economicCode: code,
+            headName: masterEntry.headName,
+            headNameBn: masterEntry.headNameBn,
+            rate: parseFloat(rateStr) || 0,
+            effectiveDate,
+            refNo,
+          },
+          effectiveActor
+        );
+        pushToast('success', `Spending limit applied to ${count} active office(s).`);
+      } else {
+        const targetOfficeId = isSuperAdmin ? targetScope : realOfficeId;
+        if (!targetOfficeId || targetOfficeId === ALL_ACTIVE_OFFICES_TARGET) {
+          throw new Error('Select a valid office.');
+        }
+        await createSpendingLimitTx(
+          {
+            officeId: targetOfficeId,
+            type: limitType,
+            budgetId: limitType === 'budget' ? budgetId : null,
+            fiscalYear: selectedFy,
+            economicCode: code,
+            headName: masterEntry.headName,
+            headNameBn: masterEntry.headNameBn,
+            rate: parseFloat(rateStr) || 0,
+            effectiveDate,
+            refNo,
+          },
+          effectiveActor
+        );
+        pushToast('success', 'Spending limit saved.');
+      }
       resetForm();
       setMobileAddOpen(false);
     } catch (err) {
@@ -165,9 +327,9 @@ export function SpendingLimitsPage() {
   };
 
   const handleWithdraw = async (limit: SpendingLimitDoc) => {
-    if (!userDoc || !canManage) return;
+    if (!effectiveActor || !canManage) return;
     try {
-      await withdrawSpendingLimit(limit, { uid: userDoc.id, name: userDoc.name });
+      await withdrawSpendingLimit(limit, effectiveActor);
       pushToast('success', 'Spending limit withdrawn.');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to withdraw limit.');
@@ -179,23 +341,34 @@ export function SpendingLimitsPage() {
     let spent = 0;
     let pending = 0;
     let budgetLabel = 'All entries';
+    let hasStats = false;
+
     if (l.type === 'code') {
-      const tot = fyCodeTotals.find((f) => f.economicCode === l.economicCode);
-      allocated = tot
-        ? tot.allocated
-        : budgets
-            .filter((b) => b.economicCode === l.economicCode)
-            .reduce((s, b) => s + b.allocated, 0);
-      spent = tot
-        ? tot.spent
-        : budgets
-            .filter((b) => b.economicCode === l.economicCode)
-            .reduce((s, b) => s + b.spent, 0);
-      pending = tot
-        ? Math.max(0, tot.pendingAmount || 0)
-        : budgets
-            .filter((b) => b.economicCode === l.economicCode)
-            .reduce((s, b) => s + Math.max(0, b.pendingAmount || 0), 0);
+      if (isAllOfficesMode) {
+        const tot = allOfficesFyTotals.find(
+          (f) => f.officeId === l.officeId && f.economicCode === l.economicCode
+        );
+        if (tot) {
+          allocated = tot.allocated;
+          spent = tot.spent;
+          pending = Math.max(0, tot.pendingAmount || 0);
+          hasStats = true;
+        }
+      } else {
+        const tot = fyCodeTotals.find((f) => f.economicCode === l.economicCode);
+        if (tot) {
+          allocated = tot.allocated;
+          spent = tot.spent;
+          pending = Math.max(0, tot.pendingAmount || 0);
+          hasStats = true;
+        } else {
+          const matching = budgets.filter((b) => b.economicCode === l.economicCode);
+          allocated = matching.reduce((s, b) => s + b.allocated, 0);
+          spent = matching.reduce((s, b) => s + b.spent, 0);
+          pending = matching.reduce((s, b) => s + Math.max(0, b.pendingAmount || 0), 0);
+          hasStats = matching.length > 0;
+        }
+      }
     } else if (l.budgetId) {
       const b = budgets.find((item) => item.id === l.budgetId);
       if (b) {
@@ -203,17 +376,52 @@ export function SpendingLimitsPage() {
         spent = b.spent;
         pending = Math.max(0, b.pendingAmount || 0);
         budgetLabel = b.memoNo;
+        hasStats = true;
       } else {
         budgetLabel = l.budgetId;
       }
     }
     const cap = Math.round((allocated * l.rate) / 100);
     const spendable = cap - spent - pending;
-    return { cap, spent, pending, spendable, budgetLabel };
+    return { cap, spent, pending, spendable, budgetLabel, hasStats };
   };
+
+  const singleBudgetDisabled =
+    isBatchAllOffices || (isSuperAdmin && targetScope !== realOfficeId);
 
   const renderAddLimitForm = (formId: string, showInlineButtons: boolean) => (
     <form id={formId} onSubmit={handleSaveLimit} className="space-y-3.5">
+      {isSuperAdmin && (
+        <div>
+          <label
+            htmlFor={`${formId}-office`}
+            className="block text-xs font-medium text-[var(--muted)] mb-1"
+          >
+            Target Office
+          </label>
+          <select
+            id={`${formId}-office`}
+            value={targetScope}
+            onChange={(e) => setTargetScope(e.target.value)}
+            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
+          >
+            <option value={ALL_ACTIVE_OFFICES_TARGET}>
+              All active offices ({activeOffices.length})
+            </option>
+            {activeOffices.map((off) => (
+              <option key={off.id} value={off.id}>
+                {off.nameBn || off.name} ({off.code})
+              </option>
+            ))}
+          </select>
+          {isBatchAllOffices && (
+            <p className="text-[11px] text-[var(--muted)] mt-1">
+              Applies an economic-code limit to every active office simultaneously.
+            </p>
+          )}
+        </div>
+      )}
+
       <div>
         <div className="text-xs font-medium text-[var(--muted)] mb-1.5">Type</div>
         <div className="grid grid-cols-2 gap-1.5">
@@ -233,8 +441,9 @@ export function SpendingLimitsPage() {
           </button>
           <button
             type="button"
+            disabled={singleBudgetDisabled}
             onClick={() => setLimitType('budget')}
-            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
               limitType === 'budget'
                 ? 'bg-[var(--accent)] text-[var(--on-accent)]'
                 : 'border border-[var(--line)] text-[var(--text)]'
@@ -398,6 +607,12 @@ export function SpendingLimitsPage() {
           Caps set by the ministry or directorate. Spending on a code or budget cannot exceed rate × allocation. If both a code cap and a budget cap apply, the stricter one wins.
         </div>
 
+        {isLegacyPreMigration && (
+          <div className="card-surface px-4 py-3 border-l-4 border-[var(--warn)] text-xs text-[var(--text)]">
+            Complete the Multi-Office Migration in Settings before creating or managing office spending limits.
+          </div>
+        )}
+
         {/* Filter chips */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
           {([
@@ -432,7 +647,7 @@ export function SpendingLimitsPage() {
           <div className={`${canManage ? 'xl:col-span-8' : 'xl:col-span-12'} card-surface overflow-hidden`}>
             {/* Mobile Card List */}
             <div className="md:hidden divide-y divide-[var(--line)]">
-              {loading ? (
+              {displayedLoading ? (
                 <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
                   Loading spending limits…
                 </div>
@@ -447,6 +662,7 @@ export function SpendingLimitsPage() {
                     headName: l.headName,
                     headNameBn: l.headNameBn,
                   });
+                  const office = l.officeId ? officesById.get(l.officeId) : undefined;
                   return (
                     <div key={l.id} className="p-3.5 space-y-2.5">
                       <div className="flex items-start justify-between gap-2">
@@ -455,6 +671,11 @@ export function SpendingLimitsPage() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border border-[var(--line)] text-[var(--muted)]">
                               {l.type === 'code' ? 'On code' : 'On budget'}
                             </span>
+                            {office && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-[var(--surface-subtle)] text-[var(--text)] bn">
+                                {office.nameBn || office.name}
+                              </span>
+                            )}
                             <span>· {stats.budgetLabel}</span>
                             <span className="tabular-nums">· Eff. {formatDateDisplay(l.effectiveDate)}</span>
                           </div>
@@ -472,19 +693,19 @@ export function SpendingLimitsPage() {
                         <div className="min-w-0">
                           <div className="text-[11px] text-[var(--muted)]">Rate · Cap</div>
                           <div className="font-medium tabular-nums truncate">
-                            {l.rate}% · {formatNumberIN(stats.cap)}
+                            {l.rate}% · {stats.hasStats ? formatNumberIN(stats.cap) : '—'}
                           </div>
                         </div>
                         <div className="min-w-0">
                           <div className="text-[11px] text-[var(--muted)]">Spent</div>
                           <div className="font-medium tabular-nums truncate">
-                            {l.status === 'active' ? formatNumberIN(stats.spent) : '—'}
+                            {l.status === 'active' && stats.hasStats ? formatNumberIN(stats.spent) : '—'}
                           </div>
                         </div>
                         <div className="min-w-0 text-right">
                           <div className="text-[11px] text-[var(--muted)]">Spendable</div>
                           <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
-                            {l.status === 'active' ? formatNumberIN(stats.spendable) : '—'}
+                            {l.status === 'active' && stats.hasStats ? formatNumberIN(stats.spendable) : '—'}
                           </div>
                         </div>
                       </div>
@@ -512,6 +733,9 @@ export function SpendingLimitsPage() {
                 <thead>
                   <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
                     <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Type</th>
+                    {isAllOfficesMode && (
+                      <th className="py-3 px-4 font-medium whitespace-nowrap">Office</th>
+                    )}
                     <th className="py-3 px-4 font-medium">কোড · ব্যয়ের খাত</th>
                     <th className="py-3 px-4 font-medium">Budget</th>
                     <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Rate</th>
@@ -524,15 +748,21 @@ export function SpendingLimitsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
-                  {loading ? (
+                  {displayedLoading ? (
                     <tr>
-                      <td colSpan={canManage ? 10 : 9} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                      <td
+                        colSpan={(canManage ? 10 : 9) + (isAllOfficesMode ? 1 : 0)}
+                        className="py-8 px-4 text-center text-sm text-[var(--muted)]"
+                      >
                         Loading spending limits…
                       </td>
                     </tr>
                   ) : pagedLimits.length === 0 ? (
                     <tr>
-                      <td colSpan={canManage ? 10 : 9} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
+                      <td
+                        colSpan={(canManage ? 10 : 9) + (isAllOfficesMode ? 1 : 0)}
+                        className="py-8 px-4 text-center text-sm text-[var(--muted)]"
+                      >
                         No spending limits for FY {selectedFy}.
                       </td>
                     </tr>
@@ -543,6 +773,7 @@ export function SpendingLimitsPage() {
                         headName: l.headName,
                         headNameBn: l.headNameBn,
                       });
+                      const office = l.officeId ? officesById.get(l.officeId) : undefined;
                       return (
                         <tr key={l.id} className="group hover:bg-[var(--surface-subtle)] transition-colors">
                           <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 whitespace-nowrap transition-colors">
@@ -550,6 +781,11 @@ export function SpendingLimitsPage() {
                               {l.type === 'code' ? 'On code' : 'On budget'}
                             </span>
                           </td>
+                          {isAllOfficesMode && (
+                            <td className="py-3 px-4 whitespace-nowrap text-xs bn text-[var(--text)]">
+                              {office ? office.nameBn || office.name : l.officeId || '—'}
+                            </td>
+                          )}
                           <td className="py-3 px-4 min-w-[180px]">
                             <div className="font-medium text-[var(--text)]">
                               <span className="tabular-nums">{l.economicCode}</span>{' '}
@@ -563,13 +799,13 @@ export function SpendingLimitsPage() {
                             {l.rate}%
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(stats.cap)}
+                            {stats.hasStats ? formatNumberIN(stats.cap) : '—'}
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                            {l.status === 'active' ? formatNumberIN(stats.spent) : '—'}
+                            {l.status === 'active' && stats.hasStats ? formatNumberIN(stats.spent) : '—'}
                           </td>
                           <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-medium">
-                            {l.status === 'active' ? formatNumberIN(stats.spendable) : '—'}
+                            {l.status === 'active' && stats.hasStats ? formatNumberIN(stats.spendable) : '—'}
                           </td>
                           <td className="py-3 px-4 tabular-nums whitespace-nowrap text-xs text-[var(--muted)]">
                             {formatDateDisplay(l.effectiveDate)}
@@ -653,3 +889,4 @@ export function SpendingLimitsPage() {
     </Layout>
   );
 }
+

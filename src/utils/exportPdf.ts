@@ -1,16 +1,29 @@
 import html2canvas from 'html2canvas-pro';
 import { jsPDF } from 'jspdf';
+import { formatActorBrief, formatApprovedByLine } from '../lib/actor';
 import { formatDateDisplay } from '../lib/dates';
 import { formatNumberIN } from '../lib/money';
-import type { BillDoc, BudgetDoc, ExpenseItemDoc } from '../types';
+import type { BillDoc, BudgetDoc, ExpenseItemDoc, OfficeDoc } from '../types';
 import { saveAndShareFile, type SaveAndShareOutcome } from './saveFile';
 
 export type ReportTabKey =
+  | 'officesOverview'
   | 'allocations'
   | 'summary'
   | 'headBills'
   | 'deductions'
   | 'expenseItems';
+
+export interface OfficesOverviewRowPdf {
+  officeId: string;
+  officeName: string;
+  officeCode: string;
+  allocated: number;
+  approvedSpent: number;
+  pendingAmount: number;
+  available: number;
+  usedPct: number;
+}
 
 export interface AllocationGroupPdf {
   economicCode: string;
@@ -60,6 +73,15 @@ export interface ExportReportPdfPayload {
   selectedFy: string;
   officeName: string;
   officeAddress?: string;
+  officesById?: Map<string, OfficeDoc>;
+  officesOverviewRows?: OfficesOverviewRowPdf[];
+  officesOverviewTotals?: {
+    allocated: number;
+    approvedSpent: number;
+    pendingAmount: number;
+    available: number;
+    usedPct: number;
+  };
   selectedCode?: string;
   budgetStatusFilter?: 'all' | 'active' | 'executed';
   fromDate?: string;
@@ -145,6 +167,8 @@ function esc(value: string): string {
 
 function getTabTitle(tab: ReportTabKey): string {
   switch (tab) {
+    case 'officesOverview':
+      return 'All Offices Budget Overview';
     case 'allocations':
       return 'FY Allocations Report';
     case 'summary':
@@ -181,16 +205,61 @@ function buildHeadCell(code: string, nameEn: string, nameBn?: string): string {
 function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
   const { tab } = payload;
 
+  if (tab === 'officesOverview') {
+    const columns: TableColumn[] = [
+      { label: 'Office', align: 'left', width: '28%' },
+      { label: 'Code', align: 'left', width: '10%' },
+      { label: 'Allocated (৳)', align: 'right', width: '14%' },
+      { label: 'Approved (৳)', align: 'right', width: '14%' },
+      { label: 'Pending (৳)', align: 'right', width: '13%' },
+      { label: 'Available (৳)', align: 'right', width: '14%' },
+      { label: 'Used', align: 'right', width: '7%' },
+    ];
+    const rows = payload.officesOverviewRows || [];
+    const rowsHtml = rows.map(
+      (r) => `<tr>
+        <td style="${tdStyle('left', "font-weight: 600; font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(r.officeName)}</td>
+        <td style="${tdStyle('left', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(r.officeCode)}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(r.allocated))}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(r.approvedSpent))}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; color: #92400E; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(r.pendingAmount))}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; font-weight: 600; color: #0F766E; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(r.available))}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${r.usedPct}%</td>
+      </tr>`
+    );
+
+    if (rowsHtml.length === 0) {
+      rowsHtml.push(
+        `<tr><td colspan="7" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No office totals available for FY ${esc(payload.selectedFy)}.</td></tr>`
+      );
+    } else if (payload.officesOverviewTotals) {
+      const tot = payload.officesOverviewTotals;
+      rowsHtml.push(
+        `<tr style="background-color: #EDF2EF;">
+          <td colspan="2" style="${tdStyle('left', 'font-weight: 700;')}">Grand Total (${rows.length} offices)</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(tot.allocated))}</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(tot.approvedSpent))}</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(tot.pendingAmount))}</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(tot.available))}</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${tot.usedPct}%</td>
+        </tr>`
+      );
+    }
+
+    return { columns, rowsHtml };
+  }
+
   if (tab === 'allocations') {
     const columns: TableColumn[] = [
-      { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
-      { label: 'Memo No', align: 'left', width: '14%' },
-      { label: 'Date', align: 'left', width: '10%' },
-      { label: 'Type', align: 'left', width: '8%' },
-      { label: 'Allocated (৳)', align: 'right', width: '10%' },
-      { label: 'Approved (৳)', align: 'right', width: '10%' },
-      { label: 'Pending (৳)', align: 'right', width: '10%' },
-      { label: 'Available (৳)', align: 'right', width: '10%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '24%' },
+      { label: 'Memo No', align: 'left', width: '12%' },
+      { label: 'Date', align: 'left', width: '9%' },
+      { label: 'Type', align: 'left', width: '7%' },
+      { label: 'Responsible', align: 'left', width: '14%' },
+      { label: 'Allocated (৳)', align: 'right', width: '8.5%' },
+      { label: 'Approved (৳)', align: 'right', width: '8.5%' },
+      { label: 'Pending (৳)', align: 'right', width: '8.5%' },
+      { label: 'Available (৳)', align: 'right', width: '8.5%' },
     ];
 
     const rowsHtml: string[] = [];
@@ -201,12 +270,14 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
           headNameBn: entry.headNameBn,
         });
         const pending = Math.max(0, entry.pendingAmount || 0);
+        const actorStr = formatActorBrief(entry.createdBy, payload.officesById);
         rowsHtml.push(
           `<tr>
             <td style="${tdStyle('left')}">${buildHeadCell(entry.economicCode, head.headName, head.headNameBn)}</td>
             <td style="${tdStyle('left', 'white-space: nowrap;')}">${esc(entry.memoNo)}</td>
             <td style="${tdStyle('left', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatDateDisplay(entry.memoDate))}</td>
             <td style="${tdStyle('left', 'text-transform: capitalize; color: #55655F;')}">${esc(entry.entryType)}</td>
+            <td style="${tdStyle('left', "font-size: 11px; color: #34433E; font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(actorStr)}</td>
             <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(entry.allocated))}</td>
             <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(entry.spent))}</td>
             <td style="${tdStyle('right', 'white-space: nowrap; color: #92400E; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(pending))}</td>
@@ -218,7 +289,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
       if (group.entries.length > 1) {
         rowsHtml.push(
           `<tr style="background-color: #EDF2EF;">
-            <td colspan="4" style="${tdStyle('left', 'font-weight: 700; font-size: 11.5px;')}">Subtotal · ${esc(group.economicCode)} ${esc(group.headNameBn || group.headName)}</td>
+            <td colspan="5" style="${tdStyle('left', 'font-weight: 700; font-size: 11.5px;')}">Subtotal · ${esc(group.economicCode)} ${esc(group.headNameBn || group.headName)}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.allocated))}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.approvedSpent))}</td>
             <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(group.pendingAmount))}</td>
@@ -230,7 +301,7 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
     if (rowsHtml.length === 0) {
       rowsHtml.push(
-        `<tr><td colspan="8" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No records match your current filter.</td></tr>`
+        `<tr><td colspan="9" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No records match your current filter.</td></tr>`
       );
     }
 
@@ -721,6 +792,7 @@ export async function exportBillsPdf(params: {
   selectedFy: string;
   officeName: string;
   officeAddress?: string;
+  officesById?: Map<string, OfficeDoc>;
   selectedCode?: string;
   statusFilter?: string;
   getHead: (
@@ -729,14 +801,15 @@ export async function exportBillsPdf(params: {
   ) => { headName: string; headNameBn: string };
 }): Promise<SaveAndShareOutcome> {
   const columns: TableColumn[] = [
-    { label: 'Bill No', align: 'left', width: '13%' },
-    { label: 'Date', align: 'left', width: '10%' },
-    { label: 'ব্যয়ের খাত', align: 'left', width: '27%' },
-    { label: 'Items', align: 'right', width: '7%' },
-    { label: 'Gross (৳)', align: 'right', width: '11%' },
-    { label: 'VAT+IT (৳)', align: 'right', width: '11%' },
-    { label: 'Net Payable (৳)', align: 'right', width: '12%' },
-    { label: 'Status', align: 'left', width: '9%' },
+    { label: 'Bill No', align: 'left', width: '11%' },
+    { label: 'Date', align: 'left', width: '9%' },
+    { label: 'ব্যয়ের খাত', align: 'left', width: '21%' },
+    { label: 'Prepared / Approved By', align: 'left', width: '20%' },
+    { label: 'Items', align: 'right', width: '6%' },
+    { label: 'Gross (৳)', align: 'right', width: '8.5%' },
+    { label: 'VAT+IT (৳)', align: 'right', width: '8.5%' },
+    { label: 'Net Payable (৳)', align: 'right', width: '9%' },
+    { label: 'Status', align: 'left', width: '7%' },
   ];
 
   const rowsHtml = params.bills.map((b) => {
@@ -744,10 +817,16 @@ export async function exportBillsPdf(params: {
       headName: b.headName,
       headNameBn: b.headNameBn,
     });
+    const prepStr = formatActorBrief(b.createdBy, params.officesById, b.createdByName);
+    const apprStr = b.approvedBy ? formatApprovedByLine(b.approvedBy, params.officesById) : '';
+    const actorHtml = `<div style="font-size: 11px; line-height: 1.4; font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;"><div>${esc(prepStr)}</div>${
+      apprStr ? `<div style="color: #0F766E; margin-top: 2px;">✓ ${esc(apprStr)}</div>` : ''
+    }</div>`;
     return `<tr>
       <td style="${tdStyle('left', 'white-space: nowrap; font-weight: 600;')}">${esc(b.billNo || 'Draft')}</td>
       <td style="${tdStyle('left', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatDateDisplay(b.date))}</td>
       <td style="${tdStyle('left')}">${buildHeadCell(b.economicCode, resolved.headName, resolved.headNameBn)}</td>
+      <td style="${tdStyle('left')}">${actorHtml}</td>
       <td style="${tdStyle('right', 'font-variant-numeric: tabular-nums;')}">${b.items.length}</td>
       <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(b.grossAmount))}</td>
       <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(b.totalDeduction))}</td>
@@ -758,7 +837,7 @@ export async function exportBillsPdf(params: {
 
   if (rowsHtml.length === 0) {
     rowsHtml.push(
-      `<tr><td colspan="8" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No bills found.</td></tr>`
+      `<tr><td colspan="9" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No bills found.</td></tr>`
     );
   } else {
     const grossSum = params.bills.reduce((s, b) => s + b.grossAmount, 0);
@@ -766,7 +845,7 @@ export async function exportBillsPdf(params: {
     const netSum = params.bills.reduce((s, b) => s + b.netPayable, 0);
     rowsHtml.push(
       `<tr style="background-color: #EDF2EF;">
-        <td colspan="4" style="${tdStyle('left', 'font-weight: 700;')}">Total (${params.bills.length} bills)</td>
+        <td colspan="5" style="${tdStyle('left', 'font-weight: 700;')}">Total (${params.bills.length} bills)</td>
         <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(grossSum))}</td>
         <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(dedSum))}</td>
         <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(netSum))}</td>

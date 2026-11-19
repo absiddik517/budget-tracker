@@ -34,7 +34,6 @@ export function useDocAuditLogs(collectionName: string, docId: string | null) {
       return;
     }
     setLoading(true);
-    // Single-field equality query requires no composite index; filter collection & sort client-side.
     const q = query(collection(db, 'auditLogs'), where('docId', '==', docId));
     const unsub = onSnapshot(
       q,
@@ -58,18 +57,35 @@ export function useDocAuditLogs(collectionName: string, docId: string | null) {
   return { logs, loading };
 }
 
-export function useGlobalAuditLogs(enabled: boolean, maxCount = 100) {
+export function useGlobalAuditLogs(
+  enabled: boolean,
+  officeIdFilter: string | 'ALL' | 'GLOBAL' = 'ALL',
+  maxCount = 150
+) {
   const [logs, setLogs] = useState<AuditLogDoc[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
     setLoading(true);
-    const q = query(
-      collection(db, 'auditLogs'),
-      orderBy('timestamp', 'desc'),
-      limit(maxCount)
-    );
+
+    const q =
+      officeIdFilter === 'GLOBAL'
+        ? query(
+            collection(db, 'auditLogs'),
+            where('officeId', '==', null),
+            orderBy('timestamp', 'desc'),
+            limit(maxCount)
+          )
+        : officeIdFilter !== 'ALL' && officeIdFilter
+          ? query(
+              collection(db, 'auditLogs'),
+              where('officeId', '==', officeIdFilter),
+              orderBy('timestamp', 'desc'),
+              limit(maxCount)
+            )
+          : query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(maxCount));
+
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -82,7 +98,7 @@ export function useGlobalAuditLogs(enabled: boolean, maxCount = 100) {
       }
     );
     return () => unsub();
-  }, [enabled, maxCount]);
+  }, [enabled, officeIdFilter, maxCount]);
 
   return { logs, loading };
 }

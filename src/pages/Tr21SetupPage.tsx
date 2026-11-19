@@ -20,13 +20,13 @@ import { Layout } from '../components/Layout';
 import { BillForm, TR21_FORM_SECTIONS } from '../components/BillForm';
 import { Modal } from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
-import { useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { toBanglaDigits } from '../lib/banglaFormat';
 import { buildTr21FormData, sanitizeBillFileSegment } from '../lib/billFormData';
 import { db } from '../lib/firebase';
 import { isPermissionDeniedError, logFirestoreError, OperationType } from '../lib/firestoreError';
 import { saveOfficeSettings } from '../lib/firestoreOps';
-import { canManageUsersSettings } from '../lib/permissions';
+import { canEditOfficeBasic } from '../lib/permissions';
 import {
   cloneDefaultTr21Clauses,
   DEFAULT_INSTITUTIONAL_CODE,
@@ -74,10 +74,15 @@ function summarizeClauseNumbers(clauses: CertificationClause[]): string {
 }
 
 export function Tr21SetupPage() {
-  const { userDoc } = useAuth();
+  const { userDoc, isSuperAdmin } = useAuth();
   const {
     officeSettings,
     selectedFy,
+    currentOfficeId,
+    currentOfficeRole,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    actorSnapshot,
     getHead,
     pushToast,
     t,
@@ -85,7 +90,20 @@ export function Tr21SetupPage() {
     clearPermissionError,
   } = useApp();
 
-  const isSuperAdmin = userDoc ? canManageUsersSettings(userDoc.role) : false;
+  const realOfficeId =
+    currentOfficeId &&
+    currentOfficeId !== ALL_OFFICES_ID &&
+    currentOfficeId !== LEGACY_UNMIGRATED_OFFICE_ID
+      ? currentOfficeId
+      : '';
+
+  const canEditOfficeName = isSuperAdmin;
+  const canEditTr21 = Boolean(
+    canEditOfficeBasic({ isSuperAdmin, officeRole: currentOfficeRole }) &&
+      (realOfficeId || (isLegacyPreMigration && isSuperAdmin))
+  );
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
 
   // Editable form state synced from officeSettings
   const [ministryName, setMinistryName] = useState(officeSettings.ministryName || '');
@@ -172,11 +190,24 @@ export function Tr21SetupPage() {
   }, [officeSettings]);
 
   useEffect(() => {
-    const qBills = query(
-      collection(db, 'bills'),
-      where('fiscalYear', '==', selectedFy),
-      where('deleted', '==', false)
-    );
+    if (!currentOfficeId || isAllOfficesMode) {
+      setFyBills([]);
+      setFyBudgets([]);
+      return;
+    }
+
+    const qBills = isLegacyPreMigration
+      ? query(
+          collection(db, 'bills'),
+          where('fiscalYear', '==', selectedFy),
+          where('deleted', '==', false)
+        )
+      : query(
+          collection(db, 'bills'),
+          where('officeId', '==', currentOfficeId),
+          where('fiscalYear', '==', selectedFy),
+          where('deleted', '==', false)
+        );
     const unsubBills = onSnapshot(
       qBills,
       (snap) => {
@@ -192,11 +223,18 @@ export function Tr21SetupPage() {
       }
     );
 
-    const qBudgets = query(
-      collection(db, 'budgets'),
-      where('fiscalYear', '==', selectedFy),
-      where('deleted', '==', false)
-    );
+    const qBudgets = isLegacyPreMigration
+      ? query(
+          collection(db, 'budgets'),
+          where('fiscalYear', '==', selectedFy),
+          where('deleted', '==', false)
+        )
+      : query(
+          collection(db, 'budgets'),
+          where('officeId', '==', currentOfficeId),
+          where('fiscalYear', '==', selectedFy),
+          where('deleted', '==', false)
+        );
     const unsubBudgets = onSnapshot(
       qBudgets,
       (snap) => {
@@ -213,7 +251,7 @@ export function Tr21SetupPage() {
       unsubBills();
       unsubBudgets();
     };
-  }, [selectedFy, clearPermissionError, reportPermissionError]);
+  }, [selectedFy, currentOfficeId, isAllOfficesMode, isLegacyPreMigration, clearPermissionError, reportPermissionError]);
 
   useEffect(() => {
     const vp = viewportRef.current;
@@ -252,7 +290,7 @@ export function Tr21SetupPage() {
     const currentClauses = JSON.stringify(tr21Clauses);
     return (
       ministryName.trim() !== savedMinistry.trim() ||
-      officeName.trim() !== (officeSettings.officeName || '').trim() ||
+      (canEditOfficeName && officeName.trim() !== (officeSettings.officeName || '').trim()) ||
       officeAddress.trim() !== savedAddress.trim() ||
       officeMobileNo.trim() !== savedMobile.trim() ||
       institutionalCode !== savedCode ||
@@ -269,6 +307,7 @@ export function Tr21SetupPage() {
     );
   }, [
     officeSettings,
+    canEditOfficeName,
     ministryName,
     officeName,
     officeAddress,
@@ -337,6 +376,7 @@ export function Tr21SetupPage() {
     const vatAmt = 70000; // 10% = 700 টাকা
     return {
       id: 'sample-tr21',
+      officeId: realOfficeId || 'sample-office',
       billNo: sampleAsDraft ? '' : `${selectedFy}/04`,
       fiscalYear: selectedFy,
       economicCode: '3257301',
@@ -426,6 +466,7 @@ export function Tr21SetupPage() {
       deleted: false,
     };
   }, [
+    realOfficeId,
     selectedFy,
     sampleAsDraft,
     defaultItCode,
@@ -439,6 +480,7 @@ export function Tr21SetupPage() {
     const fyStartYear = parseInt(selectedFy.split('-')[0], 10) || 2025;
     return {
       id: 'sample-budget-tr21',
+      officeId: realOfficeId || 'sample-office',
       fiscalYear: selectedFy,
       memoNo: '৩৮.০১.০০০০.০০৫.২০.০১১.২৫-৪২০',
       memoDate: `${fyStartYear}-07-24`,
@@ -461,7 +503,7 @@ export function Tr21SetupPage() {
       status: 'active',
       deleted: false,
     };
-  }, [selectedFy]);
+  }, [realOfficeId, selectedFy]);
 
   const selectedRealBill = useMemo(
     () => (previewSourceId === 'sample' ? null : fyBills.find((b) => b.id === previewSourceId) || null),
@@ -532,7 +574,7 @@ export function Tr21SetupPage() {
   }, [tr21Clauses, clauseFilter]);
 
   const handleQuickPageSplit = (p1EndCount: number) => {
-    if (!isSuperAdmin) return;
+    if (!canEditTr21) return;
     setTr21Clauses((prev) =>
       prev.map((c, idx) => ({
         ...c,
@@ -542,7 +584,7 @@ export function Tr21SetupPage() {
   };
 
   const handleApplyRange = () => {
-    if (!isSuperAdmin || tr21Clauses.length === 0) return;
+    if (!canEditTr21 || tr21Clauses.length === 0) return;
     const startPos = Math.min(rangeFrom, rangeTo);
     const endPos = Math.max(rangeFrom, rangeTo);
     setTr21Clauses((prev) =>
@@ -563,7 +605,7 @@ export function Tr21SetupPage() {
   };
 
   const handleMoveClause = (index: number, delta: -1 | 1) => {
-    if (!isSuperAdmin) return;
+    if (!canEditTr21) return;
     const target = index + delta;
     if (target < 0 || target >= tr21Clauses.length) return;
     setTr21Clauses((prev) => {
@@ -575,7 +617,7 @@ export function Tr21SetupPage() {
   };
 
   const openCreateClauseModal = () => {
-    if (!isSuperAdmin) return;
+    if (!canEditTr21) return;
     setConfirmDeleteClause(false);
     setClauseModal({
       mode: 'create',
@@ -607,7 +649,7 @@ export function Tr21SetupPage() {
   };
 
   const handleSaveClauseModal = () => {
-    if (!isSuperAdmin || !clauseModal) return;
+    if (!canEditTr21 || !clauseModal) return;
     const cleanText = clauseModal.text.trim();
     if (!cleanText) {
       pushToast('error', 'ধারার বিবরণ লিখুন।');
@@ -651,7 +693,7 @@ export function Tr21SetupPage() {
   };
 
   const handleDeleteClauseFromModal = () => {
-    if (!isSuperAdmin || !clauseModal || clauseModal.mode !== 'edit' || clauseModal.index === null) {
+    if (!canEditTr21 || !clauseModal || clauseModal.mode !== 'edit' || clauseModal.index === null) {
       return;
     }
     if (tr21Clauses.length <= 1) {
@@ -678,8 +720,8 @@ export function Tr21SetupPage() {
   }, [institutionalCode]);
 
   const handleSave = async () => {
-    if (!userDoc || !isSuperAdmin) return;
-    if (!officeName.trim()) {
+    if (!userDoc || !canEditTr21 || !effectiveActor) return;
+    if (canEditOfficeName && !officeName.trim()) {
       pushToast('error', 'দপ্তরের নাম আবশ্যক।');
       return;
     }
@@ -687,8 +729,8 @@ export function Tr21SetupPage() {
     try {
       await saveOfficeSettings(
         {
+          ...(canEditOfficeName ? { officeName: officeName.trim() } : {}),
           ministryName: ministryName.trim(),
-          officeName: officeName.trim(),
           address: officeAddress.trim(),
           officeMobileNo: officeMobileNo.trim(),
           institutionalCode: institutionalCode.replace(/\D+/g, '').slice(0, 13),
@@ -703,7 +745,8 @@ export function Tr21SetupPage() {
           tr21FontSize: tr21FontSize || DEFAULT_TR21_FONT_SIZE,
           tr21Clauses,
         },
-        { uid: userDoc.id, name: userDoc.name }
+        effectiveActor,
+        isLegacyPreMigration ? undefined : realOfficeId
       );
       pushToast('success', 'টি.আর. ফরম নং-২১ সেটআপ সংরক্ষিত হয়েছে।');
     } catch (err) {
@@ -764,7 +807,7 @@ export function Tr21SetupPage() {
     }
   };
 
-  const headerActions = isSuperAdmin ? (
+  const headerActions = canEditTr21 ? (
     <button
       type="button"
       onClick={handleSave}
@@ -776,11 +819,26 @@ export function Tr21SetupPage() {
     </button>
   ) : null;
 
+  if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
+    return (
+      <Layout title={t('navTr21Setup')}>
+        <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto">
+          <h2 className="text-base font-bold text-[var(--text)]">একটি অফিস নির্বাচন করুন</h2>
+          <p className="text-xs sm:text-sm text-[var(--muted)]">
+            {isSuperAdmin
+              ? 'কোনো অফিসের টি.আর. ফরম নং-২১ সেটআপ দেখতে বা সম্পাদনা করতে উপরের অফিস সুইচার থেকে একটি নির্দিষ্ট অফিস নির্বাচন করুন।'
+              : 'আপনার জন্য কোনো সক্রিয় অফিস নির্ধারিত নেই।'}
+          </p>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout title={t('navTr21Setup')} actions={headerActions}>
-      {!isSuperAdmin && (
+      {!canEditTr21 && (
         <div className="mb-4 px-3.5 py-3 rounded-[14px] border border-[var(--line)] bg-[var(--card)] text-xs md:text-sm text-[var(--muted)]">
-          শুধুমাত্র সুপার অ্যাডমিন টি.আর. ফরম নং-২১ সেটআপ পরিবর্তন ও সংরক্ষণ করতে পারবেন। আপনি বর্তমান কনফিগারেশন ও লাইভ প্রিভিউ দেখতে এবং টেস্ট এক্সপোর্ট করতে পারেন।
+          শুধুমাত্র সুপার অ্যাডমিন বা সংশ্লিষ্ট অফিসের DDO টি.আর. ফরম নং-২১ সেটআপ পরিবর্তন ও সংরক্ষণ করতে পারবেন। আপনি বর্তমান কনফিগারেশন ও লাইভ প্রিভিউ দেখতে এবং টেস্ট এক্সপোর্ট করতে পারেন।
         </div>
       )}
 
@@ -836,7 +894,7 @@ export function Tr21SetupPage() {
               <input
                 id="tr21-ministry-name"
                 type="text"
-                disabled={!isSuperAdmin}
+                disabled={!canEditTr21}
                 value={ministryName}
                 onChange={(e) => setMinistryName(e.target.value)}
                 placeholder="প্রাথমিক ও গণশিক্ষা মন্ত্রণালয়"
@@ -854,12 +912,17 @@ export function Tr21SetupPage() {
               <input
                 id="tr21-office-name"
                 type="text"
-                disabled={!isSuperAdmin}
+                disabled={!canEditOfficeName}
                 value={officeName}
                 onChange={(e) => setOfficeName(e.target.value)}
                 placeholder="উপজেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো"
                 className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
               />
+              {!canEditOfficeName && canEditTr21 && (
+                <p className="text-[11px] text-[var(--muted)] mt-1">
+                  দপ্তরের নাম শুধুমাত্র সুপার অ্যাডমিন পরিবর্তন করতে পারবেন।
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -873,7 +936,7 @@ export function Tr21SetupPage() {
                 <input
                   id="tr21-office-address"
                   type="text"
-                  disabled={!isSuperAdmin}
+                  disabled={!canEditTr21}
                   value={officeAddress}
                   onChange={(e) => setOfficeAddress(e.target.value)}
                   placeholder="তারাকান্দা, ময়মনসিংহ"
@@ -891,7 +954,7 @@ export function Tr21SetupPage() {
                 <input
                   id="tr21-mobile-no"
                   type="text"
-                  disabled={!isSuperAdmin}
+                  disabled={!canEditTr21}
                   value={officeMobileNo}
                   onChange={(e) => setOfficeMobileNo(e.target.value)}
                   placeholder="০১৯৬৭৫০০১০৫"
@@ -908,7 +971,7 @@ export function Tr21SetupPage() {
                 >
                   কোড নং (১৩ ডিজিট · ১-৪-৪-৪ বিন্যাস)
                 </label>
-                {isSuperAdmin && institutionalCode !== DEFAULT_INSTITUTIONAL_CODE && (
+                {canEditTr21 && institutionalCode !== DEFAULT_INSTITUTIONAL_CODE && (
                   <button
                     type="button"
                     onClick={() => setInstitutionalCode(DEFAULT_INSTITUTIONAL_CODE)}
@@ -923,7 +986,7 @@ export function Tr21SetupPage() {
                 type="text"
                 inputMode="numeric"
                 maxLength={13}
-                disabled={!isSuperAdmin}
+                disabled={!canEditTr21}
                 value={institutionalCode}
                 onChange={(e) =>
                   setInstitutionalCode(e.target.value.replace(/\D+/g, '').slice(0, 13))
@@ -974,7 +1037,7 @@ export function Tr21SetupPage() {
                   <input
                     id="tr21-default-payee"
                     type="text"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={defaultPayeeText}
                     onChange={(e) => setDefaultPayeeText(e.target.value)}
                     placeholder="ডি.ডি.ও"
@@ -992,7 +1055,7 @@ export function Tr21SetupPage() {
                   <input
                     id="tr21-place-name"
                     type="text"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={placeName}
                     onChange={(e) => setPlaceName(e.target.value)}
                     placeholder="তারাকান্দা, ময়মনসিংহ"
@@ -1013,7 +1076,7 @@ export function Tr21SetupPage() {
                     id="tr21-net-code"
                     type="text"
                     inputMode="numeric"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={defaultNetPayableCode}
                     onChange={(e) =>
                       setDefaultNetPayableCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
@@ -1033,7 +1096,7 @@ export function Tr21SetupPage() {
                     id="tr21-it-code"
                     type="text"
                     inputMode="numeric"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={defaultItCode}
                     onChange={(e) =>
                       setDefaultItCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
@@ -1053,7 +1116,7 @@ export function Tr21SetupPage() {
                     id="tr21-vat-code"
                     type="text"
                     inputMode="numeric"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={defaultVatCode}
                     onChange={(e) =>
                       setDefaultVatCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
@@ -1073,7 +1136,7 @@ export function Tr21SetupPage() {
                     id="tr21-security-code"
                     type="text"
                     inputMode="numeric"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={defaultSecurityCode}
                     onChange={(e) =>
                       setDefaultSecurityCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
@@ -1094,7 +1157,7 @@ export function Tr21SetupPage() {
                 <input
                   id="tr21-footer-text"
                   type="text"
-                  disabled={!isSuperAdmin}
+                  disabled={!canEditTr21}
                   value={tr21FooterText}
                   onChange={(e) => setTr21FooterText(e.target.value)}
                   placeholder="Print By: DPE Accounting Information System"
@@ -1113,7 +1176,7 @@ export function Tr21SetupPage() {
                   </label>
                   <select
                     id="tr21-font-family"
-                    disabled={!isSuperAdmin}
+                    disabled={!canEditTr21}
                     value={tr21FontFamily}
                     onChange={(e) => setTr21FontFamily(e.target.value)}
                     className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
@@ -1136,7 +1199,7 @@ export function Tr21SetupPage() {
                   <div className="flex items-center gap-1.5">
                     <select
                       id="tr21-font-size"
-                      disabled={!isSuperAdmin}
+                      disabled={!canEditTr21}
                       value={tr21FontSize}
                       onChange={(e) => setTr21FontSize(resolveTr21FontSize(Number(e.target.value)))}
                       className="flex-1 min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
@@ -1147,7 +1210,7 @@ export function Tr21SetupPage() {
                         </option>
                       ))}
                     </select>
-                    {isSuperAdmin &&
+                    {canEditTr21 &&
                       (tr21FontFamily !== DEFAULT_TR21_FONT_FAMILY ||
                         tr21FontSize !== DEFAULT_TR21_FONT_SIZE) && (
                         <button
@@ -1182,7 +1245,7 @@ export function Tr21SetupPage() {
                 </h2>
               </div>
 
-              {isSuperAdmin && (
+              {canEditTr21 && (
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
@@ -1216,7 +1279,7 @@ export function Tr21SetupPage() {
                 </span>
               </div>
 
-              {isSuperAdmin && tr21Clauses.length > 0 && (
+              {canEditTr21 && tr21Clauses.length > 0 && (
                 <div className="space-y-2 pt-1 border-t border-[var(--line)]">
                   {/* Quick Prefix Split */}
                   <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1344,7 +1407,7 @@ export function Tr21SetupPage() {
                     }`}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      {isSuperAdmin && (
+                      {canEditTr21 && (
                         <div className="flex flex-col shrink-0">
                           <button
                             type="button"
@@ -1389,7 +1452,7 @@ export function Tr21SetupPage() {
                       <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium select-none text-[var(--text)]">
                         <input
                           type="checkbox"
-                          disabled={!isSuperAdmin}
+                          disabled={!canEditTr21}
                           checked={clause.enabled}
                           onChange={(e) => {
                             const checked = e.target.checked;
@@ -1409,7 +1472,7 @@ export function Tr21SetupPage() {
                         onClick={() => openEditClauseModal(clause, index)}
                         className="min-h-[34px] px-2.5 rounded-lg border border-[var(--line)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1 whitespace-nowrap"
                       >
-                        {isSuperAdmin ? (
+                        {canEditTr21 ? (
                           <>
                             <Pencil className="w-3.5 h-3.5 shrink-0" />
                             <span>সম্পাদনা</span>
@@ -1608,7 +1671,7 @@ export function Tr21SetupPage() {
         title={
           clauseModal?.mode === 'create'
             ? 'নতুন ধারা যোগ করুন'
-            : `ধারা ${clauseModal?.numberBn || ''} ${isSuperAdmin ? 'সম্পাদনা' : 'বিবরণ'}`
+            : `ধারা ${clauseModal?.numberBn || ''} ${canEditTr21 ? 'সম্পাদনা' : 'বিবরণ'}`
         }
         subtitle={
           clauseModal
@@ -1620,7 +1683,7 @@ export function Tr21SetupPage() {
           clauseModal && (
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                {isSuperAdmin && clauseModal.mode === 'edit' && tr21Clauses.length > 1 && (
+                {canEditTr21 && clauseModal.mode === 'edit' && tr21Clauses.length > 1 && (
                   <button
                     type="button"
                     onClick={handleDeleteClauseFromModal}
@@ -1641,9 +1704,9 @@ export function Tr21SetupPage() {
                   onClick={closeClauseModal}
                   className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)]"
                 >
-                  {isSuperAdmin ? 'বাতিল' : 'বন্ধ করুন'}
+                  {canEditTr21 ? 'বাতিল' : 'বন্ধ করুন'}
                 </button>
-                {isSuperAdmin && (
+                {canEditTr21 && (
                   <button
                     type="button"
                     onClick={handleSaveClauseModal}
@@ -1671,7 +1734,7 @@ export function Tr21SetupPage() {
                 <input
                   id="clause-modal-number"
                   type="text"
-                  disabled={!isSuperAdmin}
+                  disabled={!canEditTr21}
                   value={clauseModal.numberBn}
                   onChange={(e) =>
                     setClauseModal((prev) =>
@@ -1692,7 +1755,7 @@ export function Tr21SetupPage() {
                     <button
                       key={pg}
                       type="button"
-                      disabled={!isSuperAdmin}
+                      disabled={!canEditTr21}
                       onClick={() =>
                         setClauseModal((prev) => (prev ? { ...prev, page: pg } : prev))
                       }
@@ -1712,7 +1775,7 @@ export function Tr21SetupPage() {
             <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-medium select-none text-[var(--text)]">
               <input
                 type="checkbox"
-                disabled={!isSuperAdmin}
+                disabled={!canEditTr21}
                 checked={clauseModal.enabled}
                 onChange={(e) =>
                   setClauseModal((prev) =>
@@ -1732,7 +1795,7 @@ export function Tr21SetupPage() {
                 >
                   ধারার বিবরণ
                 </label>
-                {isSuperAdmin &&
+                {canEditTr21 &&
                   (clauseModal.id === '7' || clauseModal.id === '12') &&
                   !clauseModal.text.includes('{{payeeText}}') && (
                     <button
@@ -1753,7 +1816,7 @@ export function Tr21SetupPage() {
               <textarea
                 id="clause-modal-text"
                 rows={6}
-                disabled={!isSuperAdmin}
+                disabled={!canEditTr21}
                 value={clauseModal.text}
                 onChange={(e) =>
                   setClauseModal((prev) => (prev ? { ...prev, text: e.target.value } : prev))

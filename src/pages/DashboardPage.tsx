@@ -1,12 +1,14 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
+import { Building2, ChevronRight, ShieldCheck } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
+import { useAllOfficesSummary } from '../hooks/useAllOfficesSummary';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
+import { getActorName } from '../lib/actor';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { formatNumberIN, formatTaka } from '../lib/money';
 import { canApproveRejectCancelBill } from '../lib/permissions';
@@ -28,12 +30,60 @@ function billStatusToChip(status: BillStatus): ChipVariant {
 }
 
 export function DashboardPage() {
-  const { userDoc } = useAuth();
-  const { selectedFy, t } = useApp();
+  const { isSuperAdmin } = useAuth();
+  const {
+    selectedFy,
+    offices,
+    currentOffice,
+    currentOfficeRole,
+    setCurrentOfficeId,
+    isAllOfficesMode,
+    t,
+  } = useApp();
+
   const { budgets, expenseItems, bills, spendingLimits, loading } = useFyData(selectedFy);
+  const { totals: allOfficesTotals, loading: allOfficesLoading } = useAllOfficesSummary(
+    selectedFy,
+    isAllOfficesMode
+  );
   const { getHead } = useEconomicCodes();
 
-  const canReview = userDoc ? canApproveRejectCancelBill(userDoc.role) : false;
+  const canReview = canApproveRejectCancelBill({ isSuperAdmin, officeRole: currentOfficeRole });
+
+  // All Offices aggregated overview (Super Admin only)
+  const allOfficesRows = useMemo(() => {
+    if (!isAllOfficesMode) return [];
+    const byOffice = new Map<string, { allocated: number; spent: number; pendingAmount: number }>();
+    for (const row of allOfficesTotals) {
+      const offId = row.officeId || '';
+      if (!offId) continue;
+      const cur = byOffice.get(offId) || { allocated: 0, spent: 0, pendingAmount: 0 };
+      cur.allocated += row.allocated || 0;
+      cur.spent += row.spent || 0;
+      cur.pendingAmount += Math.max(0, row.pendingAmount || 0);
+      byOffice.set(offId, cur);
+    }
+    return offices.map((office) => {
+      const agg = byOffice.get(office.id) || { allocated: 0, spent: 0, pendingAmount: 0 };
+      const available = agg.allocated - agg.spent - agg.pendingAmount;
+      const utilPct =
+        agg.allocated > 0 ? Math.min(100, Math.round((agg.spent / agg.allocated) * 100)) : 0;
+      return {
+        office,
+        ...agg,
+        available,
+        utilPct,
+      };
+    });
+  }, [isAllOfficesMode, offices, allOfficesTotals]);
+
+  const allOfficesGrand = useMemo(() => {
+    const allocated = allOfficesRows.reduce((s, r) => s + r.allocated, 0);
+    const spent = allOfficesRows.reduce((s, r) => s + r.spent, 0);
+    const pendingAmount = allOfficesRows.reduce((s, r) => s + r.pendingAmount, 0);
+    const available = allocated - spent - pendingAmount;
+    return { allocated, spent, pendingAmount, available };
+  }, [allOfficesRows]);
 
   const totals = useMemo(() => {
     const totalAllocated = budgets.reduce((sum, b) => sum + b.allocated, 0);
@@ -136,9 +186,138 @@ export function DashboardPage() {
 
   const recentBills = useMemo(() => bills.slice(0, 5), [bills]);
 
+  if (isAllOfficesMode) {
+    return (
+      <Layout title={`${t('navDashboard')} · ${t('allOffices')}`}>
+        <div className="space-y-4 md:space-y-5">
+          <div className="card-surface px-4 py-3 flex items-center justify-between gap-3 bg-[var(--accent-soft)]/30">
+            <div className="flex items-center gap-2.5 text-sm font-medium text-[var(--text)]">
+              <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
+              <span>{t('readOnlySuperAdmin')} · {t('allOffices')} (FY {selectedFy})</span>
+            </div>
+            <Link
+              to="/offices"
+              className="text-xs font-semibold text-[var(--accent)] hover:underline shrink-0"
+            >
+              কার্যালয় পরিচালনা →
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+            <div className="card-surface p-4">
+              <div className="text-xs font-medium text-[var(--muted)]">{t('totalAllocation')}</div>
+              <div className="text-lg md:text-xl font-bold text-[var(--text)] mt-1 tabular-nums">
+                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.allocated)}
+              </div>
+            </div>
+            <div className="card-surface p-4">
+              <div className="text-xs font-medium text-[var(--muted)]">{t('approvedSpent')}</div>
+              <div className="text-lg md:text-xl font-bold text-[var(--text)] mt-1 tabular-nums">
+                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.spent)}
+              </div>
+            </div>
+            <div className="card-surface p-4">
+              <div className="text-xs font-medium text-[var(--muted)]">{t('pendingAmount')}</div>
+              <div className="text-lg md:text-xl font-bold text-[var(--warn-text)] mt-1 tabular-nums">
+                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.pendingAmount)}
+              </div>
+            </div>
+            <div className="card-surface p-4">
+              <div className="text-xs font-medium text-[var(--muted)]">{t('available')}</div>
+              <div className="text-lg md:text-xl font-bold text-[var(--accent)] mt-1 tabular-nums">
+                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.available)}
+              </div>
+            </div>
+          </div>
+
+          <section className="card-surface overflow-hidden">
+            <div className="px-4 md:px-5 py-3.5 border-b border-[var(--line)] flex items-center justify-between">
+              <h2 className="text-base font-semibold text-[var(--text)]">
+                কার্যালয়ভিত্তিক বাজেট সারসংক্ষেপ ({allOfficesRows.length})
+              </h2>
+              <span className="text-xs text-[var(--muted)]">যেকোনো কার্যালয়ে ক্লিক করে বিস্তারিত দেখুন</span>
+            </div>
+
+            {allOfficesLoading ? (
+              <div className="p-6 text-sm text-[var(--muted)]">তথ্য লোড হচ্ছে…</div>
+            ) : allOfficesRows.length === 0 ? (
+              <div className="p-6 text-sm text-[var(--muted)]">
+                কোনো কার্যালয় পাওয়া যায়নি। «কার্যালয়সমূহ» থেকে নতুন কার্যালয় যোগ করুন বা মাইগ্রেশন চালান।
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
+                      <th className="py-3 px-4 font-medium">কার্যালয়</th>
+                      <th className="py-3 px-4 font-medium">কোড</th>
+                      <th className="py-3 px-4 font-medium text-right">{t('totalAllocation')}</th>
+                      <th className="py-3 px-4 font-medium text-right">{t('approvedSpent')}</th>
+                      <th className="py-3 px-4 font-medium text-right">{t('pendingAmount')}</th>
+                      <th className="py-3 px-4 font-medium text-right">{t('available')}</th>
+                      <th className="py-3 px-4 font-medium text-right">ব্যবহার %</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--line)]">
+                    {allOfficesRows.map((row) => (
+                      <tr
+                        key={row.office.id}
+                        onClick={() => setCurrentOfficeId(row.office.id)}
+                        className="cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
+                      >
+                        <td className="py-3 px-4 font-medium text-[var(--text)]">
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                            <span className="bn">{row.office.nameBn || row.office.name}</span>
+                            {row.office.status === 'inactive' && (
+                              <StatusChip variant="disabled">নিষ্ক্রিয়</StatusChip>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 tabular-nums text-xs text-[var(--muted)]">
+                          {row.office.code}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums">
+                          {formatNumberIN(row.allocated)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums">
+                          {formatNumberIN(row.spent)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums text-[var(--warn-text)]">
+                          {formatNumberIN(row.pendingAmount)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums font-semibold text-[var(--accent)]">
+                          {formatNumberIN(row.available)}
+                        </td>
+                        <td className="py-3 px-4 text-right tabular-nums font-semibold">
+                          {row.utilPct}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout title={t('navDashboard')}>
       <div className="space-y-3.5 md:space-y-5">
+        {isSuperAdmin && currentOffice && (
+          <div className="card-surface px-3.5 md:px-4 py-2.5 flex items-center justify-between gap-2 bg-[var(--accent-soft)]/25">
+            <div className="flex items-center gap-2 text-xs md:text-sm font-medium text-[var(--text)]">
+              <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
+              <span className="bn">
+                {t('readOnlySuperAdmin')} · {currentOffice.nameBn || currentOffice.name}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Pending Approval Banner for DDO */}
         {canReview && totals.pendingCount > 0 && (
           <Link
@@ -159,7 +338,7 @@ export function DashboardPage() {
         )}
 
         {/* Quick Link if listed expense items await bill creation */}
-        {totals.listedItemsCount > 0 && (
+        {!isSuperAdmin && totals.listedItemsCount > 0 && (
           <Link
             to="/expense-items"
             className="card-surface px-3.5 md:px-4 py-2.5 min-h-[44px] flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors"
@@ -353,7 +532,10 @@ export function DashboardPage() {
                           className="group hover:bg-[var(--surface-subtle)] transition-colors"
                         >
                           <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-5 font-semibold tabular-nums whitespace-nowrap transition-colors">
-                            {b.billNo || 'খসড়া'}
+                            <div>{b.billNo || 'খসড়া'}</div>
+                            <div className="text-[11px] font-normal text-[var(--muted)]">
+                              {getActorName(b.createdBy, b.createdByName)}
+                            </div>
                           </td>
                           <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
                             {formatDateDisplay(b.date)}

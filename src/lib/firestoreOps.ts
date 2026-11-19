@@ -20,6 +20,8 @@ import { calcPercentageAmount, computeGrossedUpBill } from './money';
 import { DEFAULT_IT_CODE, DEFAULT_NET_PAYABLE_CODE, DEFAULT_VAT_CODE } from './tr21Defaults';
 import { isValidEconomicCode, normalizeEmail } from './validation';
 import type {
+  ActorRef,
+  ActorSnapshot,
   BillBudgetSlice,
   BillDeductionLine,
   BillDoc,
@@ -33,6 +35,7 @@ import type {
   EconomicCodeDoc,
   ExpenseItemDoc,
   FyCodeTotalDoc,
+  OfficeDoc,
   OfficeSettings,
   ResponsibleEmployee,
   Role,
@@ -44,6 +47,21 @@ import type {
   VatTaxRateDoc,
   VatVariant,
 } from '../types';
+
+function toActorPayload(actor: AuditActor | ActorSnapshot): ActorRef {
+  if ('role' in actor && actor.role) {
+    return {
+      uid: actor.uid,
+      name: actor.name,
+      designation: actor.designation || '',
+      officeId: actor.officeId ?? null,
+      role: actor.role,
+      kind: actor.kind ?? null,
+      workHistoryId: actor.workHistoryId ?? null,
+    };
+  }
+  return actor.uid;
+}
 
 function assertOnlineForTransaction(actionLabel: string): void {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -57,7 +75,16 @@ export function formatSequentialBillNo(fiscalYear: string, seq: number): string 
   return `${fiscalYear}/${String(Math.max(1, seq)).padStart(3, '0')}`;
 }
 
+export function buildFyCodeTotalId(officeId: string, fiscalYear: string, economicCode: string): string {
+  return officeId ? `${officeId}_${fiscalYear}_${economicCode}` : `${fiscalYear}_${economicCode}`;
+}
+
+export function buildCounterId(officeId: string, fiscalYear: string): string {
+  return officeId ? `${officeId}_${fiscalYear}_bill` : `${fiscalYear}_bill`;
+}
+
 export interface CreateBudgetInput {
+  officeId: string;
   fiscalYear: string;
   memoNo: string;
   memoDate: string;
@@ -74,11 +101,13 @@ export async function createBudgetTx(
   input: CreateBudgetInput,
   actor: AuditActor
 ): Promise<string> {
+  const officeId = input.officeId.trim();
   const memoNo = input.memoNo.trim();
   const economicCode = input.economicCode.trim();
   const headName = input.headName.trim();
   const headNameBn = input.headNameBn.trim();
 
+  if (!officeId) throw new Error('Office is required.');
   if (!memoNo) throw new Error('Memo number is required.');
   if (!isDateInFiscalYear(input.memoDate, input.fiscalYear)) {
     throw new Error(`Memo date must fall inside FY ${input.fiscalYear}.`);
@@ -110,7 +139,11 @@ export async function createBudgetTx(
   const resolvedHeadName = masterData.headName || resolvedHeadNameBn || headName;
 
   const fyBudgetsSnap = await getDocs(
-    query(collection(db, 'budgets'), where('fiscalYear', '==', input.fiscalYear))
+    query(
+      collection(db, 'budgets'),
+      where('officeId', '==', officeId),
+      where('fiscalYear', '==', input.fiscalYear)
+    )
   );
   const hasActiveDup = fyBudgetsSnap.docs.some((d) => {
     const data = d.data();
@@ -128,8 +161,9 @@ export async function createBudgetTx(
   }
 
   const budgetRef = doc(collection(db, 'budgets'));
-  const fyTotalId = `${input.fiscalYear}_${economicCode}`;
+  const fyTotalId = buildFyCodeTotalId(officeId, input.fiscalYear, economicCode);
   const fyTotalRef = doc(db, 'fyCodeTotals', fyTotalId);
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const fyTotalSnap = await tx.get(fyTotalRef);
@@ -139,6 +173,9 @@ export async function createBudgetTx(
       if (!revTargetSnap.exists() || revTargetSnap.data().deleted) {
         throw new Error('Selected target budget for revision was not found.');
       }
+      if (revTargetSnap.data().officeId && revTargetSnap.data().officeId !== officeId) {
+        throw new Error('Revision target budget belongs to a different office.');
+      }
     }
 
     const prevAllocated = fyTotalSnap.exists() ? (fyTotalSnap.data().allocated as number) || 0 : 0;
@@ -146,6 +183,7 @@ export async function createBudgetTx(
     const prevPending = fyTotalSnap.exists() ? (fyTotalSnap.data().pendingAmount as number) || 0 : 0;
 
     const budgetPayload = {
+      officeId,
       fiscalYear: input.fiscalYear,
       memoNo,
       memoDate: input.memoDate,
@@ -163,9 +201,9 @@ export async function createBudgetTx(
       status: 'active' as BudgetStatus,
       deleted: false,
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorPayload,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.set(budgetRef, budgetPayload);
@@ -173,6 +211,7 @@ export async function createBudgetTx(
     tx.set(
       fyTotalRef,
       {
+        officeId,
         fiscalYear: input.fiscalYear,
         economicCode,
         allocated: prevAllocated + input.allocated,
@@ -180,14 +219,15 @@ export async function createBudgetTx(
         approvedSpent: prevSpent,
         pendingAmount: prevPending,
         createdAt: fyTotalSnap.exists() ? fyTotalSnap.data().createdAt : serverTimestamp(),
-        createdBy: fyTotalSnap.exists() ? fyTotalSnap.data().createdBy : actor.uid,
+        createdBy: fyTotalSnap.exists() ? fyTotalSnap.data().createdBy : actorPayload,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       },
       { merge: true }
     );
 
     writeAuditLogInTx(tx, {
+      officeId,
       collection: 'budgets',
       docId: budgetRef.id,
       action: 'create',
@@ -214,15 +254,20 @@ export async function createBudgetsBatchTx(
 
   const normalized = inputs.map((inp) => ({
     ...inp,
+    officeId: inp.officeId.trim(),
     memoNo: inp.memoNo.trim(),
     economicCode: inp.economicCode.trim(),
     headName: inp.headName.trim(),
     headNameBn: inp.headNameBn.trim(),
   }));
 
+  const officeId = normalized[0].officeId;
+  if (!officeId) throw new Error('Office is required.');
+
   const seenCodeSet = new Set<string>();
   for (let i = 0; i < normalized.length; i++) {
     const item = normalized[i];
+    if (item.officeId !== officeId) throw new Error('All batch rows must belong to the same office.');
     if (!item.memoNo) throw new Error('Memo number is required.');
     if (!isDateInFiscalYear(item.memoDate, item.fiscalYear)) {
       throw new Error(`Memo date must fall inside FY ${item.fiscalYear}.`);
@@ -271,7 +316,11 @@ export async function createBudgetsBatchTx(
   });
 
   const fyBudgetsSnap = await getDocs(
-    query(collection(db, 'budgets'), where('fiscalYear', '==', fiscalYear))
+    query(
+      collection(db, 'budgets'),
+      where('officeId', '==', officeId),
+      where('fiscalYear', '==', fiscalYear)
+    )
   );
   for (const item of resolvedItems) {
     const hasActiveDup = fyBudgetsSnap.docs.some((d) => {
@@ -293,8 +342,9 @@ export async function createBudgetsBatchTx(
   const createdIds: string[] = [];
   const budgetRefs = resolvedItems.map(() => doc(collection(db, 'budgets')));
   const fyTotalRefs = resolvedItems.map((item) =>
-    doc(db, 'fyCodeTotals', `${item.fiscalYear}_${item.economicCode}`)
+    doc(db, 'fyCodeTotals', buildFyCodeTotalId(officeId, item.fiscalYear, item.economicCode))
   );
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const fyTotalSnaps = await Promise.all(fyTotalRefs.map((r) => tx.get(r)));
@@ -314,6 +364,7 @@ export async function createBudgetsBatchTx(
         : 0;
 
       const budgetPayload = {
+        officeId,
         fiscalYear: item.fiscalYear,
         memoNo: item.memoNo,
         memoDate: item.memoDate,
@@ -331,15 +382,16 @@ export async function createBudgetsBatchTx(
         status: 'active' as BudgetStatus,
         deleted: false,
         createdAt: serverTimestamp(),
-        createdBy: actor.uid,
+        createdBy: actorPayload,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       };
 
       tx.set(budgetRef, budgetPayload);
       tx.set(
         fyTotalRef,
         {
+          officeId,
           fiscalYear: item.fiscalYear,
           economicCode: item.economicCode,
           allocated: prevAllocated + item.allocated,
@@ -347,14 +399,15 @@ export async function createBudgetsBatchTx(
           approvedSpent: prevSpent,
           pendingAmount: prevPending,
           createdAt: fyTotalSnap.exists() ? fyTotalSnap.data().createdAt : serverTimestamp(),
-          createdBy: fyTotalSnap.exists() ? fyTotalSnap.data().createdBy : actor.uid,
+          createdBy: fyTotalSnap.exists() ? fyTotalSnap.data().createdBy : actorPayload,
           updatedAt: serverTimestamp(),
-          updatedBy: actor.uid,
+          updatedBy: actorPayload,
         },
         { merge: true }
       );
 
       writeAuditLogInTx(tx, {
+        officeId,
         collection: 'budgets',
         docId: budgetRef.id,
         action: 'create',
@@ -379,15 +432,17 @@ export async function updateBudgetTx(
     headNameBn: string;
     allocated: number;
     deductionRates: DeductionRates;
+    correctionReason?: string;
   },
   actor: AuditActor
 ): Promise<void> {
   const memoNo = updates.memoNo.trim();
   const headName = updates.headName.trim();
   if (!memoNo) throw new Error('Memo number is required.');
-  if (!headName) throw new Error('Head name is required.');
+  if (!headName && !updates.headNameBn.trim()) throw new Error('ব্যয়ের খাত প্রয়োজন।');
 
   const budgetRef = doc(db, 'budgets', budgetId);
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(budgetRef);
@@ -405,7 +460,12 @@ export async function updateBudgetTx(
       );
     }
 
-    const fyTotalRef = doc(db, 'fyCodeTotals', `${before.fiscalYear}_${before.economicCode}`);
+    const officeId = before.officeId || '';
+    const fyTotalRef = doc(
+      db,
+      'fyCodeTotals',
+      buildFyCodeTotalId(officeId, before.fiscalYear, before.economicCode)
+    );
     const fyTotalSnap = await tx.get(fyTotalRef);
     const prevFyAlloc = fyTotalSnap.exists() ? (fyTotalSnap.data().allocated as number) || 0 : 0;
     const prevFySpent = fyTotalSnap.exists() ? (fyTotalSnap.data().spent as number) || 0 : before.spent;
@@ -418,19 +478,20 @@ export async function updateBudgetTx(
     const afterFields = {
       memoNo,
       memoDate: updates.memoDate,
-      headName,
+      headName: headName || updates.headNameBn.trim(),
       headNameBn: updates.headNameBn.trim(),
       allocated: updates.allocated,
       remaining: newRemaining,
       deductionRates: updates.deductionRates,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.update(budgetRef, afterFields);
     tx.set(
       fyTotalRef,
       {
+        officeId,
         fiscalYear: before.fiscalYear,
         economicCode: before.economicCode,
         allocated: prevFyAlloc + delta,
@@ -438,17 +499,23 @@ export async function updateBudgetTx(
         approvedSpent: prevFySpent,
         pendingAmount: prevFyPending,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       },
       { merge: true }
     );
 
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'budgets',
       docId: budgetId,
-      action: 'update',
+      action: updates.correctionReason ? 'correct' : 'update',
       before: { id: budgetId, ...before },
-      after: { id: budgetId, ...before, ...afterFields },
+      after: {
+        id: budgetId,
+        ...before,
+        ...afterFields,
+        ...(updates.correctionReason ? { correctionReason: updates.correctionReason.trim() } : {}),
+      },
       actor,
     });
   });
@@ -456,9 +523,11 @@ export async function updateBudgetTx(
 
 export async function softDeleteBudgetTx(
   budgetId: string,
-  actor: AuditActor
+  actor: AuditActor,
+  correctionReason?: string
 ): Promise<void> {
   const budgetRef = doc(db, 'budgets', budgetId);
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(budgetRef);
@@ -472,30 +541,41 @@ export async function softDeleteBudgetTx(
       );
     }
 
-    const fyTotalRef = doc(db, 'fyCodeTotals', `${before.fiscalYear}_${before.economicCode}`);
+    const officeId = before.officeId || '';
+    const fyTotalRef = doc(
+      db,
+      'fyCodeTotals',
+      buildFyCodeTotalId(officeId, before.fiscalYear, before.economicCode)
+    );
     const fyTotalSnap = await tx.get(fyTotalRef);
     const prevFyAlloc = fyTotalSnap.exists() ? (fyTotalSnap.data().allocated as number) || 0 : 0;
 
     tx.update(budgetRef, {
       deleted: true,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     });
 
     if (fyTotalSnap.exists()) {
       tx.update(fyTotalRef, {
         allocated: prevFyAlloc - before.allocated,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'budgets',
       docId: budgetId,
-      action: 'delete',
+      action: correctionReason ? 'correct' : 'delete',
       before: { id: budgetId, ...before },
-      after: { id: budgetId, ...before, deleted: true },
+      after: {
+        id: budgetId,
+        ...before,
+        deleted: true,
+        ...(correctionReason ? { correctionReason: correctionReason.trim() } : {}),
+      },
       actor,
     });
   });
@@ -507,6 +587,8 @@ export async function markBudgetStatusTx(
   actor: AuditActor
 ): Promise<void> {
   const budgetRef = doc(db, 'budgets', budgetId);
+  const actorPayload = toActorPayload(actor);
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(budgetRef);
     if (!snap.exists() || snap.data().deleted) {
@@ -516,9 +598,10 @@ export async function markBudgetStatusTx(
     tx.update(budgetRef, {
       status,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     });
     writeAuditLogInTx(tx, {
+      officeId: before.officeId || null,
       collection: 'budgets',
       docId: budgetId,
       action: 'update',
@@ -534,6 +617,7 @@ export async function markBudgetStatusTx(
  * ============================================================================ */
 
 export interface ExpenseItemInput {
+  officeId: string;
   fiscalYear: string;
   economicCode: string;
   headName: string;
@@ -546,6 +630,9 @@ export interface ExpenseItemInput {
 
 function validateExpenseItemInput(input: ExpenseItemInput, indexLabel?: string): void {
   const prefix = indexLabel ? `${indexLabel}: ` : '';
+  if (!input.officeId?.trim()) {
+    throw new Error(`${prefix}দপ্তর নির্বাচন আবশ্যক।`);
+  }
   const code = input.economicCode.trim();
   if (!isValidEconomicCode(code, false)) {
     throw new Error(`${prefix}৭-অঙ্কের বৈধ অর্থনৈতিক কোড নির্বাচন করুন।`);
@@ -573,14 +660,15 @@ export async function createExpenseItemsBatch(
   }
   items.forEach((item, idx) => validateExpenseItemInput(item, `আইটেম #${idx + 1}`));
 
+  const actorPayload = toActorPayload(actor);
   const createdIds: string[] = [];
-  // Chunk by 200 items per batch (2 writes per item -> 400 ops < 500 Firestore batch limit)
   for (let i = 0; i < items.length; i += 200) {
     const chunk = items.slice(i, i + 200);
     const batch = writeBatch(db);
     for (const item of chunk) {
       const ref = doc(collection(db, 'expenseItems'));
       const payload = {
+        officeId: item.officeId.trim(),
         fiscalYear: item.fiscalYear,
         economicCode: item.economicCode.trim(),
         headName: item.headName.trim(),
@@ -597,13 +685,14 @@ export async function createExpenseItemsBatch(
         billId: null,
         deleted: false,
         createdAt: serverTimestamp(),
-        createdBy: actor.uid,
+        createdBy: actorPayload,
         createdByName: actor.name,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       };
       batch.set(ref, payload);
       writeAuditLogInBatch(batch, {
+        officeId: item.officeId.trim(),
         collection: 'expenseItems',
         docId: ref.id,
         action: 'create',
@@ -628,6 +717,7 @@ export async function updateExpenseItem(
   }
   validateExpenseItemInput(updates);
 
+  const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'expenseItems', existing.id);
   const batch = writeBatch(db);
   const patch = {
@@ -643,10 +733,11 @@ export async function updateExpenseItem(
       designation: updates.responsibleEmployee.designation.trim(),
     },
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   };
   batch.update(ref, patch);
   writeAuditLogInBatch(batch, {
+    officeId: existing.officeId || updates.officeId || null,
     collection: 'expenseItems',
     docId: existing.id,
     action: 'update',
@@ -664,14 +755,16 @@ export async function deleteExpenseItem(
   if (existing.status === 'billed') {
     throw new Error('বিলে অন্তর্ভুক্ত (billed) খরচ মুছে ফেলা যায় না।');
   }
+  const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'expenseItems', existing.id);
   const batch = writeBatch(db);
   batch.update(ref, {
     deleted: true,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   });
   writeAuditLogInBatch(batch, {
+    officeId: existing.officeId || null,
     collection: 'expenseItems',
     docId: existing.id,
     action: 'delete',
@@ -687,6 +780,7 @@ export async function deleteExpenseItem(
  * ============================================================================ */
 
 export interface DraftBillGroupInput {
+  officeId: string;
   fiscalYear: string;
   economicCode: string;
   headName: string;
@@ -791,13 +885,20 @@ export async function createDraftBillsFromItems(
     );
   }
 
+  const actorPayload = toActorPayload(actor);
   const createdBillIds: string[] = [];
   const batch = writeBatch(db);
 
   for (const group of nonEmptyGroups) {
+    const officeId = group.officeId.trim();
+    if (!officeId) throw new Error('দপ্তর নির্ধারিত নয়।');
+
     for (const item of group.items) {
       if (item.status !== 'listed' || item.deleted) {
         throw new Error(`আইটেম "${item.description}" ইতোমধ্যে অন্য বিলে যুক্ত হয়েছে।`);
+      }
+      if (item.officeId && item.officeId !== officeId) {
+        throw new Error(`আইটেম "${item.description}" অন্য দপ্তরের।`);
       }
       if (item.economicCode !== group.economicCode) {
         throw new Error('একই বিলের সব আইটেম অবশ্যই একই অর্থনৈতিক কোডের হতে হবে।');
@@ -857,7 +958,8 @@ export async function createDraftBillsFromItems(
         : null;
 
     const billPayload = {
-      billNo: '', // Assigned sequentially on Submit
+      officeId,
+      billNo: '',
       fiscalYear: group.fiscalYear,
       economicCode: group.economicCode,
       headName: group.headName,
@@ -888,6 +990,8 @@ export async function createDraftBillsFromItems(
       submittedBy: null,
       approvedBy: null,
       approvedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
       rejectReason: null,
       cancelledBy: null,
       cancelledAt: null,
@@ -897,14 +1001,15 @@ export async function createDraftBillsFromItems(
       migratedFromSpendingId: null,
       deleted: false,
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorPayload,
       createdByName: actor.name,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     batch.set(billRef, billPayload);
     writeAuditLogInBatch(batch, {
+      officeId,
       collection: 'bills',
       docId: billRef.id,
       action: 'create',
@@ -919,7 +1024,7 @@ export async function createDraftBillsFromItems(
         status: 'billed',
         billId: billRef.id,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1005,6 +1110,7 @@ export async function updateDraftBillRates(
         }
       : null;
 
+  const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'bills', bill.id);
   const patch = {
     date: updates.date,
@@ -1028,11 +1134,12 @@ export async function updateDraftBillRates(
     totalDeduction,
     netPayable,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   };
   const batch = writeBatch(db);
   batch.update(ref, patch);
   writeAuditLogInBatch(batch, {
+    officeId: bill.officeId || null,
     collection: 'bills',
     docId: bill.id,
     action: 'update',
@@ -1047,12 +1154,13 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
   if (bill.status !== 'draft') {
     throw new Error('শুধুমাত্র খসড়া (draft) বিল মুছে ফেলা যায়।');
   }
+  const actorPayload = toActorPayload(actor);
   const batch = writeBatch(db);
   const billRef = doc(db, 'bills', bill.id);
   batch.update(billRef, {
     deleted: true,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   });
 
   for (const itemId of bill.itemIds) {
@@ -1061,11 +1169,12 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
       status: 'listed',
       billId: null,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     });
   }
 
   writeAuditLogInBatch(batch, {
+    officeId: bill.officeId || null,
     collection: 'bills',
     docId: bill.id,
     action: 'delete',
@@ -1076,10 +1185,6 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
   await batch.commit();
 }
 
-/**
- * Distributes `totalAmount` across active budgets (FIFO by memoDate), capping each budget
- * up to its available capacity first and assigning any remainder to the first active budget.
- */
 function distributeAmountAcrossBudgets(
   budgets: Array<BudgetDoc & { ref: DocumentReference }>,
   totalAmount: number,
@@ -1121,7 +1226,6 @@ function distributeAmountAcrossBudgets(
     }
   }
 
-  // If still remaining (only possible during Stage 1 submit warning or mixed revisions), attach to primary active budget
   if (remainingToAllocate > 0) {
     const primary = active[0];
     const existing = slices.find((s) => s.budget.id === primary.id);
@@ -1147,10 +1251,17 @@ export async function submitBillTx(
     throw new Error('বিলটি পাওয়া যায়নি।');
   }
   const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
 
-  const budgetsSnap = await getDocs(
-    query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear))
-  );
+  const budgetsQuery = officeId
+    ? query(
+        collection(db, 'budgets'),
+        where('officeId', '==', officeId),
+        where('fiscalYear', '==', preBill.fiscalYear)
+      )
+    : query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear));
+
+  const budgetsSnap = await getDocs(budgetsQuery);
   const budgetRefs = budgetsSnap.docs
     .filter((d) => !d.data().deleted && d.data().economicCode === preBill.economicCode)
     .map((d) => d.ref);
@@ -1160,8 +1271,13 @@ export async function submitBillTx(
     );
   }
 
-  const fyTotalRef = doc(db, 'fyCodeTotals', `${preBill.fiscalYear}_${preBill.economicCode}`);
-  const counterRef = doc(db, 'counters', `${preBill.fiscalYear}_bill`);
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const counterRef = doc(db, 'counters', buildCounterId(officeId, preBill.fiscalYear));
+  const actorPayload = toActorPayload(actor);
 
   let assignedBillNo = preBill.billNo || '';
 
@@ -1203,10 +1319,11 @@ export async function submitBillTx(
       tx.set(
         counterRef,
         {
+          officeId,
           fiscalYear: before.fiscalYear,
           nextNumber: nextNum + 1,
           updatedAt: serverTimestamp(),
-          updatedBy: actor.uid,
+          updatedBy: actorPayload,
         },
         { merge: true }
       );
@@ -1222,7 +1339,7 @@ export async function submitBillTx(
         pendingAmount: newPending,
         remaining: newRemaining,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1234,12 +1351,13 @@ export async function submitBillTx(
       tx.update(fyTotalRef, {
         pendingAmount: prevFyPending + before.grossAmount,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     } else {
       const prevFyAlloc = freshBudgets.reduce((sum, b) => sum + b.allocated, 0);
       const prevFySpent = freshBudgets.reduce((sum, b) => sum + b.spent, 0);
       tx.set(fyTotalRef, {
+        officeId,
         fiscalYear: before.fiscalYear,
         economicCode: before.economicCode,
         allocated: prevFyAlloc,
@@ -1247,7 +1365,7 @@ export async function submitBillTx(
         approvedSpent: prevFySpent,
         pendingAmount: prevFyPending + before.grossAmount,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1260,15 +1378,16 @@ export async function submitBillTx(
       billNo: assignedBillNo,
       status: 'submitted' as BillStatus,
       submittedAt: serverTimestamp(),
-      submittedBy: actor.uid,
+      submittedBy: actorPayload,
       rejectReason: null,
       pendingSlices,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.update(billRef, afterFields);
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'bills',
       docId: billId,
       action: 'submit',
@@ -1290,10 +1409,27 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
     throw new Error('বিলটি পাওয়া যায়নি।');
   }
   const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
+
+  const budgetsQuery = officeId
+    ? query(
+        collection(db, 'budgets'),
+        where('officeId', '==', officeId),
+        where('fiscalYear', '==', preBill.fiscalYear)
+      )
+    : query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear));
+
+  const limitsQuery = officeId
+    ? query(
+        collection(db, 'spendingLimits'),
+        where('officeId', '==', officeId),
+        where('fiscalYear', '==', preBill.fiscalYear)
+      )
+    : query(collection(db, 'spendingLimits'), where('fiscalYear', '==', preBill.fiscalYear));
 
   const [budgetsSnap, limitsSnap] = await Promise.all([
-    getDocs(query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear))),
-    getDocs(query(collection(db, 'spendingLimits'), where('fiscalYear', '==', preBill.fiscalYear))),
+    getDocs(budgetsQuery),
+    getDocs(limitsQuery),
   ]);
 
   const budgetRefMap = new Map<string, DocumentReference>();
@@ -1311,7 +1447,12 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
   const limitRefs = limitsSnap.docs
     .filter((d) => d.data().status === 'active')
     .map((d) => d.ref);
-  const fyTotalRef = doc(db, 'fyCodeTotals', `${preBill.fiscalYear}_${preBill.economicCode}`);
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const [billSnap, fyTotalSnap, ...restSnaps] = await Promise.all([
@@ -1336,7 +1477,6 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
       .filter((s) => s.exists())
       .map((s) => ({ id: s.id, ...s.data() } as SpendingLimitDoc));
 
-    // Step 1: Reverse this bill's own pendingSlices in memory first
     const pendingReleaseMap = new Map<string, number>();
     for (const sl of before.pendingSlices || []) {
       pendingReleaseMap.set(sl.budgetId, (pendingReleaseMap.get(sl.budgetId) || 0) + sl.amount);
@@ -1356,10 +1496,11 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
         };
       });
 
-    const rawFyTotal = fyTotalSnap.exists()
+    const rawFyTotal: FyCodeTotalDoc = fyTotalSnap.exists()
       ? ({ id: fyTotalSnap.id, ...fyTotalSnap.data() } as FyCodeTotalDoc)
       : {
           id: fyTotalRef.id,
+          officeId,
           fiscalYear: before.fiscalYear,
           economicCode: before.economicCode,
           allocated: freshBudgets.reduce((sum, b) => sum + b.allocated, 0),
@@ -1367,7 +1508,6 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
           pendingAmount: before.grossAmount,
         };
 
-    // Step 2: Re-validate final available budget & all active ministry caps (excluding this bill's own pending hold)
     const capCheck = computeCodeAvailable({
       fiscalYear: before.fiscalYear,
       economicCode: before.economicCode,
@@ -1383,13 +1523,11 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
       throw new Error(capCheck.limitingConstraint.exceededMessage);
     }
 
-    // Step 3: Allocate approvedSpent across active budgets (respecting budget-level caps)
     const activeBudgets = freshBudgets.filter((b) => b.status === 'active');
     if (activeBudgets.length === 0) {
       throw new Error('এই কোডে কোনো সক্রিয় (active) বাজেট নেই। সম্পন্ন (executed) বাজেটে অনুমোদন দেওয়া যায় না।');
     }
 
-    // Check individual budget capacities under budget-level caps
     const totalIndividualCap = activeBudgets.reduce((sum, b) => {
       const res = computeAvailable({
         budget: b,
@@ -1438,7 +1576,7 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
         pendingAmount: newPending,
         remaining: newRemaining,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1448,6 +1586,7 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
     tx.set(
       fyTotalRef,
       {
+        officeId,
         fiscalYear: before.fiscalYear,
         economicCode: before.economicCode,
         allocated: rawFyTotal.allocated,
@@ -1455,7 +1594,7 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
         approvedSpent: newFySpent,
         pendingAmount: newFyPending,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       },
       { merge: true }
     );
@@ -1467,16 +1606,17 @@ export async function approveBillTx(billId: string, actor: AuditActor): Promise<
 
     const afterFields = {
       status: 'approved' as BillStatus,
-      approvedBy: actor.uid,
+      approvedBy: actorPayload,
       approvedAt: serverTimestamp(),
       pendingSlices: [],
       budgetDeductions,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.update(billRef, afterFields);
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'bills',
       docId: billId,
       action: 'approve',
@@ -1502,10 +1642,16 @@ export async function rejectBillTx(
     throw new Error('বিলটি পাওয়া যায়নি।');
   }
   const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
 
   const budgetRefs = (preBill.pendingSlices || []).map((sl) => doc(db, 'budgets', sl.budgetId));
   const itemRefs = (preBill.itemIds || []).map((id) => doc(db, 'expenseItems', id));
-  const fyTotalRef = doc(db, 'fyCodeTotals', `${preBill.fiscalYear}_${preBill.economicCode}`);
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const [billSnap, fyTotalSnap, ...otherSnaps] = await Promise.all([
@@ -1541,7 +1687,7 @@ export async function rejectBillTx(
         pendingAmount: newPending,
         remaining: newRemaining,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1550,7 +1696,7 @@ export async function rejectBillTx(
       tx.update(fyTotalRef, {
         pendingAmount: Math.max(0, (f.pendingAmount || 0) - before.grossAmount),
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1560,20 +1706,23 @@ export async function rejectBillTx(
         status: 'listed',
         billId: null,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
     const afterFields = {
       status: 'rejected' as BillStatus,
+      rejectedBy: actorPayload,
+      rejectedAt: serverTimestamp(),
       rejectReason: reason,
       pendingSlices: [],
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.update(billRef, afterFields);
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'bills',
       docId: billId,
       action: 'reject',
@@ -1599,20 +1748,31 @@ export async function cancelApprovedBillTx(
     throw new Error('বিলটি পাওয়া যায়নি।');
   }
   const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
 
   let budgetRefs: DocumentReference[] = (preBill.budgetDeductions || []).map((d) =>
     doc(db, 'budgets', d.budgetId)
   );
   if (budgetRefs.length === 0) {
-    const codeBudgetsSnap = await getDocs(
-      query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear))
-    );
+    const q = officeId
+      ? query(
+          collection(db, 'budgets'),
+          where('officeId', '==', officeId),
+          where('fiscalYear', '==', preBill.fiscalYear)
+        )
+      : query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear));
+    const codeBudgetsSnap = await getDocs(q);
     budgetRefs = codeBudgetsSnap.docs
       .filter((d) => !d.data().deleted && d.data().economicCode === preBill.economicCode)
       .map((d) => d.ref);
   }
   const itemRefs = (preBill.itemIds || []).map((id) => doc(db, 'expenseItems', id));
-  const fyTotalRef = doc(db, 'fyCodeTotals', `${preBill.fiscalYear}_${preBill.economicCode}`);
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
     const [billSnap, fyTotalSnap, ...otherSnaps] = await Promise.all([
@@ -1650,11 +1810,10 @@ export async function cancelApprovedBillTx(
           approvedSpent: newSpent,
           remaining: newRemaining,
           updatedAt: serverTimestamp(),
-          updatedBy: actor.uid,
+          updatedBy: actorPayload,
         });
       }
     } else {
-      // Fallback reversal across code's budgets if migrated without budgetDeductions
       let toRestore = before.grossAmount;
       for (const bSnap of budgetSnaps) {
         if (!bSnap.exists() || toRestore <= 0) continue;
@@ -1668,7 +1827,7 @@ export async function cancelApprovedBillTx(
             approvedSpent: newSpent,
             remaining: b.allocated - newSpent - pending,
             updatedAt: serverTimestamp(),
-            updatedBy: actor.uid,
+            updatedBy: actorPayload,
           });
           toRestore -= take;
         }
@@ -1682,7 +1841,7 @@ export async function cancelApprovedBillTx(
         spent: newFySpent,
         approvedSpent: newFySpent,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
@@ -1692,26 +1851,343 @@ export async function cancelApprovedBillTx(
         status: 'listed',
         billId: null,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
     }
 
     const afterFields = {
       status: 'cancelled' as BillStatus,
-      cancelledBy: actor.uid,
+      cancelledBy: actorPayload,
       cancelledAt: serverTimestamp(),
       cancelReason: reason,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     tx.update(billRef, afterFields);
     writeAuditLogInTx(tx, {
+      officeId: officeId || null,
       collection: 'bills',
       docId: billId,
       action: 'cancel',
       before: { id: billId, ...before },
       after: { id: billId, ...before, ...afterFields },
+      actor,
+    });
+  });
+}
+
+/* ============================================================================
+ * SUPER ADMIN AUDITED CORRECTIONS ON APPROVED BILLS
+ * ============================================================================ */
+
+export async function correctApprovedBillTx(
+  billId: string,
+  updates: {
+    date: string;
+    billDate?: string;
+    vatVariant: string;
+    vatVariantLabel: string;
+    vatRate: number;
+    itRate: number;
+    tokenNo?: string;
+    purposeText?: string;
+    tr21P1S3Mode?: Tr21P1S3Mode | null;
+    voucherTitle?: string;
+    payeeText?: string;
+    netPayableCode?: string;
+    supplier?: BillSupplierInfo | null;
+    deductions?: BillDeductionLine[];
+    correctionReason: string;
+  },
+  actor: AuditActor
+): Promise<void> {
+  assertOnlineForTransaction('অনুমোদিত বিল সংশোধন');
+  const reason = updates.correctionReason.trim();
+  if (!reason) throw new Error('সংশোধনের কারণ উল্লেখ করা আবশ্যক।');
+
+  const billRef = doc(db, 'bills', billId);
+  const preSnap = await getDoc(billRef);
+  if (!preSnap.exists() || preSnap.data().deleted) {
+    throw new Error('বিলটি পাওয়া যায়নি।');
+  }
+  const preBill = preSnap.data() as Omit<BillDoc, 'id'>;
+  if (preBill.status !== 'approved') {
+    throw new Error('শুধুমাত্র অনুমোদিত (approved) বিল সুপার অ্যাডমিন দ্বারা সংশোধন করা যায়।');
+  }
+  const officeId = preBill.officeId || '';
+
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  let budgetRefs: DocumentReference[] = (preBill.budgetDeductions || []).map((d) =>
+    doc(db, 'budgets', d.budgetId)
+  );
+  if (budgetRefs.length === 0) {
+    const q = officeId
+      ? query(
+          collection(db, 'budgets'),
+          where('officeId', '==', officeId),
+          where('fiscalYear', '==', preBill.fiscalYear)
+        )
+      : query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear));
+    const snap = await getDocs(q);
+    budgetRefs = snap.docs
+      .filter((d) => !d.data().deleted && d.data().economicCode === preBill.economicCode)
+      .map((d) => d.ref);
+  }
+  const actorPayload = toActorPayload(actor);
+
+  await runTransaction(db, async (tx) => {
+    const [billSnap, fyTotalSnap, ...budgetSnaps] = await Promise.all([
+      tx.get(billRef),
+      tx.get(fyTotalRef),
+      ...budgetRefs.map((r) => tx.get(r)),
+    ]);
+    if (!billSnap.exists() || billSnap.data().deleted) {
+      throw new Error('বিলটি পাওয়া যায়নি।');
+    }
+    const before = billSnap.data() as Omit<BillDoc, 'id'>;
+    if (!isDateInFiscalYear(updates.date, before.fiscalYear)) {
+      throw new Error(`বিলের তারিখ অর্থবছর ${before.fiscalYear} এর মধ্যে হতে হবে।`);
+    }
+
+    const itemsExpenseTotal = before.items.reduce((sum, item) => sum + item.amount, 0);
+    const hasItemBreakdown = before.items.length > 0 && itemsExpenseTotal > 0;
+    const computed = hasItemBreakdown
+      ? computeGrossedUpBill({
+          expenseTotalPaisa: itemsExpenseTotal,
+          vatRate: updates.vatRate,
+          itRate: updates.itRate,
+          customDeductions: updates.deductions,
+          defaultItCode: DEFAULT_IT_CODE,
+          defaultVatCode: DEFAULT_VAT_CODE,
+        })
+      : {
+          grossAmount: before.grossAmount,
+          ...summarizeBillDeductions(
+            before.grossAmount,
+            updates.vatRate,
+            updates.itRate,
+            updates.deductions
+          ),
+        };
+
+    if (computed.netPayable < 0) {
+      throw new Error('মোট কর্তন বিলের চেয়ে বেশি হতে পারে না।');
+    }
+
+    const deltaGross = computed.grossAmount - before.grossAmount;
+    const updatedBudgetDeductions = [...(before.budgetDeductions || [])];
+
+    if (deltaGross !== 0 && budgetSnaps.length > 0) {
+      // Adjust primary budget deduction slice safely
+      const targetBudgetSnap = budgetSnaps.find((s) => s.exists());
+      if (targetBudgetSnap && targetBudgetSnap.exists()) {
+        const b = targetBudgetSnap.data() as Omit<BudgetDoc, 'id'>;
+        const newSpent = Math.max(0, b.spent + deltaGross);
+        const pending = Math.max(0, b.pendingAmount || 0);
+        tx.update(targetBudgetSnap.ref, {
+          spent: newSpent,
+          approvedSpent: newSpent,
+          remaining: b.allocated - newSpent - pending,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorPayload,
+        });
+        const idx = updatedBudgetDeductions.findIndex((sl) => sl.budgetId === targetBudgetSnap.id);
+        if (idx >= 0) {
+          updatedBudgetDeductions[idx] = {
+            ...updatedBudgetDeductions[idx],
+            amount: Math.max(0, updatedBudgetDeductions[idx].amount + deltaGross),
+          };
+        }
+      }
+
+      if (fyTotalSnap.exists()) {
+        const f = fyTotalSnap.data() as Omit<FyCodeTotalDoc, 'id'>;
+        const nextSpent = Math.max(0, (f.spent || 0) + deltaGross);
+        tx.update(fyTotalRef, {
+          spent: nextSpent,
+          approvedSpent: nextSpent,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorPayload,
+        });
+      }
+    }
+
+    const cleanSupplier =
+      updates.supplier &&
+      (updates.supplier.name?.trim() ||
+        updates.supplier.address?.trim() ||
+        updates.supplier.tinBin?.trim())
+        ? {
+            name: (updates.supplier.name || '').trim(),
+            address: (updates.supplier.address || '').trim(),
+            tinBin: (updates.supplier.tinBin || '').trim(),
+          }
+        : null;
+
+    const afterFields = {
+      date: updates.date,
+      billDate: updates.billDate || updates.date,
+      tokenNo: (updates.tokenNo ?? before.tokenNo ?? '').trim(),
+      purposeText: (updates.purposeText ?? before.purposeText ?? '').trim(),
+      tr21P1S3Mode:
+        updates.tr21P1S3Mode !== undefined ? updates.tr21P1S3Mode : before.tr21P1S3Mode ?? null,
+      voucherTitle: (updates.voucherTitle ?? before.voucherTitle ?? '').trim(),
+      payeeText: (updates.payeeText ?? before.payeeText ?? '').trim(),
+      netPayableCode: (
+        updates.netPayableCode ??
+        before.netPayableCode ??
+        DEFAULT_NET_PAYABLE_CODE
+      ).trim(),
+      supplier: updates.supplier !== undefined ? cleanSupplier : before.supplier ?? null,
+      deductions: computed.deductions,
+      vatVariant: updates.vatVariant,
+      vatVariantLabel: updates.vatVariantLabel,
+      vatRate: computed.effectiveVatRate,
+      itRate: computed.effectiveItRate,
+      grossAmount: computed.grossAmount,
+      vatAmount: computed.vatAmount,
+      itAmount: computed.itAmount,
+      totalDeduction: computed.totalDeduction,
+      netPayable: computed.netPayable,
+      budgetDeductions: updatedBudgetDeductions,
+      updatedAt: serverTimestamp(),
+      updatedBy: actorPayload,
+    };
+
+    tx.update(billRef, afterFields);
+    writeAuditLogInTx(tx, {
+      officeId: officeId || null,
+      collection: 'bills',
+      docId: billId,
+      action: 'correct',
+      before: { id: billId, ...before },
+      after: { id: billId, ...before, ...afterFields, correctionReason: reason },
+      actor,
+    });
+  });
+}
+
+export async function softDeleteApprovedBillTx(
+  billId: string,
+  reasonInput: string,
+  actor: AuditActor
+): Promise<void> {
+  assertOnlineForTransaction('অনুমোদিত বিল মুছে ফেলা');
+  const reason = reasonInput.trim();
+  if (!reason) throw new Error('কারণ উল্লেখ করা আবশ্যক।');
+
+  const billRef = doc(db, 'bills', billId);
+  const preBillSnap = await getDoc(billRef);
+  if (!preBillSnap.exists() || preBillSnap.data().deleted) {
+    throw new Error('বিলটি পাওয়া যায়নি।');
+  }
+  const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
+
+  let budgetRefs: DocumentReference[] = (preBill.budgetDeductions || []).map((d) =>
+    doc(db, 'budgets', d.budgetId)
+  );
+  if (budgetRefs.length === 0) {
+    const q = officeId
+      ? query(
+          collection(db, 'budgets'),
+          where('officeId', '==', officeId),
+          where('fiscalYear', '==', preBill.fiscalYear)
+        )
+      : query(collection(db, 'budgets'), where('fiscalYear', '==', preBill.fiscalYear));
+    const codeBudgetsSnap = await getDocs(q);
+    budgetRefs = codeBudgetsSnap.docs
+      .filter((d) => !d.data().deleted && d.data().economicCode === preBill.economicCode)
+      .map((d) => d.ref);
+  }
+  const itemRefs = (preBill.itemIds || []).map((id) => doc(db, 'expenseItems', id));
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const actorPayload = toActorPayload(actor);
+
+  await runTransaction(db, async (tx) => {
+    const [billSnap, fyTotalSnap, ...otherSnaps] = await Promise.all([
+      tx.get(billRef),
+      tx.get(fyTotalRef),
+      ...budgetRefs.map((r) => tx.get(r)),
+      ...itemRefs.map((r) => tx.get(r)),
+    ]);
+
+    if (!billSnap.exists() || billSnap.data().deleted) {
+      throw new Error('বিলটি পাওয়া যায়নি।');
+    }
+    const before = billSnap.data() as Omit<BillDoc, 'id'>;
+    if (before.status !== 'approved') {
+      throw new Error('শুধুমাত্র অনুমোদিত (approved) বিল এই অপারেশনের মাধ্যমে মুছে ফেলা যায়।');
+    }
+
+    const budgetSnaps = otherSnaps.slice(0, budgetRefs.length) as DocumentSnapshot[];
+    const itemSnaps = otherSnaps.slice(budgetRefs.length) as DocumentSnapshot[];
+
+    if (before.budgetDeductions && before.budgetDeductions.length > 0) {
+      const dedMap = new Map<string, number>();
+      for (const sl of before.budgetDeductions) {
+        dedMap.set(sl.budgetId, (dedMap.get(sl.budgetId) || 0) + sl.amount);
+      }
+      for (const bSnap of budgetSnaps) {
+        if (!bSnap.exists()) continue;
+        const b = bSnap.data() as Omit<BudgetDoc, 'id'>;
+        const restore = dedMap.get(bSnap.id) || 0;
+        const newSpent = Math.max(0, b.spent - restore);
+        const pending = Math.max(0, b.pendingAmount || 0);
+        tx.update(bSnap.ref, {
+          spent: newSpent,
+          approvedSpent: newSpent,
+          remaining: b.allocated - newSpent - pending,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorPayload,
+        });
+      }
+    }
+
+    if (fyTotalSnap.exists()) {
+      const f = fyTotalSnap.data() as Omit<FyCodeTotalDoc, 'id'>;
+      const newFySpent = Math.max(0, (f.spent || 0) - before.grossAmount);
+      tx.update(fyTotalRef, {
+        spent: newFySpent,
+        approvedSpent: newFySpent,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      });
+    }
+
+    for (const itemSnap of itemSnaps) {
+      if (!itemSnap.exists() || itemSnap.data()?.deleted) continue;
+      tx.update(itemSnap.ref, {
+        status: 'listed',
+        billId: null,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      });
+    }
+
+    tx.update(billRef, {
+      deleted: true,
+      cancelReason: reason,
+      updatedAt: serverTimestamp(),
+      updatedBy: actorPayload,
+    });
+
+    writeAuditLogInTx(tx, {
+      officeId: officeId || null,
+      collection: 'bills',
+      docId: billId,
+      action: 'correct',
+      before: { id: billId, ...before },
+      after: { id: billId, ...before, deleted: true, correctionReason: reason },
       actor,
     });
   });
@@ -1819,7 +2295,8 @@ export async function previewLegacySpendingsMigration(): Promise<MigrationPrevie
 }
 
 export async function runLegacySpendingsMigration(
-  actor: AuditActor
+  actor: AuditActor,
+  fallbackOfficeId = ''
 ): Promise<MigrationRunResult> {
   const [spendingsSnap, billsSnap, itemsSnap, budgetsSnap, fyTotalsSnap] = await Promise.all([
     getDocs(collection(db, 'spendings')),
@@ -1841,7 +2318,6 @@ export async function runLegacySpendingsMigration(
       .filter(Boolean)
   );
 
-  // Track submitted legacy bills to add into pendingAmount ONLY for newly migrated submitted entries
   const pendingDeltaByBudget = new Map<string, number>();
   const pendingDeltaByFyCode = new Map<string, number>();
 
@@ -1853,6 +2329,7 @@ export async function runLegacySpendingsMigration(
   }> = [];
 
   let skippedExisting = 0;
+  const actorPayload = toActorPayload(actor);
 
   for (const sp of activeSpendings) {
     const detBillId = `mig_bill_${sp.id}`;
@@ -1862,6 +2339,7 @@ export async function runLegacySpendingsMigration(
       continue;
     }
 
+    const spOfficeId = sp.officeId || fallbackOfficeId;
     const mappedStatus = mapLegacyStatusToBillStatus(sp.status);
     const vatAmt = sp.deductions?.vat || 0;
     const itAmt = sp.deductions?.it || 0;
@@ -1884,6 +2362,7 @@ export async function runLegacySpendingsMigration(
     const itemPayload = existingItemIds.has(detItemId)
       ? null
       : {
+          officeId: spOfficeId,
           fiscalYear: sp.fiscalYear,
           economicCode: sp.economicCode,
           headName: sp.headName,
@@ -1896,10 +2375,10 @@ export async function runLegacySpendingsMigration(
           billId: itemStatus === 'billed' ? detBillId : null,
           deleted: false,
           createdAt: sp.createdAt || serverTimestamp(),
-          createdBy: sp.createdBy || actor.uid,
+          createdBy: sp.createdBy || actorPayload,
           createdByName: sp.createdByName || actor.name,
           updatedAt: serverTimestamp(),
-          updatedBy: actor.uid,
+          updatedBy: actorPayload,
         };
 
     const pendingSlices: BillBudgetSlice[] =
@@ -1918,11 +2397,12 @@ export async function runLegacySpendingsMigration(
           (pendingDeltaByBudget.get(sp.budgetId) || 0) + sp.gross
         );
       }
-      const fyCodeKey = `${sp.fiscalYear}_${sp.economicCode}`;
+      const fyCodeKey = buildFyCodeTotalId(spOfficeId, sp.fiscalYear, sp.economicCode);
       pendingDeltaByFyCode.set(fyCodeKey, (pendingDeltaByFyCode.get(fyCodeKey) || 0) + sp.gross);
     }
 
     const billPayload = {
+      officeId: spOfficeId,
       billNo: sp.billNo || (mappedStatus === 'draft' ? '' : `LEG-${sp.id.slice(0, 6)}`),
       fiscalYear: sp.fiscalYear,
       economicCode: sp.economicCode,
@@ -1950,11 +2430,11 @@ export async function runLegacySpendingsMigration(
       netPayable,
       status: mappedStatus,
       submittedAt: sp.submittedAt || null,
-      submittedBy: sp.createdBy || actor.uid,
+      submittedBy: sp.createdBy || actorPayload,
       approvedBy: sp.approvedBy || null,
       approvedAt: sp.approvedAt || null,
       rejectReason: sp.rejectReason || null,
-      cancelledBy: sp.status === 'voided' ? sp.voidedBy || actor.uid : null,
+      cancelledBy: sp.status === 'voided' ? sp.voidedBy || actorPayload : null,
       cancelledAt: sp.status === 'voided' ? sp.voidedAt || serverTimestamp() : null,
       cancelReason: sp.status === 'voided' ? sp.voidReason || 'Legacy voided entry' : null,
       pendingSlices,
@@ -1962,10 +2442,10 @@ export async function runLegacySpendingsMigration(
       migratedFromSpendingId: sp.id,
       deleted: false,
       createdAt: sp.createdAt || serverTimestamp(),
-      createdBy: sp.createdBy || actor.uid,
+      createdBy: sp.createdBy || actorPayload,
       createdByName: sp.createdByName || actor.name,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
 
     toCreate.push({ billId: detBillId, itemId: detItemId, billPayload, itemPayload });
@@ -1988,7 +2468,6 @@ export async function runLegacySpendingsMigration(
     await batch.commit();
   }
 
-  // Sync budgets (do NOT re-deduct already approved spent; only ensure approvedSpent/pendingAmount/remaining fields match)
   let syncedBudgets = 0;
   const budgetDocsToUpdate = budgetsSnap.docs.filter((d) => {
     const b = d.data() as BudgetDoc;
@@ -2012,14 +2491,13 @@ export async function runLegacySpendingsMigration(
         pendingAmount: pending,
         remaining: b.allocated - spent - pending,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
       syncedBudgets++;
     }
     await batch.commit();
   }
 
-  // Sync fyCodeTotals
   let syncedFyTotals = 0;
   const fyDocsToUpdate = fyTotalsSnap.docs.filter((d) => {
     const f = d.data() as FyCodeTotalDoc;
@@ -2041,16 +2519,16 @@ export async function runLegacySpendingsMigration(
         approvedSpent: spent,
         pendingAmount: pending,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       });
       syncedFyTotals++;
     }
     await batch.commit();
   }
 
-  // Write audit summary
   const auditBatch = writeBatch(db);
   writeAuditLogInBatch(auditBatch, {
+    officeId: fallbackOfficeId || null,
     collection: 'bills',
     docId: 'legacy_spendings_migration',
     action: 'migrate',
@@ -2108,6 +2586,7 @@ export async function upsertVatTaxRate(
 
   const docId = `${input.fiscalYear}_${code}`;
   const ref = doc(db, 'vatTaxRates', docId);
+  const actorPayload = toActorPayload(actor);
 
   const batch = writeBatch(db);
   const payload = {
@@ -2118,11 +2597,12 @@ export async function upsertVatTaxRate(
     incomeTax: input.incomeTax,
     vat: input.vat,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
-    ...(isNew ? { createdAt: serverTimestamp(), createdBy: actor.uid } : {}),
+    updatedBy: actorPayload,
+    ...(isNew ? { createdAt: serverTimestamp(), createdBy: actorPayload } : {}),
   };
   batch.set(ref, payload, { merge: true });
   writeAuditLogInBatch(batch, {
+    officeId: null,
     collection: 'vatTaxRates',
     docId,
     action: isNew ? 'create' : 'update',
@@ -2139,6 +2619,7 @@ export async function copyVatTaxRatesToFy(
   actor: AuditActor
 ): Promise<number> {
   if (rates.length === 0) return 0;
+  const actorPayload = toActorPayload(actor);
   const batch = writeBatch(db);
   for (const r of rates) {
     const newId = `${targetFy}_${r.economicCode}`;
@@ -2151,12 +2632,13 @@ export async function copyVatTaxRatesToFy(
       incomeTax: r.incomeTax,
       vat: r.vat,
       createdAt: serverTimestamp(),
-      createdBy: actor.uid,
+      createdBy: actorPayload,
       updatedAt: serverTimestamp(),
-      updatedBy: actor.uid,
+      updatedBy: actorPayload,
     };
     batch.set(ref, payload, { merge: true });
     writeAuditLogInBatch(batch, {
+      officeId: null,
       collection: 'vatTaxRates',
       docId: newId,
       action: 'create',
@@ -2171,6 +2653,7 @@ export async function copyVatTaxRatesToFy(
 
 export async function createSpendingLimitTx(
   input: {
+    officeId: string;
     type: SpendingLimitType;
     budgetId: string | null;
     fiscalYear: string;
@@ -2183,6 +2666,9 @@ export async function createSpendingLimitTx(
   },
   actor: AuditActor
 ): Promise<string> {
+  const officeId = input.officeId.trim();
+  if (!officeId) throw new Error('Office is required.');
+
   const code = input.economicCode.trim();
   if (!isValidEconomicCode(code, false)) {
     throw new Error('Economic code must be 7 digits.');
@@ -2207,9 +2693,11 @@ export async function createSpendingLimitTx(
   }
   if (!input.refNo.trim()) throw new Error('Letter / reference number is required.');
 
+  const actorPayload = toActorPayload(actor);
   const ref = doc(collection(db, 'spendingLimits'));
   const batch = writeBatch(db);
   const payload = {
+    officeId,
     type: input.type,
     budgetId: input.type === 'budget' ? input.budgetId : null,
     fiscalYear: input.fiscalYear,
@@ -2222,12 +2710,13 @@ export async function createSpendingLimitTx(
     refNo: input.refNo.trim(),
     status: 'active' as const,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorPayload,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   };
   batch.set(ref, payload);
   writeAuditLogInBatch(batch, {
+    officeId,
     collection: 'spendingLimits',
     docId: ref.id,
     action: 'create',
@@ -2239,18 +2728,89 @@ export async function createSpendingLimitTx(
   return ref.id;
 }
 
+export async function createSpendingLimitsForAllOfficesBatch(
+  input: {
+    offices: OfficeDoc[];
+    fiscalYear: string;
+    economicCode: string;
+    headName: string;
+    headNameBn: string;
+    rate: number;
+    effectiveDate: string;
+    refNo: string;
+  },
+  actor: AuditActor
+): Promise<number> {
+  const activeOffices = input.offices.filter((o) => o.status === 'active');
+  if (activeOffices.length === 0) throw new Error('No active offices available.');
+  const code = input.economicCode.trim();
+  if (!isValidEconomicCode(code, false)) throw new Error('Economic code must be 7 digits.');
+  const masterSnap = await getDoc(doc(db, 'economicCodes', code));
+  if (!masterSnap.exists()) throw new Error(`Economic code "${code}" does not exist.`);
+  const masterData = masterSnap.data() as Omit<EconomicCodeDoc, 'id'>;
+  if (masterData.special) throw new Error('GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+  if (input.rate <= 0 || input.rate > 100) throw new Error('Rate must be between 1 and 100 percent.');
+  if (!isDateInFiscalYear(input.effectiveDate, input.fiscalYear)) {
+    throw new Error(`Effective date must fall inside FY ${input.fiscalYear}.`);
+  }
+  if (!input.refNo.trim()) throw new Error('Letter / reference number is required.');
+
+  const actorPayload = toActorPayload(actor);
+  let count = 0;
+  for (let i = 0; i < activeOffices.length; i += 200) {
+    const chunk = activeOffices.slice(i, i + 200);
+    const batch = writeBatch(db);
+    for (const off of chunk) {
+      const ref = doc(collection(db, 'spendingLimits'));
+      const payload = {
+        officeId: off.id,
+        type: 'code' as const,
+        budgetId: null,
+        fiscalYear: input.fiscalYear,
+        economicCode: code,
+        headName: masterData.headName || input.headName.trim(),
+        headNameBn: masterData.headNameBn || input.headNameBn.trim(),
+        rate: input.rate,
+        unit: 'percent' as const,
+        effectiveDate: input.effectiveDate,
+        refNo: input.refNo.trim(),
+        status: 'active' as const,
+        createdAt: serverTimestamp(),
+        createdBy: actorPayload,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      };
+      batch.set(ref, payload);
+      writeAuditLogInBatch(batch, {
+        officeId: off.id,
+        collection: 'spendingLimits',
+        docId: ref.id,
+        action: 'create',
+        before: null,
+        after: { id: ref.id, ...payload },
+        actor,
+      });
+      count++;
+    }
+    await batch.commit();
+  }
+  return count;
+}
+
 export async function withdrawSpendingLimit(
   limitDoc: SpendingLimitDoc,
   actor: AuditActor
 ): Promise<void> {
+  const actorPayload = toActorPayload(actor);
   const batch = writeBatch(db);
   const ref = doc(db, 'spendingLimits', limitDoc.id);
   batch.update(ref, {
     status: 'withdrawn',
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   });
   writeAuditLogInBatch(batch, {
+    officeId: limitDoc.officeId || null,
     collection: 'spendingLimits',
     docId: limitDoc.id,
     action: 'update',
@@ -2262,7 +2822,16 @@ export async function withdrawSpendingLimit(
 }
 
 export async function createInvite(
-  input: { email: string; name?: string; designation: string; role: Role },
+  input: {
+    email: string;
+    name?: string;
+    designation: string;
+    role: 'ddo' | 'employee';
+    officeId: string;
+    kind?: 'regular' | 'additionalCharge';
+    orderNo?: string;
+    orderDate?: string;
+  },
   actor: AuditActor
 ): Promise<void> {
   const emailLower = normalizeEmail(input.email);
@@ -2272,21 +2841,29 @@ export async function createInvite(
   if (!input.designation.trim()) {
     throw new Error('Designation is required.');
   }
+  if (!input.officeId) throw new Error('Office is required.');
+
+  const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'invites', emailLower);
   const batch = writeBatch(db);
   const payload = {
     email: emailLower,
     name: input.name?.trim() || '',
     designation: input.designation.trim(),
+    officeId: input.officeId,
     role: input.role,
-    invitedBy: actor.uid,
+    kind: input.kind || 'regular',
+    orderNo: (input.orderNo || '').trim(),
+    orderDate: (input.orderDate || '').trim(),
+    invitedBy: actorPayload,
     createdAt: serverTimestamp(),
-    createdBy: actor.uid,
+    createdBy: actorPayload,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   };
   batch.set(ref, payload);
   writeAuditLogInBatch(batch, {
+    officeId: input.officeId,
     collection: 'invites',
     docId: emailLower,
     action: 'create',
@@ -2301,6 +2878,7 @@ export async function deleteInvite(emailLower: string, actor: AuditActor): Promi
   const batch = writeBatch(db);
   batch.delete(doc(db, 'invites', emailLower));
   writeAuditLogInBatch(batch, {
+    officeId: actor.officeId ?? null,
     collection: 'invites',
     docId: emailLower,
     action: 'delete',
@@ -2317,15 +2895,17 @@ export async function updateUserRoleOrStatus(
   beforeUser: Record<string, unknown>,
   actor: AuditActor
 ): Promise<void> {
+  const actorPayload = toActorPayload(actor);
   const batch = writeBatch(db);
   const ref = doc(db, 'users', userId);
   const patch = {
     ...updates,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   };
   batch.update(ref, patch);
   writeAuditLogInBatch(batch, {
+    officeId: actor.officeId ?? null,
     collection: 'users',
     docId: userId,
     action: 'update',
@@ -2338,24 +2918,73 @@ export async function updateUserRoleOrStatus(
 
 export async function saveOfficeSettings(
   settings: Partial<OfficeSettings>,
-  actor: AuditActor
+  actor: AuditActor,
+  targetOfficeId?: string | null
 ): Promise<void> {
+  const actorPayload = toActorPayload(actor);
   const batch = writeBatch(db);
-  const ref = doc(db, 'settings', 'office');
-  const patch = {
-    ...settings,
-    updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
-  };
-  batch.set(ref, patch, { merge: true });
-  writeAuditLogInBatch(batch, {
-    collection: 'settings',
-    docId: 'office',
-    action: 'update',
-    before: null,
-    after: patch,
-    actor,
-  });
+  const effectiveOfficeId = targetOfficeId || settings.officeId || null;
+
+  if (effectiveOfficeId) {
+    const officeRef = doc(db, 'offices', effectiveOfficeId);
+    const officePatch: Record<string, unknown> = {
+      updatedAt: serverTimestamp(),
+      updatedBy: actorPayload,
+    };
+    if (settings.officeName !== undefined) officePatch.name = settings.officeName.trim();
+    if (settings.officeNameBn !== undefined) officePatch.nameBn = settings.officeNameBn.trim();
+    if (settings.officeCode !== undefined) officePatch.code = settings.officeCode.trim();
+    if (settings.address !== undefined) officePatch.address = settings.address;
+    if (settings.activeFiscalYear !== undefined) officePatch.activeFiscalYear = settings.activeFiscalYear;
+    if (settings.fiscalYears !== undefined) officePatch.fiscalYears = settings.fiscalYears;
+    if (settings.language !== undefined) officePatch.language = settings.language;
+    if (settings.ministryName !== undefined) officePatch.ministryName = settings.ministryName;
+    if (settings.officeMobileNo !== undefined) officePatch.officeMobileNo = settings.officeMobileNo;
+    if (settings.institutionalCode !== undefined)
+      officePatch.institutionalCode = settings.institutionalCode;
+    if (settings.defaultPayeeText !== undefined) officePatch.defaultPayeeText = settings.defaultPayeeText;
+    if (settings.placeName !== undefined) officePatch.placeName = settings.placeName;
+    if (settings.defaultNetPayableCode !== undefined)
+      officePatch.defaultNetPayableCode = settings.defaultNetPayableCode;
+    if (settings.defaultItCode !== undefined) officePatch.defaultItCode = settings.defaultItCode;
+    if (settings.defaultVatCode !== undefined) officePatch.defaultVatCode = settings.defaultVatCode;
+    if (settings.defaultSecurityCode !== undefined)
+      officePatch.defaultSecurityCode = settings.defaultSecurityCode;
+    if (settings.tr21FooterText !== undefined) officePatch.tr21FooterText = settings.tr21FooterText;
+    if (settings.tr21FontFamily !== undefined) officePatch.tr21FontFamily = settings.tr21FontFamily;
+    if (settings.tr21FontSize !== undefined) officePatch.tr21FontSize = settings.tr21FontSize;
+    if (settings.tr21P1S3Mode !== undefined) officePatch.tr21P1S3Mode = settings.tr21P1S3Mode;
+    if (settings.tr21VoucherLabel !== undefined) officePatch.tr21VoucherLabel = settings.tr21VoucherLabel;
+    if (settings.tr21Clauses !== undefined) officePatch.tr21Clauses = settings.tr21Clauses;
+
+    batch.update(officeRef, officePatch);
+    writeAuditLogInBatch(batch, {
+      officeId: effectiveOfficeId,
+      collection: 'offices',
+      docId: effectiveOfficeId,
+      action: 'update',
+      before: null,
+      after: officePatch,
+      actor,
+    });
+  } else {
+    const ref = doc(db, 'settings', 'office');
+    const patch = {
+      ...settings,
+      updatedAt: serverTimestamp(),
+      updatedBy: actorPayload,
+    };
+    batch.set(ref, patch, { merge: true });
+    writeAuditLogInBatch(batch, {
+      officeId: null,
+      collection: 'settings',
+      docId: 'office',
+      action: 'update',
+      before: null,
+      after: patch,
+      actor,
+    });
+  }
   await batch.commit();
 }
 
@@ -2383,6 +3012,7 @@ export async function upsertEconomicCode(
   const before = exists
     ? ({ id: existingSnap.id, ...existingSnap.data() } as Record<string, unknown>)
     : null;
+  const actorPayload = toActorPayload(actor);
 
   const payload = {
     code,
@@ -2391,13 +3021,14 @@ export async function upsertEconomicCode(
     active: input.active,
     special: isSpecial,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
-    ...(exists ? {} : { createdAt: serverTimestamp(), createdBy: actor.uid }),
+    updatedBy: actorPayload,
+    ...(exists ? {} : { createdAt: serverTimestamp(), createdBy: actorPayload }),
   };
 
   const batch = writeBatch(db);
   batch.set(ref, payload, { merge: true });
   writeAuditLogInBatch(batch, {
+    officeId: null,
     collection: 'economicCodes',
     docId: code,
     action: exists ? 'update' : 'create',
@@ -2422,14 +3053,16 @@ export async function setEconomicCodeActive(
   active: boolean,
   actor: AuditActor
 ): Promise<void> {
+  const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'economicCodes', entry.code);
   const batch = writeBatch(db);
   batch.update(ref, {
     active,
     updatedAt: serverTimestamp(),
-    updatedBy: actor.uid,
+    updatedBy: actorPayload,
   });
   writeAuditLogInBatch(batch, {
+    officeId: null,
     collection: 'economicCodes',
     docId: entry.code,
     action: 'update',
@@ -2471,6 +3104,7 @@ export async function deleteEconomicCodeIfUnused(
   const batch = writeBatch(db);
   batch.delete(ref);
   writeAuditLogInBatch(batch, {
+    officeId: null,
     collection: 'economicCodes',
     docId: entry.code,
     action: 'delete',
@@ -2540,6 +3174,7 @@ export async function buildEconomicCodesFromExistingData(
 
   let created = 0;
   let skipped = 0;
+  const actorPayload = toActorPayload(actor);
   const entries = Array.from(collected.entries()).filter(([code]) => {
     if (existingIds.has(code)) {
       skipped++;
@@ -2560,12 +3195,13 @@ export async function buildEconomicCodesFromExistingData(
         active: true,
         special: info.special,
         createdAt: serverTimestamp(),
-        createdBy: actor.uid,
+        createdBy: actorPayload,
         updatedAt: serverTimestamp(),
-        updatedBy: actor.uid,
+        updatedBy: actorPayload,
       };
       batch.set(ref, payload);
       writeAuditLogInBatch(batch, {
+        officeId: null,
         collection: 'economicCodes',
         docId: code,
         action: 'create',
@@ -2598,6 +3234,7 @@ export interface DbTableDescriptor {
   labelBn: string;
   descriptionBn: string;
   category: 'transactional' | 'master';
+  officeScoped: boolean;
 }
 
 export const DELETABLE_DB_TABLES: DbTableDescriptor[] = [
@@ -2606,69 +3243,85 @@ export const DELETABLE_DB_TABLES: DbTableDescriptor[] = [
     labelBn: 'বিলসমূহ (Bills)',
     descriptionBn: 'সকল খসড়া, জমা, অনুমোদিত, প্রত্যাখ্যাত ও বাতিল বিল',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'expenseItems',
     labelBn: 'খরচ তালিকা (Expense Items)',
     descriptionBn: 'তালিকাভুক্ত ও বিলকৃত সকল খরচের আইটেম',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'budgets',
     labelBn: 'বরাদ্দকৃত বাজেট (Budgets)',
     descriptionBn: 'সকল মূল বাজেট বরাদ্দ ও সংশোধন এন্ট্রি',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'fyCodeTotals',
     labelBn: 'কোডভিত্তিক মোট হিসাব (FY Code Totals)',
     descriptionBn: 'অর্থবছর ও অর্থনৈতিক কোড অনুযায়ী সংরক্ষিত বরাদ্দ/ব্যয় সমষ্টি',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'counters',
     labelBn: 'বিল নম্বর কাউন্টার (Counters)',
     descriptionBn: 'অর্থবছর অনুযায়ী ক্রমিক বিল নম্বরের কাউন্টার',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'spendingLimits',
     labelBn: 'ব্যয়ের সীমা (Spending Limits)',
     descriptionBn: 'কোড ও বাজেটভিত্তিক সর্বোচ্চ ব্যয়ের সীমা',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'vatTaxRates',
     labelBn: 'ভ্যাট ও আয়কর হার (VAT & Tax Rates)',
-    descriptionBn: 'অর্থবছর অনুযায়ী নির্ধারিত ভ্যাট ও আয়করের হার',
+    descriptionBn: 'অর্থবছর অনুযায়ী নির্ধারিত ভ্যাট ও আয়করের হার (গ্লোবাল)',
     category: 'master',
+    officeScoped: false,
   },
   {
     key: 'economicCodes',
     labelBn: 'অর্থনৈতিক কোড (Economic Codes)',
-    descriptionBn: 'মাস্টার অর্থনৈতিক কোড ও ব্যয়ের খাত তালিকা',
+    descriptionBn: 'মাস্টার অর্থনৈতিক কোড ও ব্যয়ের খাত তালিকা (গ্লোবাল)',
     category: 'master',
+    officeScoped: false,
   },
   {
     key: 'spendings',
     labelBn: 'পুরনো ব্যয় রেকর্ড (Legacy Spendings)',
     descriptionBn: 'মাইগ্রেশনের আগের পুরনো spendings কালেকশন',
     category: 'transactional',
+    officeScoped: true,
   },
   {
     key: 'invites',
     labelBn: 'ব্যবহারকারী আমন্ত্রণ (Invites)',
     descriptionBn: 'অপেক্ষমান ইমেইল আমন্ত্রণ তালিকা',
     category: 'master',
+    officeScoped: true,
   },
 ];
 
 const DELETABLE_KEY_SET = new Set<DeletableDbTableKey>(DELETABLE_DB_TABLES.map((t) => t.key));
 
-export async function fetchDbTableCounts(): Promise<Record<DeletableDbTableKey, number>> {
+export async function fetchDbTableCounts(
+  officeIdFilter?: string | null
+): Promise<Record<DeletableDbTableKey, number>> {
   const snaps = await Promise.all(
     DELETABLE_DB_TABLES.map(async (t) => {
-      const snap = await getDocs(collection(db, t.key));
+      const q =
+        officeIdFilter && officeIdFilter !== 'ALL' && t.officeScoped
+          ? query(collection(db, t.key), where('officeId', '==', officeIdFilter))
+          : collection(db, t.key);
+      const snap = await getDocs(q);
       return [t.key, snap.size] as const;
     })
   );
@@ -2681,7 +3334,8 @@ export async function fetchDbTableCounts(): Promise<Record<DeletableDbTableKey, 
 
 export async function clearDbTables(
   tableKeys: DeletableDbTableKey[],
-  actor: AuditActor
+  actor: AuditActor,
+  officeIdFilter?: string | null
 ): Promise<Array<{ table: DeletableDbTableKey; deletedCount: number }>> {
   assertOnlineForTransaction('টেবিল অনুযায়ী সকল ডেটা মুছা');
 
@@ -2690,11 +3344,18 @@ export async function clearDbTables(
     throw new Error('মুছার জন্য অন্তত একটি টেবিল নির্বাচন করুন।');
   }
 
+  const descriptorMap = new Map(DELETABLE_DB_TABLES.map((t) => [t.key, t]));
   const results: Array<{ table: DeletableDbTableKey; deletedCount: number }> = [];
   const CHUNK_SIZE = 450;
 
   for (const tableKey of uniqueKeys) {
-    const snap = await getDocs(collection(db, tableKey));
+    const desc = descriptorMap.get(tableKey);
+    const scoped = Boolean(officeIdFilter && officeIdFilter !== 'ALL' && desc?.officeScoped);
+    const q = scoped
+      ? query(collection(db, tableKey), where('officeId', '==', officeIdFilter))
+      : collection(db, tableKey);
+
+    const snap = await getDocs(q);
     const docs = snap.docs;
     if (docs.length === 0) {
       results.push({ table: tableKey, deletedCount: 0 });
@@ -2710,8 +3371,9 @@ export async function clearDbTables(
       }
       if (isLastChunk) {
         writeAuditLogInBatch(batch, {
+          officeId: scoped ? officeIdFilter || null : null,
           collection: tableKey,
-          docId: 'BULK_DELETE_ALL',
+          docId: scoped ? `BULK_DELETE_${officeIdFilter}` : 'BULK_DELETE_ALL',
           action: 'delete',
           before: { deletedCount: docs.length },
           after: null,
@@ -2726,4 +3388,3 @@ export async function clearDbTables(
 
   return results;
 }
-
