@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, doc, documentId, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { buildActorSnapshot } from '../lib/actor';
 import { getCurrentFiscalYear } from '../lib/fy';
@@ -201,28 +201,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const q = isSuperAdmin
-      ? collection(db, 'offices')
-      : query(collection(db, 'offices'), where(documentId(), 'in', accessibleIds.slice(0, 30)));
+    if (isSuperAdmin) {
+      const unsub = onSnapshot(
+        collection(db, 'offices'),
+        (snap) => {
+          clearPermissionError('offices');
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as OfficeDoc))
+            .sort((a, b) => (a.nameBn || a.name).localeCompare(b.nameBn || b.name));
+          setOffices(list);
+          setOfficesLoading(false);
+        },
+        (err) => {
+          logFirestoreError(err, OperationType.LIST, 'offices');
+          if (isPermissionDeniedError(err)) reportPermissionError('offices');
+          setOfficesLoading(false);
+        }
+      );
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        clearPermissionError('offices');
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() } as OfficeDoc))
-          .sort((a, b) => (a.nameBn || a.name).localeCompare(b.nameBn || b.name));
-        setOffices(list);
-        setOfficesLoading(false);
-      },
-      (err) => {
-        logFirestoreError(err, OperationType.LIST, 'offices');
-        if (isPermissionDeniedError(err)) reportPermissionError('offices');
-        setOfficesLoading(false);
-      }
+      return () => unsub();
+    }
+
+    // For non-SuperAdmin users, subscribe directly to each accessible office doc (allow get)
+    // rather than a documentId() 'in' list query, avoiding Firestore Rules query-planner limits.
+    const officeMap = new Map<string, OfficeDoc>();
+    const settled = new Set<string>();
+    const unsubs = accessibleIds.map((officeId) =>
+      onSnapshot(
+        doc(db, 'offices', officeId),
+        (snap) => {
+          clearPermissionError('offices');
+          if (snap.exists()) {
+            officeMap.set(officeId, { id: snap.id, ...snap.data() } as OfficeDoc);
+          } else {
+            officeMap.delete(officeId);
+          }
+          settled.add(officeId);
+          const list = Array.from(officeMap.values()).sort((a, b) =>
+            (a.nameBn || a.name).localeCompare(b.nameBn || b.name)
+          );
+          setOffices(list);
+          if (settled.size >= accessibleIds.length) {
+            setOfficesLoading(false);
+          }
+        },
+        (err) => {
+          logFirestoreError(err, OperationType.GET, `offices/${officeId}`);
+          if (isPermissionDeniedError(err)) reportPermissionError('offices');
+          settled.add(officeId);
+          if (settled.size >= accessibleIds.length) {
+            setOfficesLoading(false);
+          }
+        }
+      )
     );
 
-    return () => unsub();
+    return () => {
+      unsubs.forEach((u) => u());
+    };
   }, [accessState, userDoc, isSuperAdmin, accessKeysString, clearPermissionError, reportPermissionError]);
 
   // Listen to legacy settings/office as fallback when no offices exist yet (pre-migration)

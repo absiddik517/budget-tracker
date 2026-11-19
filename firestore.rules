@@ -19,14 +19,14 @@ service cloud.firestore {
     }
 
     function isActiveUser() {
-      return userExists() && userData().status == 'active';
+      return userExists() && userData().get('status', null) == 'active';
     }
 
     function isSuperAdmin() {
       return isActiveUser()
         && (
-          userData().globalRole == 'superAdmin'
-          || userData().role == 'superAdmin'
+          userData().get('globalRole', null) == 'superAdmin'
+          || userData().get('role', null) == 'superAdmin'
         );
     }
 
@@ -34,7 +34,7 @@ service cloud.firestore {
       return isActiveUser()
         && !isSuperAdmin()
         && officeId is string
-        && userData().access != null
+        && userData().get('access', null) is map
         && officeId in userData().access;
     }
 
@@ -48,7 +48,7 @@ service cloud.firestore {
     }
 
     function actorUid(val) {
-      return val is map ? val.uid : val;
+      return val is map ? val.get('uid', null) : val;
     }
 
     function appInitialized() {
@@ -66,8 +66,8 @@ service cloud.firestore {
 
     function sharesAnyOfficeWith(targetUser) {
       return isActiveUser()
-        && targetUser.officeIds is list
-        && userData().officeIds is list
+        && targetUser.get('officeIds', null) is list
+        && userData().get('officeIds', null) is list
         && targetUser.officeIds.hasAny(userData().officeIds);
     }
 
@@ -113,7 +113,11 @@ service cloud.firestore {
           || (resource != null && sharesAnyOfficeWith(resource.data))
         );
       allow list: if isSuperAdmin()
-        || (isActiveUser() && sharesAnyOfficeWith(resource.data))
+        || (
+          isActiveUser()
+          && userData().get('homeOfficeId', null) is string
+          && userData().homeOfficeId in resource.data.officeIds
+        )
         || (isSignedIn() && !appInitialized());
 
       allow create: if isSignedIn()
@@ -148,9 +152,11 @@ service cloud.firestore {
         )
         || (
           isActiveUser()
-          && resource.data.globalRole == null
-          && resource.data.homeOfficeId is string
+          && resource.data.get('globalRole', null) == null
+          && resource.data.get('homeOfficeId', null) is string
           && isOfficeDdo(resource.data.homeOfficeId)
+          && resource.data.get('access', null) is map
+          && resource.data.homeOfficeId in resource.data.access
           && resource.data.access[resource.data.homeOfficeId] == 'employee'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'designation',
@@ -175,7 +181,7 @@ service cloud.firestore {
             resource.data.userId == request.auth.uid
             || (
               resource.data.officeId is string
-              && userData().access != null
+              && userData().get('access', null) is map
               && resource.data.officeId in userData().access
             )
           )
@@ -222,7 +228,7 @@ service cloud.firestore {
     match /invites/{emailLower} {
       allow get: if isSuperAdmin()
         || (hasEmail() && ownEmailLower() == emailLower)
-        || (resource != null && isOfficeDdo(resource.data.officeId));
+        || (resource != null && isOfficeDdo(resource.data.get('officeId', null)));
       allow list: if isSuperAdmin()
         || (isActiveUser() && resource.data.officeId is string && isOfficeDdo(resource.data.officeId));
       allow create, update: if isSuperAdmin()
@@ -267,7 +273,7 @@ service cloud.firestore {
 
     // Office-scoped Spending Limits
     match /spendingLimits/{limitId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
       allow create: if isSuperAdmin() || isOfficeDdo(request.resource.data.officeId);
       allow update: if isSuperAdmin()
@@ -280,7 +286,7 @@ service cloud.firestore {
 
     // Office-scoped Aggregated FY + Economic Code totals ({officeId}_{fy}_{code})
     match /fyCodeTotals/{totalId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
       allow create: if isSuperAdmin() || isOfficeMemberStrict(request.resource.data.officeId);
       allow update: if isSuperAdmin()
@@ -293,7 +299,7 @@ service cloud.firestore {
 
     // Office-scoped Budgets (DDO creates/executes; Super Admin corrects)
     match /budgets/{budgetId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
       allow create: if isOfficeDdo(request.resource.data.officeId)
         || isSuperAdmin();
@@ -315,7 +321,7 @@ service cloud.firestore {
 
     // Sequential Bill Number Counters ({officeId}_{fy}_bill)
     match /counters/{counterId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
       allow create: if isSuperAdmin() || isOfficeMemberStrict(request.resource.data.officeId);
       allow update: if isSuperAdmin()
@@ -328,7 +334,7 @@ service cloud.firestore {
 
     // Office-scoped Expense Items
     match /expenseItems/{itemId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
 
       allow create: if (isSuperAdmin() && request.resource.data.deleted == false)
@@ -370,7 +376,7 @@ service cloud.firestore {
           && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'listed'
           && request.resource.data.status == 'listed'
-          && (isOfficeDdo(resource.data.officeId) || actorUid(resource.data.createdBy) == request.auth.uid)
+          && (isOfficeDdo(resource.data.officeId) || actorUid(resource.data.get('createdBy', null)) == request.auth.uid)
           && (
             request.resource.data.deleted == false
             || (
@@ -386,7 +392,7 @@ service cloud.firestore {
 
     // Office-scoped Bills - DDO-only for Approve / Reject / Cancel; Super Admin for audited corrections
     match /bills/{billId} {
-      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.officeId));
+      allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
 
       allow create: if (isSuperAdmin() && request.resource.data.deleted == false)
@@ -407,7 +413,7 @@ service cloud.firestore {
           isOfficeMemberStrict(resource.data.officeId)
           && request.resource.data.officeId == resource.data.officeId
           && resource.data.status == 'draft'
-          && (actorUid(resource.data.createdBy) == request.auth.uid || isOfficeDdo(resource.data.officeId))
+          && (actorUid(resource.data.get('createdBy', null)) == request.auth.uid || isOfficeDdo(resource.data.officeId))
           && (
             (request.resource.data.status in ['draft', 'submitted'] && request.resource.data.deleted == false)
             || (
