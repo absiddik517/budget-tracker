@@ -45,7 +45,12 @@ import {
 } from '../lib/tr21Defaults';
 import { ensureBengaliFontsLoaded } from '../utils/exportPdf';
 import { exportTr21Docx, exportTr21Pdf, printTr21Form } from '../utils/exportTr21';
-import type { BillDoc, BudgetDoc, CertificationClause, OfficeSettings } from '../types';
+import type {
+  BillDoc,
+  BudgetDoc,
+  CertificationClause,
+  OfficeSettings,
+} from '../types';
 
 const A4_WIDTH_PX = 794;
 
@@ -1160,6 +1165,7 @@ export function Tr21SetupPage() {
                   </div>
                 </div>
               </div>
+
             </div>
           </section>
 

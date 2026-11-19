@@ -27,8 +27,8 @@ export const TR21_FORM_SECTIONS: Tr21SectionMeta[] = [
   {
     id: 'P1-S3',
     page: 1,
-    titleBn: 'মূল ছক (ক): দ্রব্যের বিবরণ ও মোট টাকা',
-    summaryBn: 'অর্থনৈতিক কোড ও খাতের নাম, ক্রমিক দ্রব্য তালিকা, পরিমাণ (টাকা/পয়সা) ও মোট টাকা (ক)',
+    titleBn: 'মূল ছক (ক): বিবরণ ও মোট টাকা',
+    summaryBn: 'অর্থনৈতিক কোড ও খাতের নাম, বরাদ্দ/উদ্দেশ্য বিবরণ ও ভাউচার তালিকা, পরিমাণ (টাকা/পয়সা) ও মোট টাকা (ক)',
     color: '#7c3aed',
   },
   {
@@ -441,7 +441,8 @@ function SectionP1MainTable({
   supplierLine: string;
   guided: boolean;
 }) {
-  const itemRowsCount = Math.max(1, data.items.length) + (supplierLine ? 1 : 0);
+  const displayRows = data.displayRows?.length ? data.displayRows : data.items;
+  const bodyRowsCount = 1 + Math.max(1, displayRows.length) + (supplierLine ? 1 : 0);
   const s3Color = SECTION_META_MAP.get('P1-S3')?.color ?? '#7c3aed';
   const s4Color = SECTION_META_MAP.get('P1-S4')?.color ?? '#b45309';
 
@@ -479,7 +480,7 @@ function SectionP1MainTable({
               boxShadow: guided ? `inset 0 2px 0 ${s3Color}` : undefined,
             }}
           >
-            সরবরাহকৃত দ্রব্যের বিবরণ
+            বিবরণ
           </th>
           <th
             colSpan={2}
@@ -500,58 +501,102 @@ function SectionP1MainTable({
         </tr>
       </thead>
 
-      {/* -------- P1-S3: সরবরাহকৃত দ্রব্যের বিবরণ ও মোট টাকা (ক) -------- */}
+      {/* -------- P1-S3: বিবরণ (ডাইনামিক বরাদ্দ বিবরণ + ভাউচার/দ্রব্য তালিকা) ও মোট টাকা (ক) -------- */}
       <tbody
         data-tr21-section="P1-S3"
         style={guided ? { backgroundColor: 'rgba(124, 58, 237, 0.03)' } : undefined}
       >
-        {data.items.length > 0 ? (
-          data.items.map((item, idx) => {
-            const isFirst = idx === 0;
-            const isLastItem = idx === data.items.length - 1 && !supplierLine;
+        {/* Dynamic Intro Row */}
+        <tr>
+          <td
+            rowSpan={bodyRowsCount}
+            style={{
+              padding: '8px 6px',
+              textAlign: 'left',
+              verticalAlign: 'top',
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>{data.economicCodeBn}</div>
+            {data.headNameBn ? (
+              <div style={{ marginTop: '2px', fontSize: fs(10.5, data.fontSize), lineHeight: 1.3 }}>
+                {data.headNameBn}
+              </div>
+            ) : null}
+          </td>
+          <td
+            style={{
+              borderTop: '1px solid #000000',
+              borderBottom: 'none',
+              padding: '7px 8px 14px 8px',
+              textAlign: 'justify',
+              lineHeight: 1.45,
+            }}
+          >
+            {data.introText}
+          </td>
+          <td
+            style={{
+              borderTop: '1px solid #000000',
+              borderBottom: 'none',
+              padding: '7px 8px 2px 6px',
+            }}
+          />
+          <td
+            style={{
+              borderTop: '1px solid #000000',
+              borderBottom: 'none',
+              padding: '7px 4px 2px 4px',
+            }}
+          />
+        </tr>
+
+        {/* Expense Item Rows with dotted leader */}
+        {displayRows.length > 0 ? (
+          displayRows.map((item, idx) => {
+            const isLastItem = idx === displayRows.length - 1 && !supplierLine;
             return (
               <tr key={idx}>
-                {isFirst && (
-                  <td
-                    rowSpan={itemRowsCount}
-                    style={{
-                      padding: '8px 6px',
-                      textAlign: 'left',
-                      verticalAlign: 'top',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600 }}>{data.economicCodeBn}</div>
-                    {data.headNameBn ? (
-                      <div style={{ marginTop: '2px', fontSize: fs(10.5, data.fontSize), lineHeight: 1.3 }}>
-                        {data.headNameBn}
-                      </div>
-                    ) : null}
-                  </td>
-                )}
                 <td
                   style={{
-                    borderTop: isFirst ? '1px solid #000000' : 'none',
+                    borderTop: 'none',
                     borderBottom: isLastItem ? '1px solid #000000' : 'none',
-                    padding: isFirst
-                      ? '7px 8px 2px 8px'
-                      : isLastItem
-                      ? '2px 8px 18px 8px'
-                      : '2px 8px',
+                    padding: isLastItem ? '2px 8px 16px 8px' : '2px 8px',
+                    verticalAlign: 'top',
                   }}
                 >
-                  {item.indexBn}। {item.description}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: '2px',
+                      paddingLeft: '14px',
+                    }}
+                  >
+                    <span style={{ flex: '0 1 auto', minWidth: 0 }}>
+                      {item.indexBn}) {item.description}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        flex: '1 0 16px',
+                        minWidth: '16px',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap',
+                        letterSpacing: '0.5px',
+                        alignSelf: 'flex-end',
+                      }}
+                    >
+                      ........................................................................................................................................
+                    </span>
+                  </div>
                 </td>
                 <td
                   style={{
-                    borderTop: isFirst ? '1px solid #000000' : 'none',
+                    borderTop: 'none',
                     borderBottom: isLastItem ? '1px solid #000000' : 'none',
-                    padding: isFirst
-                      ? '7px 8px 2px 6px'
-                      : isLastItem
-                      ? '2px 8px 18px 6px'
-                      : '2px 8px 2px 6px',
+                    padding: isLastItem ? '2px 8px 16px 6px' : '2px 8px 2px 6px',
                     textAlign: 'right',
-                    verticalAlign: 'top',
+                    verticalAlign: 'bottom',
                     whiteSpace: 'nowrap',
                   }}
                 >
@@ -559,15 +604,11 @@ function SectionP1MainTable({
                 </td>
                 <td
                   style={{
-                    borderTop: isFirst ? '1px solid #000000' : 'none',
+                    borderTop: 'none',
                     borderBottom: isLastItem ? '1px solid #000000' : 'none',
-                    padding: isFirst
-                      ? '7px 4px 2px 4px'
-                      : isLastItem
-                      ? '2px 4px 18px 4px'
-                      : '2px 4px',
+                    padding: isLastItem ? '2px 4px 16px 4px' : '2px 4px',
                     textAlign: 'center',
-                    verticalAlign: 'top',
+                    verticalAlign: 'bottom',
                     whiteSpace: 'nowrap',
                   }}
                 >
@@ -580,23 +621,55 @@ function SectionP1MainTable({
           <tr>
             <td
               style={{
-                padding: '8px 6px',
-                textAlign: 'left',
+                borderTop: 'none',
+                borderBottom: supplierLine ? 'none' : '1px solid #000000',
+                padding: supplierLine ? '2px 8px' : '2px 8px 16px 8px',
                 verticalAlign: 'top',
               }}
             >
-              <div style={{ fontWeight: 600 }}>{data.economicCodeBn}</div>
-              {data.headNameBn ? (
-                <div style={{ marginTop: '2px', fontSize: fs(10.5, data.fontSize), lineHeight: 1.3 }}>
-                  {data.headNameBn}
-                </div>
-              ) : null}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: '2px',
+                  paddingLeft: '14px',
+                }}
+              >
+                <span style={{ flex: '0 1 auto', minWidth: 0 }}>১) {data.purposeText}</span>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    flex: '1 0 16px',
+                    minWidth: '16px',
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                    letterSpacing: '0.5px',
+                    alignSelf: 'flex-end',
+                  }}
+                >
+                  ........................................................................................................................................
+                </span>
+              </div>
             </td>
-            <td style={{ padding: '8px 8px 20px 8px' }}>{data.purposeText}</td>
-            <td style={{ padding: '8px 8px 20px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+            <td
+              style={{
+                borderTop: 'none',
+                borderBottom: supplierLine ? 'none' : '1px solid #000000',
+                padding: supplierLine ? '2px 8px 2px 6px' : '2px 8px 16px 6px',
+                textAlign: 'right',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {data.gross.takaStr}
             </td>
-            <td style={{ padding: '8px 4px 20px 4px', textAlign: 'center' }}>
+            <td
+              style={{
+                borderTop: 'none',
+                borderBottom: supplierLine ? 'none' : '1px solid #000000',
+                padding: supplierLine ? '2px 4px' : '2px 4px 16px 4px',
+                textAlign: 'center',
+              }}
+            >
               {data.gross.paisaStr}
             </td>
           </tr>

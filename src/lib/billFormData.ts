@@ -24,6 +24,7 @@ import type {
   BudgetDoc,
   CertificationClause,
   OfficeSettings,
+  Tr21P1S3Mode,
 } from '../types';
 
 export interface Tr21ItemRow {
@@ -80,6 +81,9 @@ export interface Tr21FormData {
   purposeText: string;
   supplier: BillSupplierInfo | null;
   introText: string;
+  p1s3Mode: Tr21P1S3Mode;
+  voucherTitle: string;
+  displayRows: Tr21ItemRow[];
   items: Tr21ItemRow[];
   gross: Tr21AmountCell;
   deductions: Tr21DeductionRow[];
@@ -141,6 +145,68 @@ function formatDeductionLabel(d: BillDeductionLine): string {
   return hasRate ? `${cleanName}: (${toBanglaDigits(d.rate!)}% হারে)` : cleanName;
 }
 
+export function formatOfficePossessiveBn(officeName: string): string {
+  const clean = officeName.trim();
+  if (!clean) return 'দপ্তরের';
+  if (clean.endsWith("'র") || clean.endsWith('’র') || clean.endsWith('-এর')) {
+    return clean;
+  }
+  return `${clean}'র`;
+}
+
+export function buildTr21IntroText(params: {
+  officeName: string;
+  fiscalYear: string;
+  memoNo?: string | null;
+  memoDate?: string | null;
+  purposeText: string;
+}): string {
+  const officePossessive = formatOfficePossessiveBn(params.officeName);
+  const fyBn = toBanglaDigits(params.fiscalYear);
+  const memoNoBn = params.memoNo ? toBanglaDigits(params.memoNo.trim()) : '';
+  const memoDateBn = params.memoDate ? formatBanglaLongDate(params.memoDate.trim()) : '';
+
+  let memoPart = 'বরাদ্দকৃত অর্থ থেকে ';
+  if (memoDateBn && memoNoBn) {
+    memoPart = `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+  } else if (memoNoBn) {
+    memoPart = `${memoNoBn} নং স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+  } else if (memoDateBn) {
+    memoPart = `${memoDateBn} তারিখের স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+  }
+
+  const cleanPurpose = params.purposeText.trim();
+  return `${officePossessive} অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${cleanPurpose}`;
+}
+
+export function resolveBillPrimaryBudget(params: {
+  budgets: BudgetDoc[];
+  fiscalYear: string;
+  economicCode: string;
+  bill?: Pick<BillDoc, 'budgetDeductions' | 'pendingSlices'> | null;
+}): BudgetDoc | null {
+  const codeBudgets = params.budgets
+    .filter(
+      (b) =>
+        !b.deleted &&
+        b.fiscalYear === params.fiscalYear &&
+        b.economicCode === params.economicCode
+    )
+    .sort((a, b) => a.memoDate.localeCompare(b.memoDate));
+
+  const sliceIds = (
+    (params.bill?.budgetDeductions && params.bill.budgetDeductions.length > 0
+      ? params.bill.budgetDeductions
+      : params.bill?.pendingSlices) || []
+  ).map((s) => s.budgetId);
+  const sliceBudgets = sliceIds
+    .map((id) => codeBudgets.find((b) => b.id === id))
+    .filter((b): b is BudgetDoc => Boolean(b));
+
+  const originalBudgets = codeBudgets.filter((b) => b.entryType === 'original');
+  return sliceBudgets[0] || originalBudgets[0] || codeBudgets[0] || null;
+}
+
 export function buildTr21FormData(params: {
   bill: BillDoc;
   officeSettings: OfficeSettings;
@@ -180,13 +246,17 @@ export function buildTr21FormData(params: {
     headNameBn: bill.headNameBn,
   });
 
-  // Resolve matching budgets for this FY + economicCode
+  // Resolve matching budgets for this FY + economicCode (preferring slices actually charged by this bill)
   const codeBudgets = budgets
     .filter((b) => !b.deleted && b.fiscalYear === bill.fiscalYear && b.economicCode === bill.economicCode)
     .sort((a, b) => a.memoDate.localeCompare(b.memoDate));
 
-  const originalBudgets = codeBudgets.filter((b) => b.entryType === 'original');
-  const primaryBudget = originalBudgets[0] || codeBudgets[0] || null;
+  const primaryBudget = resolveBillPrimaryBudget({
+    budgets: codeBudgets,
+    fiscalYear: bill.fiscalYear,
+    economicCode: bill.economicCode,
+    bill,
+  });
   const positiveRevisions = codeBudgets.filter((b) => b.entryType === 'revision' && b.allocated > 0);
   const negativeRevisions = codeBudgets.filter((b) => b.entryType === 'revision' && b.allocated < 0);
 
@@ -213,14 +283,13 @@ export function buildTr21FormData(params: {
       ? `${head.headNameBn} বাবদ ব্যয়ের বিল।`
       : `${head.headName} বাবদ ব্যয়ের বিল।`);
 
-  const memoPart =
-    memoDateBn && memoNoBn
-      ? `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ হতে `
-      : memoNoBn
-      ? `${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ হতে `
-      : 'বরাদ্দকৃত অর্থ হতে ';
-
-  const introText = `${officeName}-এর অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${purposeText}`;
+  const introText = buildTr21IntroText({
+    officeName,
+    fiscalYear: bill.fiscalYear,
+    memoNo: memoNoRaw,
+    memoDate: memoDateRaw,
+    purposeText,
+  });
 
   const rawItems = bill.items || [];
   const rawItemsSum = rawItems.reduce((sum, item) => sum + item.amount, 0);
@@ -252,6 +321,23 @@ export function buildTr21FormData(params: {
       paisaStr: split.paisaStr,
     };
   });
+
+  const p1s3Mode: Tr21P1S3Mode = 'items';
+  const voucherTitle = '';
+  const grossCell = cellFromPaisa(computedGross);
+  const displayRows: Tr21ItemRow[] =
+    items.length > 0
+      ? items
+      : [
+          {
+            indexBn: '১',
+            description: purposeText,
+            responsibleText: '',
+            amountPaisa: computedGross,
+            takaStr: grossCell.takaStr,
+            paisaStr: grossCell.paisaStr,
+          },
+        ];
 
   const itDefaultCode = officeSettings.defaultItCode || DEFAULT_IT_CODE;
   const vatDefaultCode = officeSettings.defaultVatCode || DEFAULT_VAT_CODE;
@@ -382,8 +468,11 @@ export function buildTr21FormData(params: {
     purposeText,
     supplier: bill.supplier || null,
     introText,
+    p1s3Mode,
+    voucherTitle,
+    displayRows,
     items,
-    gross: cellFromPaisa(computedGross),
+    gross: grossCell,
     deductions,
     blankDeductionRowsCount: 0,
     totalDeduction: cellFromPaisa(totalDeductionPaisa),

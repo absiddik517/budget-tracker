@@ -7,12 +7,14 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  LeaderType,
   Packer,
   PageBreak,
   Paragraph,
   Table,
   TableCell,
   TableRow,
+  TabStopType,
   TextRun,
   UnderlineType,
   VerticalAlign,
@@ -479,7 +481,7 @@ export async function exportTr21Docx(
     })
   );
 
-  // [P1-S3] Main Table (অর্থনৈতিক কোড | সরবরাহকৃত দ্রব্যের বিবরণ | পরিমাণ (টাকা | পয়সা))
+  // [P1-S3] Main Table (অর্থনৈতিক কোড | বিবরণ | পরিমাণ (টাকা | পয়সা))
   const C1 = 1850;
   const C2 = 5750;
   const C3 = 2150;
@@ -501,7 +503,7 @@ export async function exportTr21Docx(
           { width: C1, verticalMerge: VerticalMergeType.RESTART, vAlign: VerticalAlign.CENTER }
         ),
         borderedCell(
-          [bnPara('সরবরাহকৃত দ্রব্যের বিবরণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
+          [bnPara('বিবরণ', { align: AlignmentType.CENTER, bold: true, size: 20, spaceAfter: 0 })],
           { width: C2, verticalMerge: VerticalMergeType.RESTART, vAlign: VerticalAlign.CENTER }
         ),
         borderedCell(
@@ -534,85 +536,108 @@ export async function exportTr21Docx(
     }),
   ];
 
-  // Item Rows
+  // Intro & Item/Voucher Rows
   const codeCellContent = [
     bnPara(data.economicCodeBn, { bold: true, size: 20, spaceAfter: 15 }),
     ...(data.headNameBn ? [bnPara(data.headNameBn, { size: 19, spaceAfter: 0 })] : []),
   ];
 
-  if (data.items.length === 0) {
+  mainRows.push(
+    new TableRow({
+      children: [
+        borderedCell(codeCellContent, { width: C1, verticalMerge: VerticalMergeType.RESTART }),
+        borderedCell(
+          [
+            bnPara(data.introText, {
+              align: AlignmentType.BOTH,
+              size: 20,
+              spaceAfter: 120,
+            }),
+          ],
+          {
+            width: C2,
+            borders: { top: CELL_BORDER, bottom: NO_BORDER },
+            margins: { top: 65, bottom: 110, left: 90, right: 90 },
+          }
+        ),
+        borderedCell([bnPara('', { spaceAfter: 0 })], {
+          width: C3,
+          borders: { top: CELL_BORDER, bottom: NO_BORDER },
+        }),
+        borderedCell([bnPara('', { spaceAfter: 0 })], {
+          width: C4,
+          borders: { top: CELL_BORDER, bottom: NO_BORDER },
+        }),
+      ],
+    })
+  );
+
+  const displayRows = data.displayRows?.length
+    ? data.displayRows
+    : [
+        {
+          indexBn: '১',
+          description: data.purposeText,
+          responsibleText: '',
+          amountPaisa: data.gross.amountPaisa || 0,
+          takaStr: data.gross.takaStr,
+          paisaStr: data.gross.paisaStr,
+        },
+      ];
+
+  displayRows.forEach((it, idx) => {
+    const isLast = idx === displayRows.length - 1 && !supplierLine;
     mainRows.push(
       new TableRow({
         children: [
-          borderedCell(codeCellContent, { width: C1, verticalMerge: VerticalMergeType.RESTART }),
-          borderedCell([bnPara(data.purposeText, { size: 20, spaceAfter: 40 })], {
-            width: C2,
-            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
+          borderedCell([bnPara('', { spaceAfter: 0 })], {
+            width: C1,
+            verticalMerge: VerticalMergeType.CONTINUE,
           }),
-          borderedCell([bnPara(data.gross.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
+          borderedCell(
+            [
+              new Paragraph({
+                spacing: { before: 0, after: isLast ? 110 : 15, line: 260 },
+                indent: { left: 200 },
+                tabStops: [
+                  {
+                    type: TabStopType.RIGHT,
+                    position: 5420,
+                    leader: LeaderType.DOT,
+                  },
+                ],
+                children: [bnRun(`${it.indexBn}) ${it.description}\t`, { size: 20 })],
+              }),
+            ],
+            {
+              width: C2,
+              borders: {
+                top: NO_BORDER,
+                bottom: isLast ? CELL_BORDER : NO_BORDER,
+              },
+              margins: { top: 20, bottom: isLast ? 90 : 15, left: 90, right: 90 },
+            }
+          ),
+          borderedCell([bnPara(it.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
             width: C3,
-            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
+            borders: {
+              top: NO_BORDER,
+              bottom: isLast ? CELL_BORDER : NO_BORDER,
+            },
+            margins: { top: 20, bottom: isLast ? 90 : 15, left: 80, right: 80 },
           }),
-          borderedCell([bnPara(data.gross.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
+          borderedCell([bnPara(it.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
             width: C4,
-            borders: { bottom: supplierLine ? NO_BORDER : CELL_BORDER },
+            borders: {
+              top: NO_BORDER,
+              bottom: isLast ? CELL_BORDER : NO_BORDER,
+            },
+            margins: { top: 20, bottom: isLast ? 90 : 15, left: 40, right: 40 },
           }),
         ],
       })
     );
-  } else {
-    data.items.forEach((it, idx) => {
-      const isFirst = idx === 0;
-      const isLast = idx === data.items.length - 1 && !supplierLine;
-      mainRows.push(
-        new TableRow({
-          children: [
-            isFirst
-              ? borderedCell(codeCellContent, {
-                  width: C1,
-                  verticalMerge: VerticalMergeType.RESTART,
-                })
-              : borderedCell([bnPara('', { spaceAfter: 0 })], {
-                  width: C1,
-                  verticalMerge: VerticalMergeType.CONTINUE,
-                }),
-            borderedCell(
-              [
-                bnPara(`${it.indexBn}। ${it.description}`, {
-                  size: 20,
-                  spaceAfter: isLast ? 120 : 10,
-                }),
-              ],
-              {
-                width: C2,
-                borders: {
-                  top: isFirst ? CELL_BORDER : NO_BORDER,
-                  bottom: isLast ? CELL_BORDER : NO_BORDER,
-                },
-                margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 90, right: 90 },
-              }
-            ),
-            borderedCell([bnPara(it.takaStr, { align: AlignmentType.RIGHT, size: 20, spaceAfter: 0 })], {
-              width: C3,
-              borders: {
-                top: isFirst ? CELL_BORDER : NO_BORDER,
-                bottom: isLast ? CELL_BORDER : NO_BORDER,
-              },
-              margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 80, right: 80 },
-            }),
-            borderedCell([bnPara(it.paisaStr, { align: AlignmentType.CENTER, size: 20, spaceAfter: 0 })], {
-              width: C4,
-              borders: {
-                top: isFirst ? CELL_BORDER : NO_BORDER,
-                bottom: isLast ? CELL_BORDER : NO_BORDER,
-              },
-              margins: { top: isFirst ? 60 : 15, bottom: isLast ? 90 : 15, left: 40, right: 40 },
-            }),
-          ],
-        })
-      );
-    });
-  }
+  });
 
   if (supplierLine) {
     mainRows.push(

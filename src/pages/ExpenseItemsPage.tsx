@@ -50,6 +50,8 @@ import {
   DEFAULT_SECURITY_CODE,
   DEFAULT_VAT_CODE,
 } from '../lib/tr21Defaults';
+import { toBanglaDigits } from '../lib/banglaFormat';
+import { buildTr21IntroText, resolveBillPrimaryBudget } from '../lib/billFormData';
 import { exportExpenseItemsPdf } from '../utils/exportPdf';
 import { saveAndShareFile } from '../utils/saveFile';
 import type {
@@ -1946,23 +1948,60 @@ export function ExpenseItemsPage() {
                   </div>
                 )}
 
-                {/* Purpose Text for TR21 */}
-                <div>
-                  <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                    ব্যয়ের উদ্দেশ্য / বিবরণ শিরোনাম (টি.আর. ২১ ফরম)
-                  </label>
-                  <input
-                    type="text"
-                    value={purposeByCode[group.economicCode] || ''}
-                    onChange={(e) =>
-                      setPurposeByCode((prev) => ({
-                        ...prev,
-                        [group.economicCode]: e.target.value,
-                      }))
-                    }
-                    placeholder="যেমন: ময়মনসিংহ জেলা কার্যালয়ের আসবাবপত্র ক্রয় বাবদ বিল।"
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs bn"
-                  />
+                {/* Purpose Text & P1-S3 Live Preview for TR21 */}
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--muted)] mb-1">
+                      ব্যয়ের উদ্দেশ্য / বিবরণ শিরোনাম (টি.আর. ২১ ফরম)
+                    </label>
+                    <input
+                      type="text"
+                      value={purposeByCode[group.economicCode] || ''}
+                      onChange={(e) =>
+                        setPurposeByCode((prev) => ({
+                          ...prev,
+                          [group.economicCode]: e.target.value,
+                        }))
+                      }
+                      placeholder="যেমন: ময়মনসিংহ জেলা কার্যালয়ের আসবাবপত্র ক্রয় বাবদ বিল।"
+                      className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs bn"
+                    />
+                  </div>
+
+                  {(() => {
+                    const matchedBudget = resolveBillPrimaryBudget({
+                      budgets,
+                      fiscalYear: selectedFy,
+                      economicCode: group.economicCode,
+                    });
+                    const previewIntro = buildTr21IntroText({
+                      officeName: officeSettings.officeName,
+                      fiscalYear: selectedFy,
+                      memoNo: matchedBudget?.memoNo || '',
+                      memoDate: matchedBudget?.memoDate || '',
+                      purposeText:
+                        (purposeByCode[group.economicCode] || '').trim() ||
+                        `${group.headNameBn || group.headName} বাবদ ব্যয়ের বিল।`,
+                    });
+                    return (
+                      <div className="p-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface-subtle)] text-xs bn leading-relaxed">
+                        <div className="text-[11px] font-semibold text-[var(--muted)] mb-1">
+                          টি.আর. ২১ (P1-S3) বিবরণ প্রিভিউ:
+                        </div>
+                        <p className="text-[var(--text)]">{previewIntro}</p>
+                        <div className="mt-1.5 space-y-0.5 pl-3 text-[var(--muted)]">
+                          {group.items.map((it, i) => (
+                            <div key={it.id} className="flex items-baseline justify-between gap-2">
+                              <span className="truncate">
+                                {toBanglaDigits(i + 1)}) {it.description}
+                              </span>
+                              <span className="tabular-nums shrink-0">{formatTaka(it.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* VAT Variant Selector if multiple (e.g. AC / Non-AC) */}

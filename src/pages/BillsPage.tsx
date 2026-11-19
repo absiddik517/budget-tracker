@@ -29,7 +29,12 @@ import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
-import { buildTr21FormData, sanitizeBillFileSegment } from '../lib/billFormData';
+import {
+  buildTr21FormData,
+  buildTr21IntroText,
+  resolveBillPrimaryBudget,
+  sanitizeBillFileSegment,
+} from '../lib/billFormData';
 import { computeCodeAvailable } from '../lib/computeAvailable';
 import { formatDateDisplay } from '../lib/dates';
 import {
@@ -56,6 +61,7 @@ import {
   DEFAULT_SECURITY_CODE,
   DEFAULT_VAT_CODE,
 } from '../lib/tr21Defaults';
+import { toBanglaDigits } from '../lib/banglaFormat';
 import { exportBillsPdf } from '../utils/exportPdf';
 import { exportTr21Docx, exportTr21Pdf, printTr21Form } from '../utils/exportTr21';
 import { saveAndShareFile } from '../utils/saveFile';
@@ -1179,17 +1185,59 @@ export function BillsPage() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] text-[var(--muted)] mb-1">
-                    ব্যয়ের উদ্দেশ্য (টি.আর. ২১ বিবরণ)
-                  </label>
-                  <input
-                    type="text"
-                    value={editPurposeText}
-                    onChange={(e) => setEditPurposeText(e.target.value)}
-                    placeholder="যেমন: ময়মনসিংহ জেলা কার্যালয়ের আসবাবপত্র ক্রয় বাবদ বিল।"
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs bn"
-                  />
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block text-[11px] text-[var(--muted)] mb-1">
+                      ব্যয়ের উদ্দেশ্য (টি.আর. ২১ বিবরণ)
+                    </label>
+                    <input
+                      type="text"
+                      value={editPurposeText}
+                      onChange={(e) => setEditPurposeText(e.target.value)}
+                      placeholder="যেমন: ময়মনসিংহ জেলা কার্যালয়ের আসবাবপত্র ক্রয় বাবদ বিল।"
+                      className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs bn"
+                    />
+                  </div>
+
+                  {(() => {
+                    const primaryBudget = resolveBillPrimaryBudget({
+                      budgets,
+                      fiscalYear: selectedBill.fiscalYear,
+                      economicCode: selectedBill.economicCode,
+                      bill: selectedBill,
+                    });
+                    const head = getHead(selectedBill.economicCode, {
+                      headName: selectedBill.headName,
+                      headNameBn: selectedBill.headNameBn,
+                    });
+                    const previewIntro = buildTr21IntroText({
+                      officeName: officeSettings.officeName,
+                      fiscalYear: selectedBill.fiscalYear,
+                      memoNo: primaryBudget?.memoNo || '',
+                      memoDate: primaryBudget?.memoDate || '',
+                      purposeText:
+                        editPurposeText.trim() ||
+                        `${head.headNameBn || head.headName} বাবদ ব্যয়ের বিল।`,
+                    });
+                    return (
+                      <div className="p-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs bn leading-relaxed">
+                        <div className="text-[11px] font-semibold text-[var(--muted)] mb-1">
+                          টি.আর. ২১ (P1-S3) বিবরণ প্রিভিউ:
+                        </div>
+                        <p className="text-[var(--text)]">{previewIntro}</p>
+                        <div className="mt-1.5 space-y-0.5 pl-3 text-[var(--muted)]">
+                          {selectedBill.items.map((it, i) => (
+                            <div key={it.id} className="flex items-baseline justify-between gap-2">
+                              <span className="truncate">
+                                {toBanglaDigits(i + 1)}) {it.description}
+                              </span>
+                              <span className="tabular-nums shrink-0">{formatTaka(it.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

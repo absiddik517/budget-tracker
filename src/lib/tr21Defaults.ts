@@ -1,5 +1,5 @@
 import { toBanglaDigits } from './banglaFormat';
-import type { CertificationClause } from '../types';
+import type { CertificationClause, Tr21P1S3Mode } from '../types';
 
 export const DEFAULT_INSTITUTIONAL_CODE = '1240303000000';
 export const DEFAULT_NET_PAYABLE_CODE = '8172108';
@@ -9,6 +9,16 @@ export const DEFAULT_SECURITY_CODE = '8113301';
 export const DEFAULT_TR21_FOOTER_TEXT = 'Print By: Budget Tracker';
 export const DEFAULT_TR21_FONT_FAMILY = 'NikoshBAN';
 export const DEFAULT_TR21_FONT_SIZE = 11;
+export const DEFAULT_TR21_P1S3_MODE: Tr21P1S3Mode = 'items';
+export const DEFAULT_TR21_VOUCHER_LABEL = '';
+
+export function resolveTr21P1S3Mode(_value?: string | null): Tr21P1S3Mode {
+  return 'items';
+}
+
+export function resolveTr21VoucherLabel(value?: string | null): string {
+  return (value || '').trim();
+}
 
 export interface Tr21FontOption {
   value: string;

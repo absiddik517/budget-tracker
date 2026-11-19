@@ -11,10 +11,14 @@ import {
   DEFAULT_TR21_FONT_FAMILY,
   DEFAULT_TR21_FONT_SIZE,
   DEFAULT_TR21_FOOTER_TEXT,
+  DEFAULT_TR21_P1S3_MODE,
+  DEFAULT_TR21_VOUCHER_LABEL,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
   resolveTr21FontFamily,
   resolveTr21FontSize,
+  resolveTr21P1S3Mode,
+  resolveTr21VoucherLabel,
 } from '../lib/tr21Defaults';
 import { useAuth } from './AuthContext';
 import type { EconomicCodeDoc, LanguageCode, OfficeSettings } from '../types';
@@ -79,6 +83,8 @@ const defaultOfficeSettings: OfficeSettings = {
   tr21FooterText: DEFAULT_TR21_FOOTER_TEXT,
   tr21FontFamily: DEFAULT_TR21_FONT_FAMILY,
   tr21FontSize: DEFAULT_TR21_FONT_SIZE,
+  tr21P1S3Mode: DEFAULT_TR21_P1S3_MODE,
+  tr21VoucherLabel: DEFAULT_TR21_VOUCHER_LABEL,
   tr21Clauses: resolveTr21Clauses(null),
 };
 
@@ -146,6 +152,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             tr21FooterText: data.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT,
             tr21FontFamily: resolveTr21FontFamily(data.tr21FontFamily),
             tr21FontSize: resolveTr21FontSize(data.tr21FontSize),
+            tr21P1S3Mode: resolveTr21P1S3Mode(data.tr21P1S3Mode),
+            tr21VoucherLabel: resolveTr21VoucherLabel(data.tr21VoucherLabel),
             tr21Clauses: resolveTr21Clauses(data.tr21Clauses),
           });
           if (!fyInitializedFromServer) {

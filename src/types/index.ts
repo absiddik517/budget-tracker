@@ -31,6 +31,8 @@ export interface InviteDoc extends BaseAuditFields {
   invitedBy: string;
 }
 
+export type Tr21P1S3Mode = 'voucher' | 'items';
+
 export interface CertificationClause {
   id: string;
   numberBn: string;
@@ -57,6 +59,8 @@ export interface OfficeSettings extends BaseAuditFields {
   tr21FooterText?: string;
   tr21FontFamily?: string;
   tr21FontSize?: number;
+  tr21P1S3Mode?: Tr21P1S3Mode;
+  tr21VoucherLabel?: string;
   tr21Clauses?: CertificationClause[];
 }
 
@@ -180,6 +184,8 @@ export interface BillDoc extends BaseAuditFields {
   billDate?: string; // optional explicit T.R. 21 bill date (falls back to date)
   tokenNo?: string;
   purposeText?: string;
+  tr21P1S3Mode?: Tr21P1S3Mode | null;
+  voucherTitle?: string;
   payeeText?: string;
   netPayableCode?: string;
   supplier?: BillSupplierInfo | null;

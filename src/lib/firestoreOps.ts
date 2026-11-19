@@ -39,6 +39,7 @@ import type {
   SpendingDoc,
   SpendingLimitDoc,
   SpendingLimitType,
+  Tr21P1S3Mode,
   UserStatus,
   VatTaxRateDoc,
   VatVariant,
@@ -694,6 +695,8 @@ export interface DraftBillGroupInput {
   billDate?: string;
   tokenNo?: string;
   purposeText?: string;
+  tr21P1S3Mode?: Tr21P1S3Mode | null;
+  voucherTitle?: string;
   payeeText?: string;
   netPayableCode?: string;
   supplier?: BillSupplierInfo | null;
@@ -863,6 +866,8 @@ export async function createDraftBillsFromItems(
       billDate: group.billDate || group.date,
       tokenNo: (group.tokenNo || '').trim(),
       purposeText: (group.purposeText || '').trim(),
+      tr21P1S3Mode: group.tr21P1S3Mode ?? null,
+      voucherTitle: (group.voucherTitle || '').trim(),
       payeeText: (group.payeeText || '').trim(),
       netPayableCode: (group.netPayableCode || DEFAULT_NET_PAYABLE_CODE).trim(),
       supplier: cleanSupplier,
@@ -936,6 +941,8 @@ export async function updateDraftBillRates(
     itRate: number;
     tokenNo?: string;
     purposeText?: string;
+    tr21P1S3Mode?: Tr21P1S3Mode | null;
+    voucherTitle?: string;
     payeeText?: string;
     netPayableCode?: string;
     supplier?: BillSupplierInfo | null;
@@ -1004,6 +1011,9 @@ export async function updateDraftBillRates(
     billDate: updates.billDate || updates.date,
     tokenNo: (updates.tokenNo ?? bill.tokenNo ?? '').trim(),
     purposeText: (updates.purposeText ?? bill.purposeText ?? '').trim(),
+    tr21P1S3Mode:
+      updates.tr21P1S3Mode !== undefined ? updates.tr21P1S3Mode : bill.tr21P1S3Mode ?? null,
+    voucherTitle: (updates.voucherTitle ?? bill.voucherTitle ?? '').trim(),
     payeeText: (updates.payeeText ?? bill.payeeText ?? '').trim(),
     netPayableCode: (updates.netPayableCode ?? bill.netPayableCode ?? DEFAULT_NET_PAYABLE_CODE).trim(),
     supplier: updates.supplier !== undefined ? cleanSupplier : bill.supplier ?? null,
