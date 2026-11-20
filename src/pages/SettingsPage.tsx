@@ -16,11 +16,11 @@ import {
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
-import { useFyOptions } from '../hooks/useFyOptions';
 import { db } from '../lib/firebase';
 import {
   buildEconomicCodesFromExistingData,
@@ -63,7 +63,6 @@ export function SettingsPage() {
     t,
   } = useApp();
   const { theme, setTheme } = useTheme();
-  const fyOptions = useFyOptions();
 
   const realOfficeId =
     currentOfficeId &&
@@ -93,7 +92,6 @@ export function SettingsPage() {
   const [fiscalYears, setFiscalYears] = useState<string[]>(officeSettings.fiscalYears);
   const [newFyInput, setNewFyInput] = useState('');
   const [saving, setSaving] = useState(false);
-  const [fyAnnouncement, setFyAnnouncement] = useState('');
   const [seeding, setSeeding] = useState(false);
   const [migratingCodes, setMigratingCodes] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -515,6 +513,8 @@ export function SettingsPage() {
         onDiscard: resetOfficeForm,
       }}
     >
+      <PageHeader title={t('navSettings')} />
+
       {needsOfficeSetup && isSuperAdmin && (
         <div className="mb-4 md:mb-5 px-3.5 md:px-4 py-3 rounded-[14px] bg-[var(--accent-soft)] text-[var(--accent)] text-sm font-medium">
           Welcome! You are the first administrator. Please fill in your office name and fiscal year below and save, or create offices in the Offices page.
@@ -528,51 +528,6 @@ export function SettingsPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 md:gap-5">
-        {/* Viewing Fiscal Year: available to ALL roles */}
-        <section className="card-surface p-4 md:p-5 space-y-3">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--text)]">
-              {t('viewingFiscalYear')}
-            </h2>
-            <p className="text-xs text-[var(--muted)] mt-1">
-              {t('viewingFiscalYearHelp')}
-            </p>
-          </div>
-
-          <div
-            role="radiogroup"
-            aria-label={t('viewingFiscalYear')}
-            className="space-y-1.5"
-          >
-            {fyOptions.map((fy) => {
-              const selected = selectedFy === fy;
-              return (
-                <button
-                  key={fy}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  onClick={() => {
-                    setSelectedFy(fy);
-                    setFyAnnouncement(`${t('switchedToFy')} ${fy}`);
-                  }}
-                  className={`min-h-[44px] w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-2 text-sm font-semibold tabular-nums transition-colors ${
-                    selected
-                      ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                      : 'border border-[var(--line)] bg-[var(--card)] text-[var(--text)] hover:bg-[var(--surface-subtle)]'
-                  }`}
-                >
-                  <span>FY {fy}</span>
-                  {selected && <Check className="w-4 h-4 shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-
-          <div aria-live="polite" className="text-xs font-medium text-[var(--accent)] min-h-[1rem]">
-            {fyAnnouncement}
-          </div>
-        </section>
 
         {canEditOfficeConfig && (
           <section className="card-surface p-4 md:p-5 space-y-4">

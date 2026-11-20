@@ -1,17 +1,35 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, ChevronRight, ShieldCheck } from 'lucide-react';
+import {
+  AlertTriangle,
+  Building2,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Plus,
+  ReceiptText,
+  ShieldCheck,
+  Wallet,
+} from 'lucide-react';
+import { EmptyState } from '../components/EmptyState';
 import { Layout } from '../components/Layout';
+import { PageHeader } from '../components/PageHeader';
+import { StatCard } from '../components/StatCard';
 import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
-import { useFyData } from '../hooks/useFyData';
 import { useAllOfficesSummary } from '../hooks/useAllOfficesSummary';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
-import { getActorName } from '../lib/actor';
+import { useFyData } from '../hooks/useFyData';
+import { getActorUid } from '../lib/actor';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { formatNumberIN, formatTaka } from '../lib/money';
-import { canApproveRejectCancelBill } from '../lib/permissions';
+import {
+  canApproveRejectCancelBill,
+  canCreateBudgets,
+  canCreateDraftBill,
+  canCreateExpenseItems,
+} from '../lib/permissions';
 import type { BillStatus } from '../types';
 
 function billStatusToChip(status: BillStatus): ChipVariant {
@@ -30,7 +48,7 @@ function billStatusToChip(status: BillStatus): ChipVariant {
 }
 
 export function DashboardPage() {
-  const { isSuperAdmin } = useAuth();
+  const { userDoc, isSuperAdmin } = useAuth();
   const {
     selectedFy,
     offices,
@@ -38,6 +56,7 @@ export function DashboardPage() {
     currentOfficeRole,
     setCurrentOfficeId,
     isAllOfficesMode,
+    isLegacyPreMigration,
     t,
   } = useApp();
 
@@ -47,8 +66,13 @@ export function DashboardPage() {
     isAllOfficesMode
   );
   const { getHead } = useEconomicCodes();
+  const [showAllHeads, setShowAllHeads] = useState(false);
 
-  const canReview = canApproveRejectCancelBill({ isSuperAdmin, officeRole: currentOfficeRole });
+  const permCtx = { isSuperAdmin, officeRole: currentOfficeRole };
+  const isDdo = !isAllOfficesMode && !isLegacyPreMigration && canApproveRejectCancelBill(permCtx);
+  const canCreateBudget = !isAllOfficesMode && !isLegacyPreMigration && canCreateBudgets(permCtx);
+  const canCreateExpense = !isAllOfficesMode && !isLegacyPreMigration && canCreateExpenseItems(permCtx);
+  const canCreateBill = !isAllOfficesMode && !isLegacyPreMigration && canCreateDraftBill(permCtx);
 
   // All Offices aggregated overview (Super Admin only)
   const allOfficesRows = useMemo(() => {
@@ -90,29 +114,35 @@ export function DashboardPage() {
     const approvedSpent = budgets.reduce((sum, b) => sum + b.spent, 0);
     const pendingAmount = budgets.reduce((sum, b) => sum + Math.max(0, b.pendingAmount || 0), 0);
     const available = totalAllocated - approvedSpent - pendingAmount;
-    const netPaid = bills
-      .filter((b) => b.status === 'approved')
-      .reduce((sum, b) => sum + b.netPayable, 0);
-    const pendingCount = bills.filter((b) => b.status === 'submitted').length;
-    const listedItemsCount = expenseItems.filter((i) => i.status === 'listed').length;
+    const billedExpensesCount = expenseItems.filter((i) => i.status === 'billed').length;
+    const submittedCount = bills.filter((b) => b.status === 'submitted').length;
+    const rejectedCountAll = bills.filter((b) => b.status === 'rejected').length;
+    const myRejectedCount = userDoc
+      ? bills.filter((b) => b.status === 'rejected' && getActorUid(b.createdBy) === userDoc.id)
+          .length
+      : 0;
     const pctApproved =
       totalAllocated > 0 ? Math.min(100, Math.round((approvedSpent / totalAllocated) * 100)) : 0;
     const pctPending =
       totalAllocated > 0
         ? Math.min(100 - pctApproved, Math.round((pendingAmount / totalAllocated) * 100))
         : 0;
+    const pctUsedTotal = Math.min(100, pctApproved + pctPending);
+
     return {
       totalAllocated,
       approvedSpent,
       pendingAmount,
       available,
-      netPaid,
-      pendingCount,
-      listedItemsCount,
+      billedExpensesCount,
+      submittedCount,
+      rejectedCountAll,
+      myRejectedCount,
       pctApproved,
       pctPending,
+      pctUsedTotal,
     };
-  }, [budgets, bills, expenseItems]);
+  }, [budgets, bills, expenseItems, userDoc]);
 
   const headProgress = useMemo(() => {
     const today = todayYmd();
@@ -184,119 +214,229 @@ export function DashboardPage() {
       .sort((a, b) => b.pct + b.pendingPct - (a.pct + a.pendingPct));
   }, [budgets, spendingLimits, getHead]);
 
-  const recentBills = useMemo(() => bills.slice(0, 5), [bills]);
+  const visibleHeads = useMemo(
+    () => (showAllHeads ? headProgress : headProgress.slice(0, 7)),
+    [headProgress, showAllHeads]
+  );
+
+  const recentBills = useMemo(() => bills.slice(0, 3), [bills]);
+
+  const attentionItems = useMemo(() => {
+    const items: Array<{ key: string; to: string; text: string }> = [];
+    if (isDdo) {
+      if (totals.submittedCount > 0) {
+        items.push({
+          key: 'submitted',
+          to: '/bills?status=submitted',
+          text:
+            totals.submittedCount === 1
+              ? t('waitingForApprovalSingle')
+              : `${totals.submittedCount} ${t('waitingForApprovalSuffix')}`,
+        });
+      }
+      if (totals.rejectedCountAll > 0) {
+        items.push({
+          key: 'rejected',
+          to: '/bills?status=rejected',
+          text:
+            totals.rejectedCountAll === 1
+              ? t('rejectedBillsSingle')
+              : `${totals.rejectedCountAll} ${t('rejectedBillsSuffix')}`,
+        });
+      }
+    } else if (!isSuperAdmin && totals.myRejectedCount > 0) {
+      items.push({
+        key: 'my-rejected',
+        to: '/bills?status=rejected',
+        text:
+          totals.myRejectedCount === 1
+            ? t('rejectedBillsSingle')
+            : `${totals.myRejectedCount} ${t('rejectedBillsSuffix')}`,
+      });
+    }
+    return items;
+  }, [isDdo, isSuperAdmin, totals.submittedCount, totals.rejectedCountAll, totals.myRejectedCount, t]);
 
   if (isAllOfficesMode) {
     return (
       <Layout title={`${t('navDashboard')} · ${t('allOffices')}`}>
-        <div className="space-y-4 md:space-y-5">
-          <div className="card-surface px-4 py-3 flex items-center justify-between gap-3 bg-[var(--accent-soft)]/30">
-            <div className="flex items-center gap-2.5 text-sm font-medium text-[var(--text)]">
-              <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
-              <span>{t('readOnlySuperAdmin')} · {t('allOffices')} (FY {selectedFy})</span>
-            </div>
+        <PageHeader
+          title={t('navDashboard')}
+          subtitle={`FY ${selectedFy} · ${t('allOffices')}`}
+          actions={
             <Link
               to="/offices"
-              className="text-xs font-semibold text-[var(--accent)] hover:underline shrink-0"
+              className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs sm:text-sm font-semibold text-[var(--accent)] inline-flex items-center gap-1.5"
             >
-              কার্যালয় পরিচালনা →
+              <span>কার্যালয় পরিচালনা</span>
+              <ChevronRight className="w-4 h-4" />
             </Link>
+          }
+        />
+
+        <div className="space-y-4 md:space-y-5">
+          <div className="card-surface px-4 py-3 flex items-center gap-2.5 bg-[var(--accent-soft)]/30 text-xs sm:text-sm font-medium text-[var(--text)]">
+            <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
+            <span>
+              {t('readOnlySuperAdmin')} · {t('allOffices')} (FY {selectedFy})
+            </span>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <div className="card-surface p-4">
-              <div className="text-xs font-medium text-[var(--muted)]">{t('totalAllocation')}</div>
-              <div className="text-lg md:text-xl font-bold text-[var(--text)] mt-1 tabular-nums">
-                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.allocated)}
-              </div>
-            </div>
-            <div className="card-surface p-4">
-              <div className="text-xs font-medium text-[var(--muted)]">{t('approvedSpent')}</div>
-              <div className="text-lg md:text-xl font-bold text-[var(--text)] mt-1 tabular-nums">
-                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.spent)}
-              </div>
-            </div>
-            <div className="card-surface p-4">
-              <div className="text-xs font-medium text-[var(--muted)]">{t('pendingAmount')}</div>
-              <div className="text-lg md:text-xl font-bold text-[var(--warn-text)] mt-1 tabular-nums">
-                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.pendingAmount)}
-              </div>
-            </div>
-            <div className="card-surface p-4">
-              <div className="text-xs font-medium text-[var(--muted)]">{t('available')}</div>
-              <div className="text-lg md:text-xl font-bold text-[var(--accent)] mt-1 tabular-nums">
-                {allOfficesLoading ? '—' : formatTaka(allOfficesGrand.available)}
-              </div>
-            </div>
+            <StatCard
+              label={t('totalAllocation')}
+              value={allOfficesLoading ? '—' : formatTaka(allOfficesGrand.allocated)}
+            />
+            <StatCard
+              label={t('approvedSpent')}
+              value={allOfficesLoading ? '—' : formatTaka(allOfficesGrand.spent)}
+            />
+            <StatCard
+              label={t('pendingAmount')}
+              value={allOfficesLoading ? '—' : formatTaka(allOfficesGrand.pendingAmount)}
+              tone="warn"
+            />
+            <StatCard
+              label={t('available')}
+              value={allOfficesLoading ? '—' : formatTaka(allOfficesGrand.available)}
+              tone="accent"
+            />
           </div>
 
           <section className="card-surface overflow-hidden">
-            <div className="px-4 md:px-5 py-3.5 border-b border-[var(--line)] flex items-center justify-between">
+            <div className="px-4 md:px-5 py-3.5 border-b border-[var(--line)] flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base font-semibold text-[var(--text)]">
                 কার্যালয়ভিত্তিক বাজেট সারসংক্ষেপ ({allOfficesRows.length})
               </h2>
-              <span className="text-xs text-[var(--muted)]">যেকোনো কার্যালয়ে ক্লিক করে বিস্তারিত দেখুন</span>
+              <span className="text-xs text-[var(--muted)]">
+                যেকোনো কার্যালয়ে ক্লিক করে বিস্তারিত দেখুন
+              </span>
             </div>
 
             {allOfficesLoading ? (
               <div className="p-6 text-sm text-[var(--muted)]">তথ্য লোড হচ্ছে…</div>
             ) : allOfficesRows.length === 0 ? (
-              <div className="p-6 text-sm text-[var(--muted)]">
-                কোনো কার্যালয় পাওয়া যায়নি। «কার্যালয়সমূহ» থেকে নতুন কার্যালয় যোগ করুন বা মাইগ্রেশন চালান।
+              <div className="p-4">
+                <EmptyState
+                  icon={<Building2 className="w-5 h-5" />}
+                  title="কোনো কার্যালয় পাওয়া যায়নি"
+                  description="কার্যালয়সমূহ থেকে নতুন কার্যালয় যোগ করুন বা মাইগ্রেশন চালান।"
+                  action={
+                    <Link
+                      to="/offices"
+                      className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5"
+                    >
+                      <span>কার্যালয়সমূহ</span>
+                    </Link>
+                  }
+                />
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="py-3 px-4 font-medium">কার্যালয়</th>
-                      <th className="py-3 px-4 font-medium">কোড</th>
-                      <th className="py-3 px-4 font-medium text-right">{t('totalAllocation')}</th>
-                      <th className="py-3 px-4 font-medium text-right">{t('approvedSpent')}</th>
-                      <th className="py-3 px-4 font-medium text-right">{t('pendingAmount')}</th>
-                      <th className="py-3 px-4 font-medium text-right">{t('available')}</th>
-                      <th className="py-3 px-4 font-medium text-right">ব্যবহার %</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--line)]">
-                    {allOfficesRows.map((row) => (
-                      <tr
-                        key={row.office.id}
-                        onClick={() => setCurrentOfficeId(row.office.id)}
-                        className="cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
-                      >
-                        <td className="py-3 px-4 font-medium text-[var(--text)]">
-                          <div className="flex items-center gap-2">
+              <>
+                {/* Mobile Cards (< 1024px) */}
+                <div className="lg:hidden divide-y divide-[var(--line)]">
+                  {allOfficesRows.map((row) => (
+                    <button
+                      key={row.office.id}
+                      type="button"
+                      onClick={() => setCurrentOfficeId(row.office.id)}
+                      className="w-full text-left p-4 space-y-2 hover:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 font-semibold text-sm text-[var(--text)]">
                             <Building2 className="w-4 h-4 text-[var(--accent)] shrink-0" />
-                            <span className="bn">{row.office.nameBn || row.office.name}</span>
-                            {row.office.status === 'inactive' && (
-                              <StatusChip variant="disabled">নিষ্ক্রিয়</StatusChip>
-                            )}
+                            <span className="bn truncate">{row.office.nameBn || row.office.name}</span>
                           </div>
-                        </td>
-                        <td className="py-3 px-4 tabular-nums text-xs text-[var(--muted)]">
-                          {row.office.code}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums">
-                          {formatNumberIN(row.allocated)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums">
-                          {formatNumberIN(row.spent)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums text-[var(--warn-text)]">
-                          {formatNumberIN(row.pendingAmount)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums font-semibold text-[var(--accent)]">
-                          {formatNumberIN(row.available)}
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums font-semibold">
-                          {row.utilPct}%
-                        </td>
+                          <div className="text-xs text-[var(--muted)] tabular-nums mt-0.5">
+                            {row.office.code} · {row.utilPct}% ব্যবহার
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {row.office.status === 'inactive' && (
+                            <StatusChip variant="disabled">নিষ্ক্রিয়</StatusChip>
+                          )}
+                          <ChevronRight className="w-4 h-4 text-[var(--muted)]" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[var(--line)]/60 text-xs">
+                        <div>
+                          <div className="text-[11px] text-[var(--muted)]">{t('allocated')}</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(row.allocated)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-[var(--muted)]">{t('spent')}</div>
+                          <div className="font-medium tabular-nums truncate">
+                            {formatNumberIN(row.spent)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[11px] text-[var(--muted)]">{t('available')}</div>
+                          <div className="font-bold text-[var(--accent)] tabular-nums truncate">
+                            {formatNumberIN(row.available)}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Desktop Table (>= 1024px) */}
+                <div className="hidden lg:block overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
+                        <th className="py-3 px-4 font-medium">কার্যালয়</th>
+                        <th className="py-3 px-4 font-medium">কোড</th>
+                        <th className="py-3 px-4 font-medium text-right">{t('totalAllocation')}</th>
+                        <th className="py-3 px-4 font-medium text-right">{t('approvedSpent')}</th>
+                        <th className="py-3 px-4 font-medium text-right">{t('pendingAmount')}</th>
+                        <th className="py-3 px-4 font-medium text-right">{t('available')}</th>
+                        <th className="py-3 px-4 font-medium text-right">ব্যবহার %</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--line)]">
+                      {allOfficesRows.map((row) => (
+                        <tr
+                          key={row.office.id}
+                          onClick={() => setCurrentOfficeId(row.office.id)}
+                          className="cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
+                        >
+                          <td className="py-3 px-4 font-medium text-[var(--text)]">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="w-4 h-4 text-[var(--accent)] shrink-0" />
+                              <span className="bn">{row.office.nameBn || row.office.name}</span>
+                              {row.office.status === 'inactive' && (
+                                <StatusChip variant="disabled">নিষ্ক্রিয়</StatusChip>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 tabular-nums text-xs text-[var(--muted)]">
+                            {row.office.code}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums">
+                            {formatNumberIN(row.allocated)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums">
+                            {formatNumberIN(row.spent)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums text-[var(--warn-text)]">
+                            {formatNumberIN(row.pendingAmount)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums font-semibold text-[var(--accent)]">
+                            {formatNumberIN(row.available)}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums font-semibold">
+                            {row.utilPct}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </section>
         </div>
@@ -306,327 +446,318 @@ export function DashboardPage() {
 
   return (
     <Layout title={t('navDashboard')}>
-      <div className="space-y-3.5 md:space-y-5">
-        {isSuperAdmin && currentOffice && (
-          <div className="card-surface px-3.5 md:px-4 py-2.5 flex items-center justify-between gap-2 bg-[var(--accent-soft)]/25">
-            <div className="flex items-center gap-2 text-xs md:text-sm font-medium text-[var(--text)]">
-              <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
-              <span className="bn">
-                {t('readOnlySuperAdmin')} · {currentOffice.nameBn || currentOffice.name}
-              </span>
-            </div>
-          </div>
-        )}
+      <PageHeader title={t('navDashboard')} />
 
-        {/* Pending Approval Banner for DDO */}
-        {canReview && totals.pendingCount > 0 && (
-          <Link
-            to="/bills?status=submitted"
-            className="card-surface px-3.5 md:px-4 py-3 min-h-[44px] flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors"
-          >
-            <div className="text-sm font-medium text-[var(--text)] min-w-0">
-              <span className="font-bold text-[var(--accent)] tabular-nums">
-                {totals.pendingCount}
-              </span>{' '}
-              {t('pendingApproval')}
-            </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)] shrink-0">
-              <span>পর্যালোচনা</span>
-              <ChevronRight className="w-4 h-4" />
-            </span>
-          </Link>
-        )}
-
-        {/* Quick Link if listed expense items await bill creation */}
-        {!isSuperAdmin && totals.listedItemsCount > 0 && (
-          <Link
-            to="/expense-items"
-            className="card-surface px-3.5 md:px-4 py-2.5 min-h-[44px] flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors"
-          >
-            <div className="text-xs md:text-sm text-[var(--muted)] min-w-0">
-              <span className="font-bold text-[var(--text)] tabular-nums">
-                {totals.listedItemsCount}টি
-              </span>{' '}
-              তালিকাভুক্ত খরচ আইটেম বিল প্রস্তুতের জন্য অপেক্ষমান
-            </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)] shrink-0">
-              <span>বিল প্রস্তুত</span>
-              <ChevronRight className="w-4 h-4" />
-            </span>
-          </Link>
-        )}
-
-        {/* Mobile Hero Card */}
-        <div className="lg:hidden rounded-[16px] p-4 sm:p-5 space-y-3 bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-[var(--on-accent)] shadow-sm">
-          <div className="text-xs font-medium opacity-90 tabular-nums">
-            {t('remainingAllocation')} · FY {selectedFy}
-          </div>
-          <div className="text-3xl sm:text-4xl font-bold tracking-tight tabular-nums break-words">
-            {loading ? '—' : formatTaka(totals.available)}
-          </div>
-          <div className="h-2.5 rounded-full bg-black/15 dark:bg-black/20 overflow-hidden flex gap-0.5">
-            {totals.pctApproved > 0 && (
-              <div
-                className="h-full bg-[#FFFFFF] dark:bg-[#04201C] transition-all"
-                style={{ width: `${totals.pctApproved}%` }}
-              />
-            )}
-            {totals.pctPending > 0 && (
-              <div
-                className="h-full bg-[#FDE68A] dark:bg-[#B45309] transition-all"
-                style={{ width: `${totals.pctPending}%` }}
-              />
-            )}
-            {totals.totalAllocated > 0 &&
-              Math.max(0, 100 - totals.pctApproved - totals.pctPending) > 0 && (
-                <div
-                  className="h-full bg-white/35 dark:bg-[#04201C]/30 transition-all"
-                  style={{
-                    width: `${Math.max(0, 100 - totals.pctApproved - totals.pctPending)}%`,
-                  }}
-                />
-              )}
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-xs tabular-nums pt-0.5">
-            <div className="inline-flex items-center gap-1.5 min-w-0">
-              <span
-                className="w-2 h-2 rounded-full shrink-0 bg-[#FFFFFF] dark:bg-[#04201C]"
-                aria-hidden="true"
-              />
-              <span className="opacity-85">{t('approvedSpent')}:</span>
-              <span className="font-semibold">{formatTaka(totals.approvedSpent)}</span>
-            </div>
-            <div className="inline-flex items-center gap-1.5 min-w-0">
-              <span
-                className="w-2 h-2 rounded-full shrink-0 bg-[#FDE68A] dark:bg-[#B45309]"
-                aria-hidden="true"
-              />
-              <span className="opacity-85">{t('pendingAmount')}:</span>
-              <span className="font-semibold">{formatTaka(totals.pendingAmount)}</span>
-            </div>
-            <div className="inline-flex items-center gap-1.5 min-w-0">
-              <span
-                className="w-2 h-2 rounded-full shrink-0 bg-white/55 dark:bg-[#04201C]/45"
-                aria-hidden="true"
-              />
-              <span className="opacity-85">{t('totalAllocation')}:</span>
-              <span className="font-semibold">{formatTaka(totals.totalAllocated)}</span>
-            </div>
-          </div>
+      {isSuperAdmin && currentOffice && (
+        <div className="mb-4 card-surface px-3.5 md:px-4 py-2.5 flex items-center gap-2 bg-[var(--accent-soft)]/25 text-xs md:text-sm font-medium text-[var(--text)]">
+          <ShieldCheck className="w-4 h-4 text-[var(--accent)] shrink-0" />
+          <span className="bn truncate">
+            {t('readOnlySuperAdmin')} · {currentOffice.nameBn || currentOffice.name}
+          </span>
         </div>
+      )}
 
-        {/* Desktop 5 KPI Cards */}
-        <div className="hidden lg:grid lg:grid-cols-5 gap-4">
-          <div className="card-surface p-4">
-            <div className="text-xs font-medium text-[var(--muted)]">{t('totalAllocation')}</div>
-            <div className="text-xl font-bold text-[var(--text)] mt-1.5 tabular-nums">
-              {loading ? '—' : formatTaka(totals.totalAllocated)}
+      {/* Mobile order: hero, attention, quick actions, KPI row, heads utilization, recent bills.
+          Desktop (>= 1024px): 2 columns (1.6fr / 1fr): hero + heads left, everything else right. */}
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1.6fr_1fr] lg:gap-5 lg:items-start">
+        <div className="contents lg:flex lg:flex-col lg:gap-5">
+          {/* 1. Hero Card */}
+          <section className="order-1 lg:order-none rounded-[16px] p-5 md:p-6 space-y-3.5 bg-gradient-to-br from-[#0B5D56] to-[#14948A] text-white shadow-sm">
+            <div className="text-xs font-medium text-white/90 tabular-nums">
+              {t('remainingAllocation')} · FY {selectedFy}
             </div>
-          </div>
-          <div className="card-surface p-4">
-            <div className="text-xs font-medium text-[var(--muted)]">{t('approvedSpent')}</div>
-            <div className="text-xl font-bold text-[var(--text)] mt-1.5 tabular-nums">
-              {loading ? '—' : formatTaka(totals.approvedSpent)}
-            </div>
-          </div>
-          <div className="card-surface p-4">
-            <div className="text-xs font-medium text-[var(--muted)]">{t('pendingAmount')}</div>
-            <div className="text-xl font-bold text-[var(--warn-text)] mt-1.5 tabular-nums">
-              {loading ? '—' : formatTaka(totals.pendingAmount)}
-            </div>
-          </div>
-          <div className="card-surface p-4">
-            <div className="text-xs font-medium text-[var(--muted)]">{t('available')}</div>
-            <div className="text-xl font-bold text-[var(--accent)] mt-1.5 tabular-nums">
+
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight tabular-nums break-words">
               {loading ? '—' : formatTaka(totals.available)}
             </div>
-          </div>
-          <div className="card-surface p-4">
-            <div className="text-xs font-medium text-[var(--muted)]">{t('netPaid')}</div>
-            <div className="text-xl font-bold text-[var(--text)] mt-1.5 tabular-nums">
-              {loading ? '—' : formatTaka(totals.netPaid)}
+
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={totals.pctUsedTotal}
+              aria-label={`${totals.pctUsedTotal}% used`}
+              className="h-2.5 rounded-full bg-white/25 overflow-hidden flex gap-0.5"
+            >
+              {totals.pctApproved > 0 && (
+                <div
+                  className="h-full bg-white transition-all motion-reduce:transition-none"
+                  style={{ width: `${totals.pctApproved}%` }}
+                />
+              )}
+              {totals.pctPending > 0 && (
+                <div
+                  className="h-full bg-amber-300 transition-all motion-reduce:transition-none"
+                  style={{ width: `${totals.pctPending}%` }}
+                />
+              )}
             </div>
-          </div>
+
+            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-white/15 text-xs tabular-nums">
+              <div className="min-w-0">
+                <div className="text-white/80 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-white/50 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{t('totalAllocation')}</span>
+                </div>
+                <div className="font-bold text-sm mt-0.5 truncate">
+                  {loading ? '—' : formatTaka(totals.totalAllocated)}
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-white/80 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-white shrink-0" aria-hidden="true" />
+                  <span className="truncate">{t('approvedSpent')}</span>
+                </div>
+                <div className="font-bold text-sm mt-0.5 truncate">
+                  {loading ? '—' : formatTaka(totals.approvedSpent)}
+                </div>
+              </div>
+              <div className="min-w-0 text-right">
+                <div className="text-white/80 inline-flex items-center justify-end gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-300 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{t('pendingAmount')}</span>
+                </div>
+                <div className="font-bold text-sm mt-0.5 truncate">
+                  {loading ? '—' : formatTaka(totals.pendingAmount)}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* 5. Budget Utilization by Head */}
+          <section className="order-5 lg:order-none card-surface p-4 md:p-5 space-y-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-[var(--text)]">{t('spendingByHead')}</h2>
+              {headProgress.length > 0 && (
+                <span className="text-xs text-[var(--muted)] tabular-nums">
+                  {headProgress.length}
+                </span>
+              )}
+            </div>
+
+            {loading ? (
+              <div className="space-y-3 py-2">
+                {[1, 2, 3].map((n) => (
+                  <div key={n} className="space-y-1.5 animate-pulse">
+                    <div className="h-4 w-2/3 rounded bg-[var(--surface-subtle)]" />
+                    <div className="h-2.5 w-full rounded-full bg-[var(--surface-subtle)]" />
+                  </div>
+                ))}
+              </div>
+            ) : headProgress.length === 0 ? (
+              <EmptyState
+                icon={<Wallet className="w-5 h-5" />}
+                title={`${t('noAllocationsForFy')} ${selectedFy} ${t('noAllocationsForFyEnd')}`.trim()}
+                action={
+                  canCreateBudget ? (
+                    <Link
+                      to="/budgets"
+                      className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{t('addBudgetBtn')}</span>
+                    </Link>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <>
+                <div className="space-y-3.5">
+                  {visibleHeads.map((item) => (
+                    <div key={item.economicCode} className="space-y-1.5">
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="min-w-0 flex-1 break-words">
+                          <span className="text-sm font-medium text-[var(--text)] bn">
+                            {item.headNameBn || item.headName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-sm font-semibold text-[var(--text)] tabular-nums">
+                            {item.pct}%
+                            {item.pendingPct > 0 && (
+                              <span className="text-xs text-[var(--warn-text)]">
+                                +{item.pendingPct}%
+                              </span>
+                            )}
+                          </span>
+                          {item.nearLimit && (
+                            <StatusChip variant="nearLimit">{t('nearLimit')}</StatusChip>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="relative h-2 rounded-full bg-[var(--surface-subtle)] overflow-visible flex">
+                        <div
+                          className="h-full rounded-l-full bg-[var(--accent)] transition-all motion-reduce:transition-none"
+                          style={{ width: `${Math.max(0, Math.min(100, item.pct))}%` }}
+                        />
+                        {item.pendingPct > 0 && (
+                          <div
+                            className="h-full bg-[var(--warn-text)]/70 transition-all motion-reduce:transition-none"
+                            style={{ width: `${item.pendingPct}%` }}
+                          />
+                        )}
+                        {item.capRate !== null && item.capRate > 0 && item.capRate <= 100 && (
+                          <div
+                            title={`Ministry cap: ${item.capRate}%`}
+                            className="absolute -top-0.5 -bottom-0.5 w-[2px] bg-[var(--warn-text)] rounded-full"
+                            style={{ left: `${item.capRate}%` }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {headProgress.length > 7 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllHeads((v) => !v)}
+                    className="min-h-[44px] w-full rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--accent)] inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                  >
+                    {showAllHeads ? (
+                      <>
+                        <ChevronUp className="w-4 h-4" />
+                        <span>{t('showFewerHeads')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4" />
+                        <span>
+                          {t('showAllHeads')} ({headProgress.length})
+                        </span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            )}
+          </section>
         </div>
 
-        {/* Budget Utilization by head */}
-        <section className="card-surface p-4 md:p-5 space-y-3.5 md:space-y-4">
-          <h2 className="text-base font-semibold text-[var(--text)]">{t('spendingByHead')}</h2>
-
-          {loading ? (
-            <p className="text-sm text-[var(--muted)]">Loading budget utilization…</p>
-          ) : headProgress.length === 0 ? (
-            <p className="text-sm text-[var(--muted)]">
-              No allocations found for FY {selectedFy}.
-            </p>
-          ) : (
-            <div className="space-y-3.5 md:space-y-4">
-              {headProgress.map((item) => (
-                <div key={item.economicCode} className="space-y-1.5">
-                  <div className="flex items-start justify-between gap-2.5">
-                    <div className="min-w-0 flex-1 break-words">
-                      <span className="text-sm font-medium text-[var(--text)] bn">
-                        {item.headNameBn || item.headName}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span className="text-sm font-semibold text-[var(--text)] tabular-nums">
-                        {item.pct}%
-                        {item.pendingPct > 0 && (
-                          <span className="text-xs text-[var(--warn-text)]">
-                            +{item.pendingPct}%
-                          </span>
-                        )}
-                      </span>
-                      {item.nearLimit && (
-                        <StatusChip variant="nearLimit">{t('nearLimit')}</StatusChip>
-                      )}
-                    </div>
+        <div className="contents lg:flex lg:flex-col lg:gap-5">
+          {/* 2. Attention Card (hidden when nothing to show) */}
+          {attentionItems.length > 0 && (
+            <section className="order-2 lg:order-none rounded-[14px] border border-[var(--warn-text)]/30 bg-[var(--warn-bg)] text-[var(--warn-text)] overflow-hidden divide-y divide-[var(--warn-text)]/15">
+              {attentionItems.map((item) => (
+                <Link
+                  key={item.key}
+                  to={item.to}
+                  className="min-h-[48px] px-4 py-3 flex items-center justify-between gap-3 hover:bg-black/5 dark:hover:bg-white/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span className="text-xs sm:text-sm font-semibold break-words">
+                      {item.text}
+                    </span>
                   </div>
-
-                  <div className="relative h-2.5 rounded-full bg-[var(--surface-subtle)] overflow-visible flex">
-                    <div
-                      className="h-full rounded-l-full bg-[var(--accent)] transition-all"
-                      style={{ width: `${Math.max(0, Math.min(100, item.pct))}%` }}
-                    />
-                    {item.pendingPct > 0 && (
-                      <div
-                        className="h-full bg-[var(--warn-text)]/70 transition-all"
-                        style={{ width: `${item.pendingPct}%` }}
-                      />
-                    )}
-                    {item.capRate !== null && item.capRate > 0 && item.capRate <= 100 && (
-                      <div
-                        title={`Ministry cap: ${item.capRate}%`}
-                        className="absolute -top-1 -bottom-1 w-[2px] bg-[var(--warn-text)] rounded-full"
-                        style={{ left: `${item.capRate}%` }}
-                      />
-                    )}
-                  </div>
-                </div>
+                  <ChevronRight className="w-4 h-4 shrink-0" />
+                </Link>
               ))}
+            </section>
+          )}
+
+          {/* 3. Quick Actions */}
+          {(canCreateBill || canCreateExpense) && (
+            <div className="order-3 lg:order-none grid grid-cols-2 gap-2.5">
+              {canCreateBill && (
+                <Link
+                  to="/expense-items"
+                  className="min-h-[44px] px-3.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  <ReceiptText className="w-4 h-4 shrink-0" />
+                  <span className="truncate">খরচ থেকে বিল</span>
+                </Link>
+              )}
+              {canCreateExpense && (
+                <Link
+                  to="/expense-items?new=1"
+                  className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-[var(--text)] text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span className="truncate">{t('addExpenseBtn')}</span>
+                </Link>
+              )}
             </div>
           )}
-        </section>
 
-        {/* Recent Bills */}
-        <section className="card-surface overflow-hidden">
-          <div className="px-4 md:px-5 pt-4 md:pt-5 pb-2.5 md:pb-3 flex items-center justify-between gap-2">
-            <h2 className="text-base font-semibold text-[var(--text)]">{t('recentBills')}</h2>
-            <Link
-              to="/bills"
-              className="min-h-[36px] inline-flex items-center text-xs font-medium text-[var(--accent)] hover:underline shrink-0"
-            >
-              সব দেখুন
-            </Link>
+          {/* 4. KPI Row (3 small StatCards) */}
+          <div className="order-4 lg:order-none grid grid-cols-3 gap-2.5 md:gap-3">
+            <StatCard
+              label={t('billsKpiLabel')}
+              value={loading ? '—' : bills.length}
+            />
+            <StatCard
+              label={t('expensesBilledKpiLabel')}
+              value={loading ? '—' : totals.billedExpensesCount}
+            />
+            <StatCard
+              label={t('headsKpiLabel')}
+              value={loading ? '—' : headProgress.length}
+            />
           </div>
 
-          {loading ? (
-            <p className="px-4 md:px-5 pb-4 md:pb-5 text-sm text-[var(--muted)]">
-              সাম্প্রতিক বিল লোড হচ্ছে…
-            </p>
-          ) : recentBills.length === 0 ? (
-            <p className="px-4 md:px-5 pb-4 md:pb-5 text-sm text-[var(--muted)]">
-              FY {selectedFy}-এ এখনো কোনো বিল প্রস্তুত হয়নি।
-            </p>
-          ) : (
-            <>
-              {/* Desktop Table */}
-              <div className="hidden sm:block overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                      <th className="sticky left-0 z-10 bg-[var(--card)] py-2.5 px-5 font-medium whitespace-nowrap">
-                        {t('billNo')}
-                      </th>
-                      <th className="py-2.5 px-4 font-medium whitespace-nowrap">{t('date')}</th>
-                      <th className="py-2.5 px-4 font-medium">{t('head')}</th>
-                      <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">
-                        {t('gross')}
-                      </th>
-                      <th className="py-2.5 px-4 font-medium text-right whitespace-nowrap">
-                        {t('netPayable')}
-                      </th>
-                      <th className="py-2.5 px-5 font-medium">{t('status')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--line)]">
-                    {recentBills.map((b) => {
-                      const head = getHead(b.economicCode, {
-                        headName: b.headName,
-                        headNameBn: b.headNameBn,
-                      });
-                      return (
-                        <tr
-                          key={b.id}
-                          className="group hover:bg-[var(--surface-subtle)] transition-colors"
-                        >
-                          <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-5 font-semibold tabular-nums whitespace-nowrap transition-colors">
-                            <div>{b.billNo || 'খসড়া'}</div>
-                            <div className="text-[11px] font-normal text-[var(--muted)]">
-                              {getActorName(b.createdBy, b.createdByName)}
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                            {formatDateDisplay(b.date)}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className="tabular-nums">{b.economicCode}</span>{' '}
-                            <span className="bn">{head.displayName}</span>
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(b.grossAmount)}
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-medium">
-                            {formatNumberIN(b.netPayable)}
-                          </td>
-                          <td className="py-3 px-5 whitespace-nowrap">
-                            <StatusChip variant={billStatusToChip(b.status)}>
-                              {t(b.status)}
-                            </StatusChip>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+          {/* 6. Recent Bills (last 3) */}
+          <section className="order-6 lg:order-none card-surface overflow-hidden">
+            <div className="px-4 py-3.5 border-b border-[var(--line)] flex items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-[var(--text)]">{t('recentBills')}</h2>
+              <Link
+                to="/bills"
+                className="min-h-[44px] px-2 -mr-2 inline-flex items-center text-xs font-semibold text-[var(--accent)] hover:underline shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded-lg"
+              >
+                সব দেখুন
+              </Link>
+            </div>
 
-              {/* Mobile Compact List */}
-              <div className="sm:hidden divide-y divide-[var(--line)]">
+            {loading ? (
+              <div className="p-4 text-sm text-[var(--muted)]">সাম্প্রতিক বিল লোড হচ্ছে…</div>
+            ) : recentBills.length === 0 ? (
+              <div className="p-4 text-sm text-[var(--muted)]">
+                FY {selectedFy}-এ এখনো কোনো বিল প্রস্তুত হয়নি।
+              </div>
+            ) : (
+              <div className="divide-y divide-[var(--line)]">
                 {recentBills.map((b) => {
                   const head = getHead(b.economicCode, {
                     headName: b.headName,
                     headNameBn: b.headNameBn,
                   });
                   return (
-                    <div
+                    <Link
                       key={b.id}
-                      className="px-4 py-2.5 flex items-center justify-between gap-2.5"
+                      to={`/bills/${b.id}`}
+                      className="min-h-[56px] px-4 py-3 flex items-center justify-between gap-3 hover:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-[var(--text)] truncate bn">
-                          {b.billNo || 'খসড়া'} · {head.displayName}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-[var(--text)] tabular-nums truncate">
+                            {b.billNo || t('draft')}
+                          </span>
+                          <span className="text-xs text-[var(--muted)] tabular-nums shrink-0">
+                            {formatDateDisplay(b.date)}
+                          </span>
                         </div>
-                        <div className="text-xs text-[var(--muted)] truncate mt-0.5">
-                          {formatDateDisplay(b.date)} · {b.items.length}টি আইটেম · {t(b.status)}
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-sm font-semibold tabular-nums">
-                          {formatTaka(b.grossAmount)}
-                        </div>
-                        <div className="text-xs text-[var(--muted)] tabular-nums mt-0.5">
-                          নিট {formatNumberIN(b.netPayable)}
+                        <div className="text-xs text-[var(--muted)] truncate bn mt-0.5">
+                          {head.headNameBn || head.headName}
                         </div>
                       </div>
-                    </div>
+                      <div className="text-right shrink-0 space-y-1">
+                        <div className="text-sm font-bold text-[var(--text)] tabular-nums">
+                          {formatTaka(b.netPayable)}
+                        </div>
+                        <div>
+                          <StatusChip variant={billStatusToChip(b.status)}>
+                            {t(b.status)}
+                          </StatusChip>
+                        </div>
+                      </div>
+                    </Link>
                   );
                 })}
               </div>
-            </>
-          )}
-        </section>
+            )}
+          </section>
+        </div>
       </div>
     </Layout>
   );

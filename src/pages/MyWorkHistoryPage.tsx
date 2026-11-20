@@ -1,5 +1,6 @@
 import { History, Building2 } from 'lucide-react';
 import { Layout } from '../components/Layout';
+import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
 import { useMyWorkHistory } from '../hooks/useWorkHistory';
@@ -12,6 +13,7 @@ export function MyWorkHistoryPage() {
 
   return (
     <Layout title={t('navWorkHistory')}>
+      <PageHeader title={t('navWorkHistory')} />
       <div className="space-y-4">
         <div className="card-surface overflow-hidden">
           <div className="px-4 py-3 border-b border-[var(--line)] flex items-center gap-2">

@@ -24,7 +24,7 @@ const VARIANT_CLASSES: Record<ChipVariant, string> = {
   billed: 'bg-[var(--accent-soft)] text-[var(--accent)]',
   roleAccent: 'bg-[var(--accent-soft)] text-[var(--accent)]',
   draft: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
-  listed: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
+  listed: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',
   nearLimit: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
   invited: 'bg-[var(--warn-bg)] text-[var(--warn-text)]',
   submitted: 'border border-[var(--line)] text-[var(--muted)] bg-transparent',

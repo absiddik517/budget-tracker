@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { ActivityList } from '../components/ActivityList';
@@ -695,6 +696,7 @@ export function BudgetsPage() {
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
       <Layout title={t('navBudgets')}>
+        <PageHeader title={t('navBudgets')} />
         <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto my-6">
           <h2 className="text-base font-semibold text-[var(--text)] bn">
             একটি নির্দিষ্ট দপ্তর নির্বাচন করুন
@@ -708,7 +710,8 @@ export function BudgetsPage() {
   }
 
   return (
-    <Layout title={t('navBudgets')} actions={actions}>
+    <Layout title={t('navBudgets')}>
+      <PageHeader title={t('navBudgets')} actions={actions} />
       <div className="space-y-3.5 md:space-y-4">
         {isLegacyPreMigration && (
           <div className="card-surface px-4 py-3 border-l-4 border-[var(--warn)] text-xs text-[var(--text)]">

@@ -3,6 +3,7 @@ import { collection, onSnapshot } from 'firebase/firestore';
 import { Search, Upload } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
@@ -295,7 +296,8 @@ export function EconomicCodesPage() {
   ) : null;
 
   return (
-    <Layout title={t('navEconomicCodes')} actions={actions}>
+    <Layout title={t('navEconomicCodes')}>
+      <PageHeader title={t('navEconomicCodes')} actions={actions} />
       <div className="space-y-3.5 md:space-y-4">
         {!canEdit && (
           <div className="card-surface px-3.5 md:px-4 py-2.5 text-xs text-[var(--muted)]">

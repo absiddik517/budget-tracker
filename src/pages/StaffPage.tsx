@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { Edit2, Mail, Plus, Trash2, UserCheck, UserMinus } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
 import { useActiveUsers } from '../hooks/useActiveUsers';
@@ -170,7 +171,8 @@ export function StaffPage() {
   );
 
   return (
-    <Layout title={t('navStaff')} actions={headerActions}>
+    <Layout title={t('navStaff')}>
+      <PageHeader title={t('navStaff')} actions={headerActions} />
       <div className="space-y-4">
         <div className="px-3.5 py-2.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] text-xs text-[var(--muted)]">
           অফিস:{' '}

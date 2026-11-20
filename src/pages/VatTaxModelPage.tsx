@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Trash2, Upload } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { useAuth } from '../contexts/AuthContext';
@@ -245,7 +246,8 @@ export function VatTaxModelPage() {
   ) : null;
 
   return (
-    <Layout title={t('navVatTax')} actions={actions}>
+    <Layout title={t('navVatTax')}>
+      <PageHeader title={t('navVatTax')} actions={actions} />
       <div className="space-y-3.5 md:space-y-4">
         <div className="card-surface px-3.5 md:px-4 py-3 text-xs text-[var(--muted)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <p>

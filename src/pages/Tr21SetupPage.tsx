@@ -19,6 +19,7 @@ import {
 import { Layout } from '../components/Layout';
 import { BillForm, TR21_FORM_SECTIONS } from '../components/BillForm';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { toBanglaDigits } from '../lib/banglaFormat';
@@ -814,6 +815,7 @@ export function Tr21SetupPage() {
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
       <Layout title={t('navTr21Setup')}>
+        <PageHeader title={t('navTr21Setup')} />
         <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto">
           <h2 className="text-base font-bold text-[var(--text)]">একটি অফিস নির্বাচন করুন</h2>
           <p className="text-xs sm:text-sm text-[var(--muted)]">
@@ -836,6 +838,7 @@ export function Tr21SetupPage() {
         onDiscard: resetFields,
       }}
     >
+      <PageHeader title={t('navTr21Setup')} />
       {!canEditTr21 && (
         <div className="mb-4 px-3.5 py-3 rounded-[14px] border border-[var(--line)] bg-[var(--card)] text-xs md:text-sm text-[var(--muted)]">
           শুধুমাত্র সুপার অ্যাডমিন বা সংশ্লিষ্ট অফিসের DDO টি.আর. ফরম নং-২১ সেটআপ পরিবর্তন ও সংরক্ষণ করতে পারবেন। আপনি বর্তমান কনফিগারেশন ও লাইভ প্রিভিউ দেখতে এবং টেস্ট এক্সপোর্ট করতে পারেন।

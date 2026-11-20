@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Activity } from 'lucide-react';
 import { ActivityList } from '../components/ActivityList';
 import { Layout } from '../components/Layout';
+import { PageHeader } from '../components/PageHeader';
 import { useApp } from '../contexts/AppContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
 
@@ -30,6 +31,7 @@ export function ActivityPage() {
 
   return (
     <Layout title={t('navActivity')}>
+      <PageHeader title={t('navActivity')} />
       <div className="space-y-4">
         <div className="card-surface p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           <select

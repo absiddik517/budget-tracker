@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
@@ -434,7 +435,8 @@ export function UsersPage() {
   );
 
   return (
-    <Layout title={t('navUsers')} actions={actions}>
+    <Layout title={t('navUsers')}>
+      <PageHeader title={t('navUsers')} actions={actions} />
       <div className="space-y-4 md:space-y-5">
         {offices.length === 0 && (
           <div className="card-surface p-4 text-sm text-[var(--warn-text)] bg-[var(--warn-bg)]/40 border border-[var(--line)]">

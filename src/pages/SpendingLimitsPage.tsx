@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
@@ -601,7 +602,8 @@ export function SpendingLimitsPage() {
   ) : null;
 
   return (
-    <Layout title={t('navLimits')} actions={actions}>
+    <Layout title={t('navLimits')}>
+      <PageHeader title={t('navLimits')} actions={actions} />
       <div className="space-y-3.5 md:space-y-4">
         <div className="card-surface px-3.5 md:px-4 py-3 text-xs text-[var(--muted)]">
           Caps set by the ministry or directorate. Spending on a code or budget cannot exceed rate × allocation. If both a code cap and a budget cap apply, the stricter one wins.

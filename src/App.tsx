@@ -9,6 +9,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { BudgetsPage } from './pages/BudgetsPage';
 import { ExpenseItemsPage } from './pages/ExpenseItemsPage';
 import { BillsPage } from './pages/BillsPage';
+import { BillDetailPage } from './pages/BillDetailPage';
 import { EconomicCodesPage } from './pages/EconomicCodesPage';
 import { VatTaxModelPage } from './pages/VatTaxModelPage';
 import { SpendingLimitsPage } from './pages/SpendingLimitsPage';
@@ -68,6 +69,7 @@ function AppGate() {
       <Route path="/budgets" element={<BudgetsPage />} />
       <Route path="/expense-items" element={<ExpenseItemsPage />} />
       <Route path="/bills" element={<BillsPage />} />
+      <Route path="/bills/:billId" element={<BillDetailPage />} />
       <Route path="/spending" element={<Navigate to="/bills" replace />} />
       <Route path="/economic-codes" element={<EconomicCodesPage />} />
       <Route path="/vat-tax" element={<VatTaxModelPage />} />

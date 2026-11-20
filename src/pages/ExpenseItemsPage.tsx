@@ -1,23 +1,28 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
   CheckSquare,
+  ClipboardList,
+  Download,
   Edit2,
   FileSpreadsheet,
   FileText,
   Plus,
   ReceiptText,
-  Search,
   Square,
   Trash2,
   WifiOff,
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
+import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
+import { SegmentedChips } from '../components/SegmentedChips';
+import { FilterBar } from '../components/FilterBar';
+import { EmptyState } from '../components/EmptyState';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { useAuth } from '../contexts/AuthContext';
@@ -103,6 +108,7 @@ function normalizeDesc(s: string): string {
 
 export function ExpenseItemsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { userDoc, isSuperAdmin } = useAuth();
   const {
     selectedFy,
@@ -176,8 +182,28 @@ export function ExpenseItemsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [exportMenuOpen]);
 
   // Multi-row Entry Modal
   const [entryModalOpen, setEntryModalOpen] = useState(false);
@@ -226,10 +252,9 @@ export function ExpenseItemsPage() {
     });
   }, [expenseItems]);
 
-  const filteredItems = useMemo(() => {
+  const searchAndCodeMatchedItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     return expenseItems.filter((item) => {
-      if (statusFilter !== 'all' && item.status !== statusFilter) return false;
       if (codeFilter && item.economicCode !== codeFilter) return false;
       if (!q) return true;
       const head = getHead(item.economicCode, {
@@ -245,7 +270,31 @@ export function ExpenseItemsPage() {
         item.responsibleEmployee.designation.toLowerCase().includes(q)
       );
     });
-  }, [expenseItems, statusFilter, codeFilter, search, getHead]);
+  }, [expenseItems, codeFilter, search, getHead]);
+
+  const statusChipOptions = useMemo(() => {
+    let listed = 0;
+    let billed = 0;
+    for (const it of searchAndCodeMatchedItems) {
+      if (it.status === 'listed') listed += 1;
+      else if (it.status === 'billed') billed += 1;
+    }
+    return [
+      { value: 'listed' as const, label: t('listed'), count: listed },
+      { value: 'billed' as const, label: t('billed'), count: billed },
+      { value: 'all' as const, label: t('all'), count: searchAndCodeMatchedItems.length },
+    ];
+  }, [searchAndCodeMatchedItems, t]);
+
+  const filteredItems = useMemo(() => {
+    if (statusFilter === 'all') return searchAndCodeMatchedItems;
+    return searchAndCodeMatchedItems.filter((item) => item.status === statusFilter);
+  }, [searchAndCodeMatchedItems, statusFilter]);
+
+  const filteredTotalPaisa = useMemo(
+    () => filteredItems.reduce((sum, item) => sum + item.amount, 0),
+    [filteredItems]
+  );
 
   const pagedItems = useMemo(() => {
     const start = (page - 1) * 50;
@@ -539,6 +588,16 @@ export function ExpenseItemsPage() {
     ]);
     setEntryModalOpen(true);
   };
+
+  useEffect(() => {
+    if (searchParams.get('new') === '1' && canCreate) {
+      openEntryModal();
+      const next = new URLSearchParams(searchParams);
+      next.delete('new');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, canCreate]);
 
   const updateRow = (idx: number, patch: Partial<EntryRowDraft>) => {
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
@@ -1032,37 +1091,63 @@ export function ExpenseItemsPage() {
     }
   };
 
-  const actions = (
-    <div className="flex items-center gap-1.5">
-      <button
-        type="button"
-        onClick={handleExportPdf}
-        disabled={exportingPdf}
-        title="Export PDF"
-        aria-label="Export PDF"
-        className="min-h-[44px] md:min-h-[40px] px-2.5 md:px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
-      >
-        <FileText className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline">{exportingPdf ? 'PDF…' : 'PDF'}</span>
-      </button>
-      <button
-        type="button"
-        onClick={handleExportExcel}
-        disabled={exportingExcel}
-        title="Export Excel"
-        aria-label="Export Excel"
-        className="min-h-[44px] md:min-h-[40px] px-2.5 md:px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
-      >
-        <FileSpreadsheet className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline">{exportingExcel ? 'Excel…' : 'Excel'}</span>
-      </button>
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      <div className="relative" ref={exportMenuRef}>
+        <button
+          type="button"
+          onClick={() => setExportMenuOpen((v) => !v)}
+          aria-label={t('exportLabel')}
+          title={t('exportLabel')}
+          aria-haspopup="menu"
+          aria-expanded={exportMenuOpen}
+          className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold inline-flex items-center justify-center gap-1.5"
+        >
+          <Download className="w-4 h-4 shrink-0" />
+          <span className="hidden sm:inline">{t('exportLabel')}</span>
+        </button>
+        {exportMenuOpen && (
+          <div
+            role="menu"
+            className="absolute right-0 mt-1.5 w-48 rounded-xl border border-[var(--line)] bg-[var(--card)] shadow-lg p-1.5 z-30 space-y-1"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={exportingPdf}
+              onClick={() => {
+                setExportMenuOpen(false);
+                void handleExportPdf();
+              }}
+              className="w-full min-h-[44px] px-3 rounded-lg hover:bg-[var(--surface-subtle)] text-left text-xs font-medium inline-flex items-center gap-2 disabled:opacity-60"
+            >
+              <FileText className="w-4 h-4 text-[var(--muted)] shrink-0" />
+              <span>{exportingPdf ? 'PDF…' : t('exportPdfList')}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={exportingExcel}
+              onClick={() => {
+                setExportMenuOpen(false);
+                void handleExportExcel();
+              }}
+              className="w-full min-h-[44px] px-3 rounded-lg hover:bg-[var(--surface-subtle)] text-left text-xs font-medium inline-flex items-center gap-2 disabled:opacity-60"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-[var(--muted)] shrink-0" />
+              <span>{exportingExcel ? 'Excel…' : t('exportExcelList')}</span>
+            </button>
+          </div>
+        )}
+      </div>
       {canCreate && (
         <button
           type="button"
           onClick={openEntryModal}
-          className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+          className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
         >
-          {t('addExpenseItems')}
+          <Plus className="w-4 h-4 shrink-0" />
+          <span>{t('addExpenseItems')}</span>
         </button>
       )}
     </div>
@@ -1071,6 +1156,7 @@ export function ExpenseItemsPage() {
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
       <Layout title={t('navExpenseItems')}>
+        <PageHeader title={t('navExpenseItems')} subtitle={null} />
         <div className="card-surface p-6 text-center space-y-2 max-w-lg mx-auto">
           <h2 className="text-base font-bold text-[var(--text)]">একটি অফিস নির্বাচন করুন</h2>
           <p className="text-xs sm:text-sm text-[var(--muted)]">
@@ -1084,8 +1170,14 @@ export function ExpenseItemsPage() {
   }
 
   return (
-    <Layout title={t('navExpenseItems')} actions={actions}>
-      <div className={`space-y-3.5 md:space-y-4 ${selectedItems.length > 0 && canDraftBill ? 'pb-24' : ''}`}>
+    <Layout title={t('navExpenseItems')}>
+      <PageHeader
+        title={t('navExpenseItems')}
+        subtitle={`FY ${selectedFy} · ${expenseItems.length} ${t('itemsCountLabel')}`}
+        actions={headerActions}
+      />
+
+      <div className={`space-y-4 ${selectedItems.length > 0 && canDraftBill ? 'pb-24' : ''}`}>
         {isLegacyPreMigration && (
           <div className="px-3.5 py-2.5 rounded-[14px] bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium">
             মাল্টি-অফিস মাইগ্রেশন সম্পন্ন হয়নি। নতুন খরচ এন্ট্রি বা বিল তৈরি করতে সুপার অ্যাডমিন সেটিংস থেকে &ldquo;Migrate to multi-office&rdquo; চালান।
@@ -1101,91 +1193,95 @@ export function ExpenseItemsPage() {
           </div>
         )}
 
-        {/* Filter bar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 md:gap-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            {(['listed', 'billed', 'all'] as const).map((st) => {
-              const active = statusFilter === st;
-              return (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => {
-                    setStatusFilter(st);
-                    setPage(1);
-                  }}
-                  className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                      : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  {t(st)}
-                </button>
-              );
-            })}
-
-            {canDraftBill && selectableFilteredItems.length > 0 && (
-              <button
-                type="button"
-                onClick={toggleSelectAllFiltered}
-                className="min-h-[44px] md:min-h-[38px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-              >
-                {allFilteredListedSelected ? (
-                  <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
-                ) : (
-                  <Square className="w-4 h-4 text-[var(--muted)]" />
-                )}
-                <span>{allFilteredListedSelected ? 'সব বাদ দিন' : 'সব নির্বাচন'}</span>
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
-            <div className="w-full sm:w-64">
-              <EconomicCodeSelect
-                value={codeFilter}
-                onChange={(code) => {
-                  setCodeFilter(code);
-                  setPage(1);
-                }}
-                placeholder="সকল অর্থনৈতিক কোড"
-                clearable
-                includeInactive
-              />
+        {/* Current Filter Summary Card */}
+        <div className="card-surface p-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-[var(--muted)]">
+              {t('currentFilterLabel')} · {t(statusFilter)}
             </div>
-
-            <div className="relative w-full sm:w-60">
-              <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="বিবরণ, কর্মচারী, কোড…"
-                aria-label="Search expense items"
-                className="w-full min-h-[48px] sm:min-h-[44px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              />
+            <div className="text-sm font-medium text-[var(--text)] tabular-nums mt-0.5">
+              {filteredItems.length} {t('itemsCountLabel')}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-[var(--muted)]">{t('amount')}</div>
+            <div className="text-lg md:text-xl font-bold text-[var(--accent)] tabular-nums">
+              {formatTaka(filteredTotalPaisa)}
             </div>
           </div>
         </div>
 
+        {/* Filter bar */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <SegmentedChips
+            options={statusChipOptions}
+            value={statusFilter}
+            onChange={(st) => {
+              setStatusFilter(st);
+              setPage(1);
+            }}
+            ariaLabel="Filter expense items by status"
+            trailing={
+              canDraftBill && selectableFilteredItems.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={toggleSelectAllFiltered}
+                  className="min-h-[44px] md:min-h-[40px] px-3 rounded-full border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  {allFilteredListedSelected ? (
+                    <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
+                  ) : (
+                    <Square className="w-4 h-4 text-[var(--muted)]" />
+                  )}
+                  <span>{allFilteredListedSelected ? 'সব বাদ দিন' : 'সব নির্বাচন'}</span>
+                </button>
+              ) : null
+            }
+          />
+
+          <FilterBar
+            codeFilter={codeFilter}
+            onCodeChange={(code) => {
+              setCodeFilter(code);
+              setPage(1);
+            }}
+            search={search}
+            onSearchChange={(val) => {
+              setSearch(val);
+              setPage(1);
+            }}
+            searchPlaceholder="বিবরণ, কর্মচারী, কোড…"
+            searchAriaLabel="Search expense items"
+          />
+        </div>
+
         {/* List Card */}
-        <div className="card-surface overflow-hidden">
-          {/* Mobile Cards */}
-          <div className="md:hidden divide-y divide-[var(--line)]">
-            {loading ? (
-              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                খরচ তালিকা লোড হচ্ছে…
-              </div>
-            ) : pagedItems.length === 0 ? (
-              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                {t('noDataFound')}
-              </div>
-            ) : (
-              pagedItems.map((item) => {
+        {loading ? (
+          <div className="card-surface p-8 text-center text-sm text-[var(--muted)]">
+            খরচ তালিকা লোড হচ্ছে…
+          </div>
+        ) : pagedItems.length === 0 ? (
+          <EmptyState
+            icon={<ClipboardList className="w-5 h-5" />}
+            title={t('noDataFound')}
+            action={
+              expenseItems.length === 0 && canCreate ? (
+                <button
+                  type="button"
+                  onClick={openEntryModal}
+                  className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{t('addExpenseItems')}</span>
+                </button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <div className="card-surface overflow-hidden">
+            {/* Mobile Cards (< 1024px) */}
+            <div className="lg:hidden divide-y divide-[var(--line)]">
+              {pagedItems.map((item) => {
                 const head = getHead(item.economicCode, {
                   headName: item.headName,
                   headNameBn: item.headNameBn,
@@ -1222,11 +1318,15 @@ export function ExpenseItemsPage() {
                           {checked ? (
                             <CheckSquare className="w-5 h-5" />
                           ) : (
-                            <Square className={`w-5 h-5 ${diffCode ? 'text-[var(--muted)]/40' : 'text-[var(--muted)]'}`} />
+                            <Square
+                              className={`w-5 h-5 ${
+                                diffCode ? 'text-[var(--muted)]/40' : 'text-[var(--muted)]'
+                              }`}
+                            />
                           )}
                         </button>
                       ) : (
-                        <div className="w-4 shrink-0" />
+                        <div className="w-2 shrink-0" />
                       )}
 
                       <div className="min-w-0 flex-1">
@@ -1272,7 +1372,7 @@ export function ExpenseItemsPage() {
                                 <button
                                   type="button"
                                   onClick={() => openEditModal(item)}
-                                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1"
+                                  className="min-h-[44px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1"
                                 >
                                   <Edit2 className="w-3.5 h-3.5" />
                                   <span>{t('edit')}</span>
@@ -1280,7 +1380,7 @@ export function ExpenseItemsPage() {
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteItem(item)}
-                                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] inline-flex items-center gap-1"
+                                  className="min-h-[44px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] inline-flex items-center gap-1"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                   <span>{t('delete')}</span>
@@ -1289,8 +1389,8 @@ export function ExpenseItemsPage() {
                             ) : null
                           ) : (
                             <Link
-                              to="/bills"
-                              className="min-h-[36px] inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent)] hover:underline"
+                              to={item.billId ? `/bills/${item.billId}` : '/bills'}
+                              className="min-h-[44px] inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)] hover:underline"
                             >
                               <ReceiptText className="w-3.5 h-3.5" />
                               <span>বিলে যুক্ত · দেখুন</span>
@@ -1301,58 +1401,44 @@ export function ExpenseItemsPage() {
                     </div>
                   </div>
                 );
-              })
-            )}
-          </div>
+              })}
+            </div>
 
-          {/* Desktop Table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="py-3 pl-4 pr-2 w-10">
-                    {canDraftBill && (
-                      <button
-                        type="button"
-                        onClick={toggleSelectAllFiltered}
-                        disabled={selectableFilteredItems.length === 0}
-                        aria-label="Toggle select all listed items"
-                        className="inline-flex items-center justify-center p-1 rounded disabled:opacity-40"
-                      >
-                        {allFilteredListedSelected ? (
-                          <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
-                        ) : (
-                          <Square className="w-4 h-4" />
-                        )}
-                      </button>
-                    )}
-                  </th>
-                  <th className="py-3 px-3 font-medium whitespace-nowrap">{t('date')}</th>
-                  <th className="py-3 px-3 font-medium">{t('head')}</th>
-                  <th className="py-3 px-3 font-medium">{t('description')}</th>
-                  <th className="py-3 px-3 font-medium">{t('responsibleEmployee')}</th>
-                  <th className="py-3 px-3 font-medium text-right whitespace-nowrap">
-                    {t('amount')}
-                  </th>
-                  <th className="py-3 px-3 font-medium whitespace-nowrap">{t('status')}</th>
-                  <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--line)]">
-                {loading ? (
-                  <tr>
-                    <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                      খরচ তালিকা লোড হচ্ছে…
-                    </td>
+            {/* Desktop Table (>= 1024px) */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
+                    <th className="py-3 pl-4 pr-2 w-10">
+                      {canDraftBill && (
+                        <button
+                          type="button"
+                          onClick={toggleSelectAllFiltered}
+                          disabled={selectableFilteredItems.length === 0}
+                          aria-label="Toggle select all listed items"
+                          className="inline-flex items-center justify-center p-1 rounded disabled:opacity-40"
+                        >
+                          {allFilteredListedSelected ? (
+                            <CheckSquare className="w-4 h-4 text-[var(--accent)]" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
+                    </th>
+                    <th className="py-3 px-3 font-medium whitespace-nowrap">{t('date')}</th>
+                    <th className="py-3 px-3 font-medium">{t('description')}</th>
+                    <th className="py-3 px-3 font-medium">{t('head')}</th>
+                    <th className="py-3 px-3 font-medium">{t('responsibleEmployee')}</th>
+                    <th className="py-3 px-3 font-medium text-right whitespace-nowrap">
+                      {t('amount')}
+                    </th>
+                    <th className="py-3 px-3 font-medium whitespace-nowrap">{t('status')}</th>
+                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Actions</th>
                   </tr>
-                ) : pagedItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                      {t('noDataFound')}
-                    </td>
-                  </tr>
-                ) : (
-                  pagedItems.map((item) => {
+                </thead>
+                <tbody className="divide-y divide-[var(--line)]">
+                  {pagedItems.map((item) => {
                     const head = getHead(item.economicCode, {
                       headName: item.headName,
                       headNameBn: item.headNameBn,
@@ -1395,19 +1481,19 @@ export function ExpenseItemsPage() {
                         <td className="py-3 px-3 tabular-nums whitespace-nowrap text-[var(--muted)]">
                           {formatDateDisplay(item.date)}
                         </td>
-                        <td className="py-3 px-3 min-w-[180px]">
-                          <div className="font-medium text-[var(--text)]">
-                            <span className="tabular-nums">{item.economicCode}</span>{' '}
-                            <span className="bn">{head.displayName}</span>
-                          </div>
-                        </td>
                         <td className="py-3 px-3 bn max-w-[240px] break-words">
-                          <div>{item.description}</div>
+                          <div className="font-medium text-[var(--text)]">{item.description}</div>
                           {(item.createdBy || item.createdByName) && (
                             <div className="text-[11px] text-[var(--muted)] mt-0.5">
                               এন্ট্রি: {formatActorBrief(item.createdBy, officesById, item.createdByName)}
                             </div>
                           )}
+                        </td>
+                        <td className="py-3 px-3 min-w-[180px]">
+                          <div className="font-medium text-[var(--text)]">
+                            <span className="tabular-nums">{item.economicCode}</span>{' '}
+                            <span className="bn">{head.displayName}</span>
+                          </div>
                         </td>
                         <td className="py-3 px-3">
                           <div className="font-medium bn">{item.responsibleEmployee.name}</div>
@@ -1447,31 +1533,32 @@ export function ExpenseItemsPage() {
                             )
                           ) : (
                             <Link
-                              to="/bills"
+                              to={item.billId ? `/bills/${item.billId}` : '/bills'}
                               className="text-xs font-semibold text-[var(--accent)] hover:underline"
                             >
-                              বিল দেখুন
+                              বিলে যুক্ত · দেখুন
                             </Link>
                           )}
                         </td>
                       </tr>
                     );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-          <Pagination page={page} totalItems={filteredItems.length} onPageChange={setPage} />
-        </div>
+            <Pagination page={page} totalItems={filteredItems.length} onPageChange={setPage} />
+          </div>
+        )}
       </div>
 
       {/* Sticky Bottom Bill Selection Bar */}
       {canDraftBill && selectedItems.length > 0 && (
-        <div className="sticky bottom-2 z-20 mt-3 card-surface border-2 border-[var(--accent)] p-3 md:p-4 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="sticky bottom-2 lg:bottom-4 z-20 mt-3 card-surface border-2 border-[var(--accent)] p-3 md:p-4 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="min-w-0">
             <div className="text-sm font-bold text-[var(--text)] tabular-nums">
-              {selectedItems.length}টি খরচ নির্বাচিত · মূল খরচ {formatTaka(selectedTotalPaisa)}
+              {t('createBillSelectedPrefix')} {selectedItems.length} {t('createBillSelectedSuffix')} ·{' '}
+              {formatTaka(selectedTotalPaisa)}
             </div>
             <div
               className={`text-xs ${
@@ -1490,15 +1577,15 @@ export function ExpenseItemsPage() {
             <button
               type="button"
               onClick={() => setSelectedIds(new Set())}
-              className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium"
+              className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] text-xs font-medium"
             >
-              বাতিল
+              {t('cancel')}
             </button>
             <button
               type="button"
               disabled={selectedDistinctCodeCount > 1}
               onClick={openPrepareModal}
-              className="min-h-[44px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
+              className="min-h-[44px] px-4 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <ReceiptText className="w-4 h-4 shrink-0" />
               <span>{t('prepareBill')}</span>

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
+import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
 import { useAllWorkHistory } from '../hooks/useWorkHistory';
@@ -195,7 +196,8 @@ export function OfficesPage() {
   );
 
   return (
-    <Layout title={t('navOffices')} actions={headerActions}>
+    <Layout title={t('navOffices')}>
+      <PageHeader title={t('navOffices')} actions={headerActions} />
       <div className="space-y-4">
         {/* Filters */}
         <div className="card-surface p-3.5 flex flex-col sm:flex-row gap-2.5 sm:items-center justify-between">

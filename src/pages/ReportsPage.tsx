@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Layout } from '../components/Layout';
+import { PageHeader } from '../components/PageHeader';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
@@ -503,7 +504,8 @@ export function ReportsPage() {
   );
 
   return (
-    <Layout title={t('navReports')} actions={actions}>
+    <Layout title={t('navReports')}>
+      <PageHeader title={t('navReports')} actions={actions} />
       <div className="space-y-3.5 md:space-y-4">
         {/* Report Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 no-print">
