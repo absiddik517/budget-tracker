@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   Activity,
@@ -12,6 +12,7 @@ import {
   ExternalLink,
   FileSpreadsheet,
   History,
+  Layers,
   LayoutGrid,
   LogOut,
   Menu,
@@ -27,15 +28,26 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
+import { ALL_OFFICES_ID, useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useMountTransition } from '../hooks/useMountTransition';
 import { formatRoleLabel } from '../lib/permissions';
 import type { TranslationKey } from '../i18n';
+import { BottomSheet } from './BottomSheet';
 import firestoreRulesText from '../../firestore.rules?raw';
+
+export interface LayoutSaveBar {
+  visible: boolean;
+  saving: boolean;
+  onSave: () => void;
+  onDiscard?: () => void;
+  label?: string;
+}
 
 interface LayoutProps {
   title: string;
   actions?: React.ReactNode;
+  saveBar?: LayoutSaveBar;
   children: React.ReactNode;
 }
 
@@ -46,7 +58,7 @@ interface NavItem {
   visible: boolean;
 }
 
-export function Layout({ title, actions, children }: LayoutProps) {
+export function Layout({ title, actions, saveBar, children }: LayoutProps) {
   const { userDoc, isSuperAdmin, signOut } = useAuth();
   const {
     offices,
@@ -59,7 +71,6 @@ export function Layout({ title, actions, children }: LayoutProps) {
     isLegacyPreMigration,
     officeSettings,
     selectedFy,
-    setSelectedFy,
     t,
     permissionDeniedPaths,
     pushToast,
@@ -67,8 +78,14 @@ export function Layout({ title, actions, children }: LayoutProps) {
   const { resolvedTheme, toggleTheme } = useTheme();
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [officeSheetOpen, setOfficeSheetOpen] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [copiedRules, setCopiedRules] = useState(false);
+
+  const { mounted: saveBarMounted, visible: saveBarVisible } = useMountTransition(
+    Boolean(saveBar?.visible),
+    220
+  );
 
   const handleCopyRules = async () => {
     try {
@@ -118,24 +135,7 @@ export function Layout({ title, actions, children }: LayoutProps) {
     return location.pathname.startsWith(path);
   };
 
-  const fyOptions = Array.from(
-    new Set([selectedFy, officeSettings.activeFiscalYear, ...officeSettings.fiscalYears])
-  )
-    .filter(Boolean)
-    .sort()
-    .reverse();
-
-  useEffect(() => {
-    if (!moreOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [moreOpen]);
-
-  const showOfficeDropdown =
-    !isLegacyPreMigration && (isSuperAdmin || offices.length > 1);
+  const canSwitchOffice = isSuperAdmin || offices.length > 1;
 
   const currentOfficeDisplayName = isAllOfficesMode
     ? t('allOffices')
@@ -145,9 +145,15 @@ export function Layout({ title, actions, children }: LayoutProps) {
 
   const currentRoleDisplay = formatRoleLabel(effectiveRole);
 
+  const handleSelectOffice = (officeId: string) => {
+    if (!canSwitchOffice) return;
+    setCurrentOfficeId(officeId);
+    setOfficeSheetOpen(false);
+  };
+
   return (
     <div className="h-dvh w-full flex flex-col lg:flex-row overflow-hidden bg-[var(--bg)] text-[var(--text)] print:h-auto print:overflow-visible">
-      {/* Desktop Left Sidebar (230px, hidden on mobile) */}
+      {/* Desktop Left Sidebar (235px, hidden on mobile) */}
       <aside className="hidden lg:flex lg:flex-col lg:w-[235px] lg:shrink-0 lg:h-dvh bg-[var(--card)] border-r border-[var(--line)] z-30 no-print">
         <div className="px-5 pt-6 pb-4 shrink-0">
           <Link
@@ -202,88 +208,36 @@ export function Layout({ title, actions, children }: LayoutProps) {
       {/* Main Column */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full w-full print:h-auto print:block">
         {/* Top Header */}
-        <header className="shrink-0 safe-top z-20 bg-[var(--bg)]/95 backdrop-blur-sm border-b border-[var(--line)]/60 lg:border-b-0 no-print">
-          <div className="max-w-[1220px] w-full mx-auto px-3 md:px-6 lg:px-8 py-2.5 md:py-4 flex flex-wrap items-center justify-between gap-2 md:gap-3">
-            <div className="min-w-0 flex items-center gap-2 flex-1">
-              <h1 className="text-lg md:text-2xl font-bold tracking-tight text-[var(--text)] truncate min-w-0">
-                {title}
-              </h1>
-            </div>
+        <header className="shrink-0 safe-top z-20 bg-[var(--card)] border-b border-[var(--line)] no-print">
+          <div className="max-w-[1220px] w-full mx-auto px-3 md:px-6 lg:px-8 py-2.5 md:py-4 flex items-center justify-between gap-2 md:gap-3">
+            <h1 className="text-lg md:text-2xl font-bold tracking-tight text-[var(--text)] truncate min-w-0 flex-1">
+              {title}
+            </h1>
 
-            <div className="flex items-center gap-1.5 md:gap-2 shrink-0 flex-wrap justify-end">
-              {actions}
-
-              {/* Office Switcher (or Badge for single-office user) */}
-              {showOfficeDropdown ? (
-                <>
-                  <label className="sr-only" htmlFor="header-office-select">
-                    {t('selectOffice')}
-                  </label>
-                  <select
-                    id="header-office-select"
-                    value={currentOfficeId || ''}
-                    onChange={(e) => setCurrentOfficeId(e.target.value)}
-                    className="max-w-[165px] sm:max-w-[230px] min-h-[44px] md:min-h-[40px] px-2.5 md:px-3 rounded-full text-xs font-semibold bg-[var(--card)] text-[var(--text)] border border-[var(--line)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] cursor-pointer truncate"
-                  >
-                    {isSuperAdmin && (
-                      <option value={ALL_OFFICES_ID} className="bg-[var(--card)] text-[var(--text)]">
-                        {t('allOffices')} (Super Admin)
-                      </option>
-                    )}
-                    {offices.map((off) => {
-                      const roleAtOffice = isSuperAdmin
-                        ? 'Read-only'
-                        : formatRoleLabel(userDoc?.access?.[off.id]);
-                      return (
-                        <option
-                          key={off.id}
-                          value={off.id}
-                          className="bg-[var(--card)] text-[var(--text)]"
-                        >
-                          {off.nameBn || off.name} ({roleAtOffice})
-                        </option>
-                      );
-                    })}
-                  </select>
-                </>
-              ) : (
-                !isLegacyPreMigration &&
-                currentOffice && (
-                  <span className="hidden sm:inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-full text-xs font-medium bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] max-w-[220px] truncate">
-                    <Building2 className="w-3.5 h-3.5 shrink-0 text-[var(--accent)]" />
-                    <span className="truncate">{currentOffice.nameBn || currentOffice.name}</span>
-                  </span>
-                )
+            <div className="flex items-center gap-2 shrink-0">
+              {!isLegacyPreMigration && (
+                <button
+                  type="button"
+                  onClick={() => setOfficeSheetOpen(true)}
+                  aria-label={t('selectOffice')}
+                  aria-haspopup="dialog"
+                  aria-expanded={officeSheetOpen}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl bg-[var(--card)] border border-[var(--line)] text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors shrink-0"
+                >
+                  <Layers className="w-5 h-5" />
+                </button>
               )}
 
-              {/* FY selector chip */}
-              <label className="sr-only" htmlFor="header-fy-select">
-                Select Fiscal Year
-              </label>
-              <select
-                id="header-fy-select"
-                value={selectedFy}
-                onChange={(e) => setSelectedFy(e.target.value)}
-                className="min-h-[44px] md:min-h-[40px] px-2.5 md:px-3 rounded-full text-xs font-semibold bg-[var(--accent-soft)] text-[var(--accent)] border border-transparent focus:outline-none focus:ring-2 focus:ring-[var(--accent)] cursor-pointer tabular-nums"
-              >
-                {fyOptions.map((fy) => (
-                  <option key={fy} value={fy} className="bg-[var(--card)] text-[var(--text)]">
-                    FY {fy}
-                  </option>
-                ))}
-              </select>
-
-              {/* Theme toggle button */}
               <button
                 type="button"
                 onClick={toggleTheme}
                 aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full bg-[var(--card)] border border-[var(--line)] text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors shrink-0"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl bg-[var(--card)] border border-[var(--line)] text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors shrink-0"
               >
                 {resolvedTheme === 'dark' ? (
-                  <Sun className="w-4 h-4" />
+                  <Sun className="w-5 h-5" />
                 ) : (
-                  <Moon className="w-4 h-4" />
+                  <Moon className="w-5 h-5" />
                 )}
               </button>
             </div>
@@ -303,7 +257,11 @@ export function Layout({ title, actions, children }: LayoutProps) {
 
         {/* Scrollable Content Region */}
         <main className="flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain w-full print:overflow-visible">
-          <div className="max-w-[1220px] w-full mx-auto px-3 md:px-6 lg:px-8 pt-2.5 md:pt-1 pb-5 md:pb-10">
+          <div
+            className={`max-w-[1220px] w-full mx-auto px-3 md:px-6 lg:px-8 pt-2.5 md:pt-3 ${
+              saveBar?.visible ? 'pb-24 md:pb-24' : 'pb-5 md:pb-10'
+            }`}
+          >
             {isLegacyPreMigration && isSuperAdmin && (
               <div className="mb-3.5 rounded-xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3.5 py-2.5 text-xs md:text-sm text-[var(--warning-text)] flex flex-wrap items-center justify-between gap-2 no-print">
                 <span>
@@ -392,9 +350,54 @@ export function Layout({ title, actions, children }: LayoutProps) {
                 </button>
               </div>
             )}
+
+            {actions && (
+              <div className="flex flex-wrap justify-end gap-2 mb-3 no-print [&>button:only-child]:w-full [&>button:only-child]:justify-center sm:[&>button:only-child]:w-auto [&>a:only-child]:w-full [&>a:only-child]:justify-center sm:[&>a:only-child]:w-auto">
+                {actions}
+              </div>
+            )}
+
             {children}
           </div>
         </main>
+
+        {/* Sticky Unsaved Changes Save Bar */}
+        {saveBarMounted && saveBar && (
+          <div className="fixed inset-x-3 bottom-[calc(56px+env(safe-area-inset-bottom,0px)+8px)] lg:left-[calc(235px+1.5rem)] lg:right-6 lg:bottom-4 z-30 flex justify-center pointer-events-none no-print">
+            <div
+              role="region"
+              aria-label={saveBar.label || t('unsavedChanges')}
+              className={`pointer-events-auto w-full max-w-2xl rounded-[14px] bg-[var(--text)] text-[var(--bg)] dark:bg-[var(--card)] dark:text-[var(--text)] border border-[var(--line)] shadow-xl px-4 py-2.5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5 transition-[transform,opacity] duration-200 motion-reduce:transition-none ${
+                saveBarVisible ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'
+              }`}
+            >
+              <span className="text-sm font-semibold">
+                {saveBar.label || t('unsavedChanges')}
+              </span>
+              <div className="flex items-center gap-2 shrink-0 ml-auto">
+                {saveBar.onDiscard && (
+                  <button
+                    type="button"
+                    onClick={saveBar.onDiscard}
+                    disabled={saveBar.saving}
+                    className="min-h-[44px] px-3.5 rounded-lg border border-current/25 text-xs sm:text-sm font-medium hover:bg-white/10 disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {t('discard')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={saveBar.onSave}
+                  disabled={saveBar.saving}
+                  className="min-h-[44px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-60 transition-colors whitespace-nowrap"
+                >
+                  <Check className="w-4 h-4 shrink-0" />
+                  <span>{saveBar.saving ? t('savingLabel') : t('save')}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Mobile Bottom Tab Bar (< 1024px) */}
         <nav
@@ -465,67 +468,146 @@ export function Layout({ title, actions, children }: LayoutProps) {
         </nav>
       </div>
 
-      {/* Mobile "More" Sheet */}
-      {moreOpen && (
-        <div
-          className="lg:hidden fixed inset-0 z-50 flex items-end bg-black/50 overscroll-contain no-print"
-          role="dialog"
-          aria-modal="true"
-          aria-label="More options"
+      {/* Office Switcher Sheet (Bottom sheet on mobile, centered dialog on md+) */}
+      {!isLegacyPreMigration && (
+        <BottomSheet
+          open={officeSheetOpen}
+          onClose={() => setOfficeSheetOpen(false)}
+          title={t('selectOffice')}
+          desktopCenter
+          maxWidthClass="md:max-w-md"
+          closeLabel={t('closeLabel')}
         >
-          <div className="fixed inset-0" onClick={() => setMoreOpen(false)} />
-          <div className="relative z-10 w-full max-h-[88dvh] flex flex-col bg-[var(--card)] border-t border-[var(--line)] rounded-t-[16px] overflow-hidden safe-bottom">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)] shrink-0">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-[var(--text)] truncate">
-                  {userDoc?.name || currentOfficeDisplayName}
-                </div>
-                <div className="text-xs text-[var(--muted)] truncate">
-                  {currentRoleDisplay} · {currentOfficeDisplayName}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMoreOpen(false)}
-                aria-label="Close menu"
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-[var(--muted)] shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+          <div className="p-3 space-y-2">
+            {offices.length === 0 && !isSuperAdmin ? (
+              <p className="text-sm text-[var(--muted)] px-2 py-4 text-center">
+                {t('noDataFound')}
+              </p>
+            ) : (
+              <div role="radiogroup" aria-label={t('selectOffice')} className="space-y-1.5">
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={currentOfficeId === ALL_OFFICES_ID}
+                    onClick={() => handleSelectOffice(ALL_OFFICES_ID)}
+                    className={`w-full min-h-[56px] px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left transition-colors ${
+                      currentOfficeId === ALL_OFFICES_ID
+                        ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                        : 'hover:bg-[var(--surface-subtle)] text-[var(--text)]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold truncate">{t('allOffices')}</div>
+                      <div className="text-xs opacity-80 truncate">
+                        Super Admin · {t('readOnlyLabel')}
+                      </div>
+                    </div>
+                    {currentOfficeId === ALL_OFFICES_ID && (
+                      <Check className="w-5 h-5 shrink-0" />
+                    )}
+                  </button>
+                )}
 
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-3 space-y-1">
-              {visibleNav
-                .filter((item) => !['/', '/budgets', '/bills', '/expense-items'].includes(item.to))
-                .map((item) => {
-                  const Icon = item.icon;
+                {offices.map((off) => {
+                  const selected = canSwitchOffice ? currentOfficeId === off.id : true;
+                  const roleLabel = isSuperAdmin
+                    ? 'Read-only'
+                    : formatRoleLabel(userDoc?.access?.[off.id]);
+
+                  if (!canSwitchOffice) {
+                    return (
+                      <div
+                        key={off.id}
+                        role="radio"
+                        aria-checked="true"
+                        className="w-full min-h-[56px] px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 bg-[var(--accent-soft)] text-[var(--accent)]"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold truncate bn">
+                            {off.nameBn || off.name}
+                          </div>
+                          <div className="text-xs opacity-80 truncate">{roleLabel}</div>
+                        </div>
+                        <Check className="w-5 h-5 shrink-0" />
+                      </div>
+                    );
+                  }
+
                   return (
-                    <Link
-                      key={item.to}
-                      to={item.to}
-                      onClick={() => setMoreOpen(false)}
-                      className="min-h-[44px] flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+                    <button
+                      key={off.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => handleSelectOffice(off.id)}
+                      className={`w-full min-h-[56px] px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left transition-colors ${
+                        selected
+                          ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                          : 'hover:bg-[var(--surface-subtle)] text-[var(--text)]'
+                      }`}
                     >
-                      <Icon className="w-5 h-5 text-[var(--muted)] shrink-0" />
-                      <span>{t(item.labelKey)}</span>
-                    </Link>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate bn">
+                          {off.nameBn || off.name}
+                        </div>
+                        <div className="text-xs opacity-80 truncate">{roleLabel}</div>
+                      </div>
+                      {selected && <Check className="w-5 h-5 shrink-0" />}
+                    </button>
                   );
                 })}
-              <button
-                type="button"
-                onClick={() => {
-                  setMoreOpen(false);
-                  signOut();
-                }}
-                className="min-h-[44px] w-full flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
-              >
-                <LogOut className="w-5 h-5 shrink-0" />
-                <span>{t('signOut')}</span>
-              </button>
-            </div>
+              </div>
+            )}
+
+            {!canSwitchOffice && offices.length === 1 && (
+              <p className="text-xs text-[var(--muted)] px-1 pt-1">
+                {t('singleOfficeNotice')}
+              </p>
+            )}
           </div>
-        </div>
+        </BottomSheet>
       )}
+
+      {/* Mobile "More" Sheet */}
+      <BottomSheet
+        open={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        title={userDoc?.name || currentOfficeDisplayName}
+        subtitle={`${currentRoleDisplay} · ${currentOfficeDisplayName}`}
+        ariaLabel="More options"
+        closeLabel={t('closeLabel')}
+      >
+        <div className="p-3 space-y-1">
+          {visibleNav
+            .filter((item) => !['/', '/budgets', '/bills', '/expense-items'].includes(item.to))
+            .map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setMoreOpen(false)}
+                  className="min-h-[44px] flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+                >
+                  <Icon className="w-5 h-5 text-[var(--muted)] shrink-0" />
+                  <span>{t(item.labelKey)}</span>
+                </Link>
+              );
+            })}
+          <button
+            type="button"
+            onClick={() => {
+              setMoreOpen(false);
+              signOut();
+            }}
+            className="min-h-[44px] w-full flex items-center gap-3 px-3 rounded-lg text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
+          >
+            <LogOut className="w-5 h-5 shrink-0" />
+            <span>{t('signOut')}</span>
+          </button>
+        </div>
+      </BottomSheet>
     </div>
   );
 }

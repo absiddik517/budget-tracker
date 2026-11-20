@@ -357,31 +357,61 @@ export function DashboardPage() {
         )}
 
         {/* Mobile Hero Card */}
-        <div className="lg:hidden card-surface p-4 sm:p-5 space-y-2.5">
-          <div className="text-xs font-medium text-[var(--muted)]">
-            {t('remainingAllocation')}
+        <div className="lg:hidden rounded-[16px] p-4 sm:p-5 space-y-3 bg-gradient-to-br from-[var(--accent)] to-[var(--accent-hover)] text-[var(--on-accent)] shadow-sm">
+          <div className="text-xs font-medium opacity-90 tabular-nums">
+            {t('remainingAllocation')} · FY {selectedFy}
           </div>
-          <div className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--accent)] tabular-nums break-words">
+          <div className="text-3xl sm:text-4xl font-bold tracking-tight tabular-nums break-words">
             {loading ? '—' : formatTaka(totals.available)}
           </div>
-          <div className="h-2 rounded-full bg-[var(--surface-subtle)] overflow-hidden flex">
-            <div
-              className="h-full bg-[var(--accent)] transition-all"
-              style={{ width: `${totals.pctApproved}%` }}
-            />
-            <div
-              className="h-full bg-[var(--warn-text)]/70 transition-all"
-              style={{ width: `${totals.pctPending}%` }}
-            />
+          <div className="h-2.5 rounded-full bg-black/15 dark:bg-black/20 overflow-hidden flex gap-0.5">
+            {totals.pctApproved > 0 && (
+              <div
+                className="h-full bg-[#FFFFFF] dark:bg-[#04201C] transition-all"
+                style={{ width: `${totals.pctApproved}%` }}
+              />
+            )}
+            {totals.pctPending > 0 && (
+              <div
+                className="h-full bg-[#FDE68A] dark:bg-[#B45309] transition-all"
+                style={{ width: `${totals.pctPending}%` }}
+              />
+            )}
+            {totals.totalAllocated > 0 &&
+              Math.max(0, 100 - totals.pctApproved - totals.pctPending) > 0 && (
+                <div
+                  className="h-full bg-white/35 dark:bg-[#04201C]/30 transition-all"
+                  style={{
+                    width: `${Math.max(0, 100 - totals.pctApproved - totals.pctPending)}%`,
+                  }}
+                />
+              )}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs text-[var(--muted)] tabular-nums">
-            <span>
-              {t('approvedSpent')}: {formatTaka(totals.approvedSpent)} · {t('pendingAmount')}:{' '}
-              {formatTaka(totals.pendingAmount)}
-            </span>
-            <span>
-              {t('totalAllocation')}: {formatTaka(totals.totalAllocated)}
-            </span>
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-xs tabular-nums pt-0.5">
+            <div className="inline-flex items-center gap-1.5 min-w-0">
+              <span
+                className="w-2 h-2 rounded-full shrink-0 bg-[#FFFFFF] dark:bg-[#04201C]"
+                aria-hidden="true"
+              />
+              <span className="opacity-85">{t('approvedSpent')}:</span>
+              <span className="font-semibold">{formatTaka(totals.approvedSpent)}</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5 min-w-0">
+              <span
+                className="w-2 h-2 rounded-full shrink-0 bg-[#FDE68A] dark:bg-[#B45309]"
+                aria-hidden="true"
+              />
+              <span className="opacity-85">{t('pendingAmount')}:</span>
+              <span className="font-semibold">{formatTaka(totals.pendingAmount)}</span>
+            </div>
+            <div className="inline-flex items-center gap-1.5 min-w-0">
+              <span
+                className="w-2 h-2 rounded-full shrink-0 bg-white/55 dark:bg-[#04201C]/45"
+                aria-hidden="true"
+              />
+              <span className="opacity-85">{t('totalAllocation')}:</span>
+              <span className="font-semibold">{formatTaka(totals.totalAllocated)}</span>
+            </div>
           </div>
         </div>
 

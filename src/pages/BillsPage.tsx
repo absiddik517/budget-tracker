@@ -873,6 +873,11 @@ export function BillsPage() {
           </div>
         )}
 
+        {/* Subtle FY Context */}
+        <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted)] tabular-nums no-print">
+          <span>FY {selectedFy}</span>
+        </div>
+
         {/* Filter Bar */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 md:gap-3">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">

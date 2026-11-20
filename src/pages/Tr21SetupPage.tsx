@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   ArrowDown,
@@ -171,7 +171,7 @@ export function Tr21SetupPage() {
     void ensureBengaliFontsLoaded();
   }, []);
 
-  useEffect(() => {
+  const resetFields = useCallback(() => {
     setMinistryName(officeSettings.ministryName || '');
     setOfficeName(officeSettings.officeName);
     setOfficeAddress(officeSettings.address || '');
@@ -188,6 +188,10 @@ export function Tr21SetupPage() {
     setTr21FontSize(resolveTr21FontSize(officeSettings.tr21FontSize));
     setTr21Clauses(resolveTr21Clauses(officeSettings.tr21Clauses));
   }, [officeSettings]);
+
+  useEffect(() => {
+    resetFields();
+  }, [resetFields]);
 
   useEffect(() => {
     if (!currentOfficeId || isAllOfficesMode) {
@@ -807,18 +811,6 @@ export function Tr21SetupPage() {
     }
   };
 
-  const headerActions = canEditTr21 ? (
-    <button
-      type="button"
-      onClick={handleSave}
-      disabled={saving}
-      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold transition-colors disabled:opacity-60 whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
-    >
-      <Check className="w-4 h-4 shrink-0" />
-      <span>{saving ? 'সংরক্ষণ হচ্ছে…' : isDirty ? t('saveChanges') : 'সংরক্ষিত'}</span>
-    </button>
-  ) : null;
-
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
       <Layout title={t('navTr21Setup')}>
@@ -835,7 +827,15 @@ export function Tr21SetupPage() {
   }
 
   return (
-    <Layout title={t('navTr21Setup')} actions={headerActions}>
+    <Layout
+      title={t('navTr21Setup')}
+      saveBar={{
+        visible: canEditTr21 && isDirty,
+        saving,
+        onSave: handleSave,
+        onDiscard: resetFields,
+      }}
+    >
       {!canEditTr21 && (
         <div className="mb-4 px-3.5 py-3 rounded-[14px] border border-[var(--line)] bg-[var(--card)] text-xs md:text-sm text-[var(--muted)]">
           শুধুমাত্র সুপার অ্যাডমিন বা সংশ্লিষ্ট অফিসের DDO টি.আর. ফরম নং-২১ সেটআপ পরিবর্তন ও সংরক্ষণ করতে পারবেন। আপনি বর্তমান কনফিগারেশন ও লাইভ প্রিভিউ দেখতে এবং টেস্ট এক্সপোর্ট করতে পারেন।

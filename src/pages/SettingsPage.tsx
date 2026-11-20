@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import {
   AlertTriangle,
   ArrowRight,
+  Check,
   CheckSquare,
   Download,
   Database,
@@ -19,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
+import { useFyOptions } from '../hooks/useFyOptions';
 import { db } from '../lib/firebase';
 import {
   buildEconomicCodesFromExistingData,
@@ -55,11 +57,13 @@ export function SettingsPage() {
     officeSettings,
     language,
     setLanguage,
+    selectedFy,
     setSelectedFy,
     pushToast,
     t,
   } = useApp();
   const { theme, setTheme } = useTheme();
+  const fyOptions = useFyOptions();
 
   const realOfficeId =
     currentOfficeId &&
@@ -89,6 +93,7 @@ export function SettingsPage() {
   const [fiscalYears, setFiscalYears] = useState<string[]>(officeSettings.fiscalYears);
   const [newFyInput, setNewFyInput] = useState('');
   const [saving, setSaving] = useState(false);
+  const [fyAnnouncement, setFyAnnouncement] = useState('');
   const [seeding, setSeeding] = useState(false);
   const [migratingCodes, setMigratingCodes] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -140,12 +145,30 @@ export function SettingsPage() {
     }
   }, [isSuperAdmin, loadTableCounts]);
 
-  useEffect(() => {
+  const resetOfficeForm = useCallback(() => {
     setOfficeName(officeSettings.officeName);
     setAddress(officeSettings.address);
     setActiveFiscalYear(officeSettings.activeFiscalYear);
     setFiscalYears(officeSettings.fiscalYears);
   }, [officeSettings]);
+
+  useEffect(() => {
+    resetOfficeForm();
+  }, [resetOfficeForm]);
+
+  const isDirty = useMemo(() => {
+    const savedSortedFys = [...officeSettings.fiscalYears].sort().join(',');
+    const currentSortedFys = [...fiscalYears].sort().join(',');
+    const nameChanged = isSuperAdmin
+      ? officeName.trim() !== (officeSettings.officeName || '').trim()
+      : false;
+    return (
+      nameChanged ||
+      address.trim() !== (officeSettings.address || '').trim() ||
+      activeFiscalYear !== officeSettings.activeFiscalYear ||
+      currentSortedFys !== savedSortedFys
+    );
+  }, [officeSettings, isSuperAdmin, officeName, address, activeFiscalYear, fiscalYears]);
 
   const handleAddFiscalYear = () => {
     const trimmed = newFyInput.trim();
@@ -482,19 +505,16 @@ export function SettingsPage() {
     }
   };
 
-  const headerActions = canEditOfficeConfig ? (
-    <button
-      type="button"
-      onClick={handleSave}
-      disabled={saving}
-      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold transition-colors disabled:opacity-60 whitespace-nowrap"
-    >
-      {saving ? 'Saving…' : t('saveChanges')}
-    </button>
-  ) : null;
-
   return (
-    <Layout title={t('navSettings')} actions={headerActions}>
+    <Layout
+      title={t('navSettings')}
+      saveBar={{
+        visible: canEditOfficeConfig && isDirty,
+        saving,
+        onSave: handleSave,
+        onDiscard: resetOfficeForm,
+      }}
+    >
       {needsOfficeSetup && isSuperAdmin && (
         <div className="mb-4 md:mb-5 px-3.5 md:px-4 py-3 rounded-[14px] bg-[var(--accent-soft)] text-[var(--accent)] text-sm font-medium">
           Welcome! You are the first administrator. Please fill in your office name and fiscal year below and save, or create offices in the Offices page.
@@ -508,6 +528,52 @@ export function SettingsPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 md:gap-5">
+        {/* Viewing Fiscal Year: available to ALL roles */}
+        <section className="card-surface p-4 md:p-5 space-y-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text)]">
+              {t('viewingFiscalYear')}
+            </h2>
+            <p className="text-xs text-[var(--muted)] mt-1">
+              {t('viewingFiscalYearHelp')}
+            </p>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label={t('viewingFiscalYear')}
+            className="space-y-1.5"
+          >
+            {fyOptions.map((fy) => {
+              const selected = selectedFy === fy;
+              return (
+                <button
+                  key={fy}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => {
+                    setSelectedFy(fy);
+                    setFyAnnouncement(`${t('switchedToFy')} ${fy}`);
+                  }}
+                  className={`min-h-[44px] w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-2 text-sm font-semibold tabular-nums transition-colors ${
+                    selected
+                      ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                      : 'border border-[var(--line)] bg-[var(--card)] text-[var(--text)] hover:bg-[var(--surface-subtle)]'
+                  }`}
+                >
+                  <span>FY {fy}</span>
+                  {selected && <Check className="w-4 h-4 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+
+          <div aria-live="polite" className="text-xs font-medium text-[var(--accent)] min-h-[1rem]">
+            {fyAnnouncement}
+          </div>
+        </section>
+
         {canEditOfficeConfig && (
           <section className="card-surface p-4 md:p-5 space-y-4">
             <h2 className="text-base font-semibold text-[var(--text)]">{t('office')}</h2>
@@ -565,7 +631,9 @@ export function SettingsPage() {
 
         {canEditOfficeConfig && (
           <section className="card-surface p-4 md:p-5 space-y-4">
-            <h2 className="text-base font-semibold text-[var(--text)]">{t('fiscalYear')}</h2>
+            <h2 className="text-base font-semibold text-[var(--text)]">
+              {t('activeFiscalYearOfficeDefault')}
+            </h2>
             <div>
               <label htmlFor="active-fy" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
                 {t('activeFiscalYear')}

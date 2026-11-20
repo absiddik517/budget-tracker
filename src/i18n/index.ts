@@ -129,6 +129,20 @@ const en = {
   accountDisabledBody:
     'Your account has been disabled by the administrator.',
   noDataFound: 'No records match your current filter.',
+  unsavedChanges: 'Unsaved changes',
+  discard: 'Discard',
+  savingLabel: 'Saving…',
+  viewingFiscalYear: 'Viewing fiscal year',
+  viewingFiscalYearHelp:
+    'Dashboard, Budgets, Expenses, and Bills show data for the selected fiscal year.',
+  switchedToFy: 'Switched to FY',
+  activeFiscalYearOfficeDefault: 'Active fiscal year (office default)',
+  readOnlyLabel: 'Read-only',
+  allOfficesReadOnlyDesc: 'Super Admin read-only overview',
+  singleOfficeNotice: 'Your account is assigned to this office.',
+  pendingBillsTile: 'Pending bills',
+  listedExpensesTile: 'Listed expenses',
+  closeLabel: 'Close',
 };
 
 const bn: Record<keyof typeof en, string> = {
@@ -260,6 +274,20 @@ const bn: Record<keyof typeof en, string> = {
   accountDisabledBody:
     'অ্যাডমিনিস্ট্রেটর কর্তৃক আপনার অ্যাকাউন্ট নিষ্ক্রিয় করা হয়েছে।',
   noDataFound: 'বর্তমান ফিল্টারে কোনো তথ্য পাওয়া যায়নি।',
+  unsavedChanges: 'অসংরক্ষিত পরিবর্তন',
+  discard: 'বাতিল',
+  savingLabel: 'সংরক্ষণ হচ্ছে…',
+  viewingFiscalYear: 'প্রদর্শিত অর্থবছর',
+  viewingFiscalYearHelp:
+    'ড্যাশবোর্ড, বাজেট, খরচ তালিকা ও বিলসমূহ নির্বাচিত অর্থবছরের তথ্য অনুযায়ী প্রদর্শিত হয়।',
+  switchedToFy: 'অর্থবছর পরিবর্তিত হয়েছে: FY',
+  activeFiscalYearOfficeDefault: 'সক্রিয় অর্থবছর (অফিস ডিফল্ট)',
+  readOnlyLabel: 'শুধু দেখার জন্য',
+  allOfficesReadOnlyDesc: 'সকল অফিস (সুপার অ্যাডমিন · শুধু দেখার জন্য)',
+  singleOfficeNotice: 'আপনি বর্তমানে শুধুমাত্র এই অফিসের জন্য নির্ধারিত।',
+  pendingBillsTile: 'অপেক্ষমান বিল',
+  listedExpensesTile: 'তালিকাভুক্ত খরচ',
+  closeLabel: 'বন্ধ করুন',
 };
 
 export type TranslationKey = keyof typeof en;
