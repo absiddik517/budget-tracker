@@ -19,6 +19,7 @@ import { Modal } from '../components/Modal';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
@@ -211,6 +212,7 @@ export function ExpenseItemsPage() {
   const [deductionsByCode, setDeductionsByCode] = useState<Record<string, BillDeductionLine[]>>({});
   const [selectedVariantByCode, setSelectedVariantByCode] = useState<Record<string, string>>({});
   const [preparingAction, setPreparingAction] = useState<'draft' | 'submit' | null>(null);
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
 
   // Clear invalid selections if items get billed/deleted
   useEffect(() => {
@@ -840,7 +842,7 @@ export function ExpenseItemsPage() {
     setPrepareOpen(true);
   };
 
-  const handleCreateBills = async (mode: 'draft' | 'submit') => {
+  const handleCreateBills = async (mode: 'draft' | 'submit', submitValues?: SubmitBillFormValues) => {
     if (
       !userDoc ||
       !canDraftBill ||
@@ -869,9 +871,20 @@ export function ExpenseItemsPage() {
       );
       return;
     }
+    if (mode === 'submit' && !submitValues) {
+      setSubmitConfirmOpen(true);
+      return;
+    }
 
     setPreparingAction(mode);
     try {
+      const effectiveDate = submitValues?.billDate || billDate;
+      const effectiveTokenNo =
+        submitValues !== undefined ? submitValues.tokenNo : tokenNoInput.trim();
+      const effectivePayee =
+        submitValues !== undefined ? submitValues.payeeText : payeeTextInput.trim();
+      const effectiveVoucherNo = submitValues?.voucherNo?.trim() || '';
+
       const supplierPayload =
         supplierName.trim() || supplierAddress.trim() || supplierTinBin.trim()
           ? {
@@ -887,11 +900,15 @@ export function ExpenseItemsPage() {
         economicCode: g.economicCode,
         headName: g.headName,
         headNameBn: g.headNameBn,
-        date: billDate,
-        billDate,
-        tokenNo: tokenNoInput.trim(),
-        purposeText: (purposeByCode[g.economicCode] || '').trim(),
-        payeeText: payeeTextInput.trim(),
+        date: effectiveDate,
+        billDate: effectiveDate,
+        voucherNo: effectiveVoucherNo,
+        tokenNo: effectiveTokenNo,
+        purposeText:
+          submitValues !== undefined
+            ? submitValues.purposeText
+            : (purposeByCode[g.economicCode] || '').trim(),
+        payeeText: effectivePayee,
         netPayableCode: netPayableCodeInput.trim() || DEFAULT_NET_PAYABLE_CODE,
         supplier: supplierPayload,
         deductions: g.deductions,
@@ -906,15 +923,30 @@ export function ExpenseItemsPage() {
 
       if (mode === 'submit') {
         const assignedNumbers: string[] = [];
-        for (const billId of createdBillIds) {
-          const res = await submitBillTx(billId, effectiveActor);
-          assignedNumbers.push(res.billNo);
+        try {
+          for (const billId of createdBillIds) {
+            const res = await submitBillTx(billId, effectiveActor, submitValues);
+            assignedNumbers.push(res.billNo);
+          }
+        } catch (submitErr) {
+          setSelectedIds(new Set());
+          setSubmitConfirmOpen(false);
+          setPrepareOpen(false);
+          pushToast(
+            'error',
+            `বিলটি খসড়া হিসেবে তৈরি হয়েছে, কিন্তু জমা দেওয়া যায়নি: ${
+              submitErr instanceof Error ? submitErr.message : 'ত্রুটি ঘটেছে।'
+            }`
+          );
+          navigate('/bills?status=draft');
+          return;
         }
         pushToast(
           'success',
           `${assignedNumbers.length}টি বিল জমা হয়েছে (${assignedNumbers.join(', ')})।`
         );
         setSelectedIds(new Set());
+        setSubmitConfirmOpen(false);
         setPrepareOpen(false);
         navigate('/bills?status=submitted');
       } else {
@@ -1859,7 +1891,7 @@ export function ExpenseItemsPage() {
 
       {/* Bill Preview & Prepare Modal */}
       <Modal
-        open={prepareOpen}
+        open={prepareOpen && !submitConfirmOpen}
         onClose={() => setPrepareOpen(false)}
         title="বিল প্রস্তুত ও প্রিভিউ"
         subtitle={
@@ -2390,6 +2422,33 @@ export function ExpenseItemsPage() {
           })}
         </div>
       </Modal>
+
+      <SubmitBillModal
+        open={submitConfirmOpen && billPreviewGroups.length === 1}
+        onClose={() => {
+          if (preparingAction !== 'submit') {
+            setSubmitConfirmOpen(false);
+          }
+        }}
+        onConfirm={(values) => handleCreateBills('submit', values)}
+        submitting={preparingAction === 'submit'}
+        isOnline={isOnline}
+        fiscalYear={selectedFy}
+        economicCode={billPreviewGroups[0]?.economicCode || ''}
+        headName={billPreviewGroups[0]?.headName || ''}
+        headNameBn={billPreviewGroups[0]?.headNameBn}
+        grossAmount={billPreviewGroups[0]?.grossAmount || 0}
+        netPayable={billPreviewGroups[0]?.netPayable || 0}
+        initialValues={{
+          voucherNo: '',
+          billDate,
+          tokenNo: tokenNoInput,
+          purposeText: billPreviewGroups[0]
+            ? purposeByCode[billPreviewGroups[0].economicCode] || ''
+            : '',
+          payeeText: payeeTextInput,
+        }}
+      />
     </Layout>
   );
 }

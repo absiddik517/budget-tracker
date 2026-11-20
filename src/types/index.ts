@@ -265,6 +265,7 @@ export interface BillDoc extends BaseAuditFields {
   id: string;
   officeId: string;
   billNo: string; // sequential per office+FY on submit e.g. "2025-26/001"
+  voucherNo?: string; // user-entered voucher no. shown in T.R. 21 P1-S2 as "০০১ (২০২৬-২৭)"
   fiscalYear: string;
   economicCode: string;
   headName: string;

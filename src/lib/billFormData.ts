@@ -207,6 +207,32 @@ export function resolveBillPrimaryBudget(params: {
   return sliceBudgets[0] || originalBudgets[0] || codeBudgets[0] || null;
 }
 
+export function formatVoucherNoForTr21(
+  voucherNo?: string | null,
+  billNo?: string | null,
+  fiscalYear?: string | null
+): string {
+  const explicit = (voucherNo || '').trim();
+  const rawBillNo = (billNo || '').trim();
+  const slashIdx = rawBillNo.lastIndexOf('/');
+  const billNoBase = rawBillNo
+    ? slashIdx >= 0
+      ? rawBillNo.slice(slashIdx + 1).trim()
+      : rawBillNo
+    : '';
+  const base = explicit || billNoBase;
+  if (!base) return '';
+
+  const baseBn = toBanglaDigits(base);
+  const fyBn = toBanglaDigits((fiscalYear || '').trim());
+  if (!fyBn) return baseBn;
+
+  if (baseBn.endsWith(`(${fyBn})`) || baseBn.includes(`(${fyBn})`)) {
+    return baseBn;
+  }
+  return `${baseBn} (${fyBn})`;
+}
+
 export function buildTr21FormData(params: {
   bill: BillDoc;
   officeSettings: OfficeSettings;
@@ -270,12 +296,7 @@ export function buildTr21FormData(params: {
   const billDateYmd = bill.billDate || bill.date;
   const billDateShortBn = formatBanglaPlainDate(billDateYmd);
 
-  // Extract sequential suffix from billNo if format is YYYY-YY/NNN, else show full billNo in Bangla
-  const rawBillNo = (bill.billNo || '').trim();
-  const slashIdx = rawBillNo.lastIndexOf('/');
-  const voucherNoBn = rawBillNo
-    ? toBanglaDigits(slashIdx >= 0 ? rawBillNo.slice(slashIdx + 1) : rawBillNo)
-    : '';
+  const voucherNoBn = formatVoucherNoForTr21(bill.voucherNo, bill.billNo, bill.fiscalYear);
 
   const purposeText =
     (bill.purposeText || '').trim() ||

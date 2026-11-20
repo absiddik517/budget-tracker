@@ -13,6 +13,9 @@ interface ModalProps {
   fullScreenOnMobile?: boolean;
 }
 
+let mountedModalCount = 0;
+let savedBodyOverflow = '';
+
 export function Modal({
   open,
   onClose,
@@ -33,10 +36,16 @@ export function Modal({
 
   useEffect(() => {
     if (!mounted) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (mountedModalCount === 0) {
+      savedBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    mountedModalCount += 1;
     return () => {
-      document.body.style.overflow = prevOverflow;
+      mountedModalCount = Math.max(0, mountedModalCount - 1);
+      if (mountedModalCount === 0) {
+        document.body.style.overflow = savedBodyOverflow;
+      }
     };
   }, [mounted]);
 

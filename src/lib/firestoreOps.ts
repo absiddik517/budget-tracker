@@ -787,6 +787,7 @@ export interface DraftBillGroupInput {
   headNameBn?: string;
   date: string;
   billDate?: string;
+  voucherNo?: string;
   tokenNo?: string;
   purposeText?: string;
   tr21P1S3Mode?: Tr21P1S3Mode | null;
@@ -960,6 +961,7 @@ export async function createDraftBillsFromItems(
     const billPayload = {
       officeId,
       billNo: '',
+      voucherNo: (group.voucherNo || '').trim(),
       fiscalYear: group.fiscalYear,
       economicCode: group.economicCode,
       headName: group.headName,
@@ -1040,6 +1042,7 @@ export async function updateDraftBillRates(
   updates: {
     date: string;
     billDate?: string;
+    voucherNo?: string;
     vatVariant: string;
     vatVariantLabel: string;
     vatRate: number;
@@ -1115,6 +1118,7 @@ export async function updateDraftBillRates(
   const patch = {
     date: updates.date,
     billDate: updates.billDate || updates.date,
+    voucherNo: (updates.voucherNo ?? bill.voucherNo ?? '').trim(),
     tokenNo: (updates.tokenNo ?? bill.tokenNo ?? '').trim(),
     purposeText: (updates.purposeText ?? bill.purposeText ?? '').trim(),
     tr21P1S3Mode:
@@ -1239,9 +1243,18 @@ function distributeAmountAcrossBudgets(
   return slices;
 }
 
+export interface SubmitBillDetails {
+  voucherNo?: string;
+  billDate?: string;
+  tokenNo?: string;
+  purposeText?: string;
+  payeeText?: string;
+}
+
 export async function submitBillTx(
   billId: string,
-  actor: AuditActor
+  actor: AuditActor,
+  details?: SubmitBillDetails
 ): Promise<{ billNo: string }> {
   assertOnlineForTransaction('বিল জমা');
 
@@ -1251,6 +1264,10 @@ export async function submitBillTx(
     throw new Error('বিলটি পাওয়া যায়নি।');
   }
   const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const requestedDate = details?.billDate?.trim();
+  if (requestedDate && !isDateInFiscalYear(requestedDate, preBill.fiscalYear)) {
+    throw new Error(`বিলের তারিখ অর্থবছর ${preBill.fiscalYear} এর মধ্যে হতে হবে।`);
+  }
   const officeId = preBill.officeId || '';
 
   const budgetsQuery = officeId
@@ -1305,12 +1322,17 @@ export async function submitBillTx(
         ref: s.ref,
       }));
 
+    const effectiveDate = requestedDate || before.date;
+    if (requestedDate && !isDateInFiscalYear(requestedDate, before.fiscalYear)) {
+      throw new Error(`বিলের তারিখ অর্থবছর ${before.fiscalYear} এর মধ্যে হতে হবে।`);
+    }
+
     const slices = distributeAmountAcrossBudgets(
       freshBudgets,
       before.grossAmount,
       'pending',
       [],
-      before.date
+      effectiveDate
     );
 
     if (!before.billNo) {
@@ -1374,8 +1396,25 @@ export async function submitBillTx(
       amount: s.amount,
     }));
 
+    const nextVoucherNo =
+      details?.voucherNo !== undefined ? details.voucherNo.trim() : (before.voucherNo || '').trim();
+    const nextTokenNo =
+      details?.tokenNo !== undefined ? details.tokenNo.trim() : (before.tokenNo || '').trim();
+    const nextPurposeText =
+      details?.purposeText !== undefined
+        ? details.purposeText.trim()
+        : (before.purposeText || '').trim();
+    const nextPayeeText =
+      details?.payeeText !== undefined ? details.payeeText.trim() : (before.payeeText || '').trim();
+
     const afterFields = {
       billNo: assignedBillNo,
+      voucherNo: nextVoucherNo,
+      date: effectiveDate,
+      billDate: requestedDate || before.billDate || effectiveDate,
+      tokenNo: nextTokenNo,
+      purposeText: nextPurposeText,
+      payeeText: nextPayeeText,
       status: 'submitted' as BillStatus,
       submittedAt: serverTimestamp(),
       submittedBy: actorPayload,
@@ -1886,6 +1925,7 @@ export async function correctApprovedBillTx(
   updates: {
     date: string;
     billDate?: string;
+    voucherNo?: string;
     vatVariant: string;
     vatVariantLabel: string;
     vatRate: number;
@@ -2032,6 +2072,7 @@ export async function correctApprovedBillTx(
     const afterFields = {
       date: updates.date,
       billDate: updates.billDate || updates.date,
+      voucherNo: (updates.voucherNo ?? before.voucherNo ?? '').trim(),
       tokenNo: (updates.tokenNo ?? before.tokenNo ?? '').trim(),
       purposeText: (updates.purposeText ?? before.purposeText ?? '').trim(),
       tr21P1S3Mode:

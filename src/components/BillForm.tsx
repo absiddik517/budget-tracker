@@ -389,27 +389,52 @@ function SectionP1CodeAndVoucher({ data, guided }: { data: Tr21FormData; guided:
           fontSize: fs(11, data.fontSize),
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flex: '1.1' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flex: '0.95' }}>
           <span style={{ whiteSpace: 'nowrap' }}>টোকেন নং:</span>
-          {data.tokenNoBn ? (
-            <span style={{ fontWeight: 600, padding: '0 4px' }}>{data.tokenNoBn}</span>
-          ) : (
-            <span style={{ flex: 1, borderBottom: '1px dotted #000000', height: '12px' }} />
-          )}
+          <span
+            style={{
+              flex: 1,
+              borderBottom: '1px dotted #000000',
+              lineHeight: 1.25,
+              padding: '0 4px 1px',
+              textAlign: 'center',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {data.tokenNoBn || '\u00A0'}
+          </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flex: '0.9' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', flex: '0.75' }}>
           <span style={{ whiteSpace: 'nowrap' }}>তারিখ:</span>
-          <span style={{ flex: 1, borderBottom: '1px dotted #000000', height: '12px' }} />
+          <span
+            style={{
+              flex: 1,
+              borderBottom: '1px dotted #000000',
+              lineHeight: 1.25,
+              paddingBottom: '1px',
+            }}
+          >
+            {'\u00A0'}
+          </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flex: '0.75' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flex: '1.15' }}>
           <span style={{ whiteSpace: 'nowrap' }}>ভাউচার নং:</span>
-          {data.voucherNoBn ? (
-            <span style={{ fontWeight: 600 }}>{data.voucherNoBn}</span>
-          ) : (
-            <span style={{ flex: 1, borderBottom: '1px dotted #000000', height: '12px' }} />
-          )}
+          <span
+            style={{
+              flex: 1,
+              borderBottom: '1px dotted #000000',
+              lineHeight: 1.25,
+              padding: '0 4px 1px',
+              textAlign: 'center',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {data.voucherNoBn || '\u00A0'}
+          </span>
         </div>
 
         <div
@@ -418,11 +443,24 @@ function SectionP1CodeAndVoucher({ data, guided }: { data: Tr21FormData; guided:
             alignItems: 'baseline',
             justifyContent: 'flex-end',
             gap: '6px',
+            flex: '0.9',
             whiteSpace: 'nowrap',
           }}
         >
           <span>তারিখ:</span>
-          <span style={{ fontWeight: 500 }}>{data.billDateShortBn}</span>
+          <span
+            style={{
+              flex: 1,
+              borderBottom: '1px dotted #000000',
+              lineHeight: 1.25,
+              padding: '0 4px 1px',
+              textAlign: 'center',
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {data.billDateShortBn || '\u00A0'}
+          </span>
         </div>
       </div>
     </SectionBox>

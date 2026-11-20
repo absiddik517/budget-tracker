@@ -253,7 +253,7 @@ const NO_BORDERS: ITableCellBorders = {
 
 function bnRun(
   text: string,
-  opts?: { bold?: boolean; size?: number; underline?: boolean; color?: string }
+  opts?: { bold?: boolean; size?: number; underline?: boolean | 'dotted'; color?: string }
 ): TextRun {
   const scaledSize = Math.max(12, Math.round((opts?.size ?? 20) * activeFontScale));
   return new TextRun({
@@ -268,7 +268,12 @@ function bnRun(
     size: scaledSize, // half-points (20 = 10pt)
     bold: opts?.bold,
     color: opts?.color ?? '000000',
-    underline: opts?.underline ? { type: UnderlineType.SINGLE } : undefined,
+    underline:
+      opts?.underline === 'dotted'
+        ? { type: UnderlineType.DOTTED, color: '000000' }
+        : opts?.underline
+        ? { type: UnderlineType.SINGLE }
+        : undefined,
   });
 }
 
@@ -448,32 +453,49 @@ export async function exportTr21Docx(
           children: [
             plainCell(
               [
-                bnPara(`টোকেন নং: ${data.tokenNoBn || '................'}`, {
-                  size: 20,
-                  spaceAfter: 30,
+                new Paragraph({
+                  alignment: AlignmentType.LEFT,
+                  spacing: { before: 0, after: 30, line: 260 },
+                  children: [
+                    bnRun('টোকেন নং: ', { size: 20 }),
+                    data.tokenNoBn
+                      ? bnRun(` ${data.tokenNoBn} `, { size: 20, bold: true, underline: 'dotted' })
+                      : bnRun('................', { size: 20 }),
+                  ],
                 }),
               ],
-              3000
+              2850
             ),
-            plainCell([bnPara('তারিখ: ................', { size: 20, spaceAfter: 30 })], 2500),
+            plainCell([bnPara('তারিখ: ................', { size: 20, spaceAfter: 30 })], 2350),
             plainCell(
               [
-                bnPara(`ভাউচার নং: ${data.voucherNoBn || '..........'}`, {
-                  size: 20,
-                  spaceAfter: 30,
+                new Paragraph({
+                  alignment: AlignmentType.LEFT,
+                  spacing: { before: 0, after: 30, line: 260 },
+                  children: [
+                    bnRun('ভাউচার নং: ', { size: 20 }),
+                    data.voucherNoBn
+                      ? bnRun(` ${data.voucherNoBn} `, { size: 20, bold: true, underline: 'dotted' })
+                      : bnRun('..............', { size: 20 }),
+                  ],
                 }),
               ],
-              2400
+              2900
             ),
             plainCell(
               [
-                bnPara(`তারিখ: ${data.billDateShortBn}`, {
-                  align: AlignmentType.RIGHT,
-                  size: 20,
-                  spaceAfter: 30,
+                new Paragraph({
+                  alignment: AlignmentType.RIGHT,
+                  spacing: { before: 0, after: 30, line: 260 },
+                  children: [
+                    bnRun('তারিখ: ', { size: 20 }),
+                    data.billDateShortBn
+                      ? bnRun(` ${data.billDateShortBn} `, { size: 20, underline: 'dotted' })
+                      : bnRun('..............', { size: 20 }),
+                  ],
                 }),
               ],
-              2800
+              2600
             ),
           ],
         }),

@@ -24,6 +24,7 @@ import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { ActivityList } from '../components/ActivityList';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
+import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
@@ -33,6 +34,7 @@ import { formatActorBrief, formatApprovedByLine, getActorUid } from '../lib/acto
 import {
   buildTr21FormData,
   buildTr21IntroText,
+  formatVoucherNoForTr21,
   resolveBillPrimaryBudget,
   sanitizeBillFileSegment,
 } from '../lib/billFormData';
@@ -191,6 +193,7 @@ export function BillsPage() {
   // Draft editing state
   const [editDraftDate, setEditDraftDate] = useState('');
   const [editDraftVariantKey, setEditDraftVariantKey] = useState('');
+  const [editVoucherNo, setEditVoucherNo] = useState('');
   const [editTokenNo, setEditTokenNo] = useState('');
   const [editPurposeText, setEditPurposeText] = useState('');
   const [editPayeeText, setEditPayeeText] = useState('');
@@ -221,6 +224,7 @@ export function BillsPage() {
 
   // Workflow action state
   const [acting, setActing] = useState(false);
+  const [submitTargetBill, setSubmitTargetBill] = useState<BillDoc | null>(null);
   const [reasonMode, setReasonMode] = useState<'reject' | 'cancel' | null>(null);
   const [reasonText, setReasonText] = useState('');
 
@@ -242,6 +246,7 @@ export function BillsPage() {
     }
     setEditDraftDate(selectedBill.date);
     setEditDraftVariantKey(selectedBill.vatVariant || 'default');
+    setEditVoucherNo(selectedBill.voucherNo || '');
     setEditTokenNo(selectedBill.tokenNo || '');
     setEditPurposeText(selectedBill.purposeText || '');
     setEditPayeeText(selectedBill.payeeText || officeSettings.defaultPayeeText || '');
@@ -296,8 +301,11 @@ export function BillsPage() {
         .map((it) => `${it.description} ${it.responsibleEmployee.name}`)
         .join(' ')
         .toLowerCase();
+      const voucherDisplay = formatVoucherNoForTr21(b.voucherNo, b.billNo, b.fiscalYear).toLowerCase();
       return (
         (b.billNo || '').toLowerCase().includes(q) ||
+        (b.voucherNo || '').toLowerCase().includes(q) ||
+        voucherDisplay.includes(q) ||
         b.economicCode.toLowerCase().includes(q) ||
         head.headName.toLowerCase().includes(q) ||
         head.headNameBn.toLowerCase().includes(q) ||
@@ -538,6 +546,7 @@ export function BillsPage() {
           vatVariantLabel: variant.label,
           vatRate: variant.rate,
           itRate: selectedBillRates.incomeTax,
+          voucherNo: editVoucherNo.trim(),
           tokenNo: editTokenNo.trim(),
           purposeText: editPurposeText.trim(),
           payeeText: editPayeeText.trim(),
@@ -600,6 +609,7 @@ export function BillsPage() {
           vatVariantLabel: variant.label,
           vatRate: variant.rate,
           itRate: selectedBillRates.incomeTax,
+          voucherNo: editVoucherNo.trim(),
           tokenNo: editTokenNo.trim(),
           purposeText: editPurposeText.trim(),
           payeeText: editPayeeText.trim(),
@@ -666,16 +676,36 @@ export function BillsPage() {
     }
   };
 
-  const handleSubmitDraft = async (bill: BillDoc) => {
+  const handleSubmitDraft = (bill: BillDoc) => {
     if (!userDoc || !effectiveActor || !canModifyDraft(bill)) return;
+    if (!isOnline) {
+      pushToast('error', 'বিল জমা দিতে ইন্টারনেট সংযোগ প্রয়োজন।');
+      return;
+    }
+    setSubmitTargetBill(bill);
+  };
+
+  const handleConfirmSubmitBill = async (values: SubmitBillFormValues) => {
+    if (!userDoc || !effectiveActor || !submitTargetBill || !canModifyDraft(submitTargetBill)) {
+      return;
+    }
     if (!isOnline) {
       pushToast('error', 'বিল জমা দিতে ইন্টারনেট সংযোগ প্রয়োজন।');
       return;
     }
     setActing(true);
     try {
-      const res = await submitBillTx(bill.id, effectiveActor);
-      pushToast('success', `বিল নং ${res.billNo} অনুমোদনের জন্য জমা হয়েছে।`);
+      const res = await submitBillTx(submitTargetBill.id, effectiveActor, values);
+      const formattedVoucher = formatVoucherNoForTr21(
+        values.voucherNo,
+        res.billNo,
+        submitTargetBill.fiscalYear
+      );
+      pushToast(
+        'success',
+        `বিল নং ${res.billNo}${formattedVoucher ? ` (ভাউচার: ${formattedVoucher})` : ''} অনুমোদনের জন্য জমা হয়েছে।`
+      );
+      setSubmitTargetBill(null);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'বিল জমা দেওয়া যায়নি।');
     } finally {
@@ -765,6 +795,9 @@ export function BillsPage() {
         const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
         return {
           'Bill No': b.billNo || 'Draft',
+          'Voucher No': b.voucherNo
+            ? formatVoucherNoForTr21(b.voucherNo, null, b.fiscalYear)
+            : '',
           Date: formatDateDisplay(b.date),
           'Economic Code': b.economicCode,
           'ব্যয়ের খাত': head.displayName,
@@ -976,6 +1009,11 @@ export function BillsPage() {
                           <span className="font-bold text-[var(--text)] tabular-nums">
                             {b.billNo || 'খসড়া (Draft)'}
                           </span>
+                          {b.voucherNo && (
+                            <span className="px-1.5 py-0.5 rounded bg-[var(--surface-subtle)] border border-[var(--line)] text-[11px] font-medium text-[var(--text)] bn tabular-nums">
+                              ভাউচার: {formatVoucherNoForTr21(b.voucherNo, null, b.fiscalYear)}
+                            </span>
+                          )}
                           <span className="tabular-nums">· {formatDateDisplay(b.date)}</span>
                           <span>· {b.items.length}টি আইটেম</span>
                         </div>
@@ -1102,7 +1140,14 @@ export function BillsPage() {
                         className="group cursor-pointer hover:bg-[var(--surface-subtle)] transition-colors"
                       >
                         <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-semibold tabular-nums whitespace-nowrap transition-colors">
-                          {b.billNo || <span className="text-[var(--muted)] font-normal">খসড়া</span>}
+                          <div>
+                            {b.billNo || <span className="text-[var(--muted)] font-normal">খসড়া</span>}
+                          </div>
+                          {b.voucherNo && (
+                            <div className="text-[11px] font-normal text-[var(--muted)] bn">
+                              ভাউচার: {formatVoucherNoForTr21(b.voucherNo, null, b.fiscalYear)}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
                           {formatDateDisplay(b.date)}
@@ -1190,7 +1235,7 @@ export function BillsPage() {
 
       {/* Bill Detail & Workflow Modal */}
       <Modal
-        open={Boolean(selectedBill)}
+        open={Boolean(selectedBill) && !submitTargetBill}
         onClose={() => setSelectedBillId(null)}
         title={
           selectedBill
@@ -1201,7 +1246,7 @@ export function BillsPage() {
         }
         subtitle={
           selectedBill
-            ? `${selectedBill.economicCode} · ${formatDateDisplay(selectedBill.date)}`
+            ? `${selectedBill.voucherNo ? `ভাউচার নং ${formatVoucherNoForTr21(selectedBill.voucherNo, null, selectedBill.fiscalYear)} · ` : ''}${selectedBill.economicCode} · ${formatDateDisplay(selectedBill.date)}`
             : ''
         }
         fullScreenOnMobile
@@ -1361,13 +1406,25 @@ export function BillsPage() {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
                     <label className="block text-[11px] text-[var(--muted)] mb-1">তারিখ</label>
                     <input
                       type="date"
                       value={editDraftDate}
                       onChange={(e) => setEditDraftDate(e.target.value)}
+                      className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-[var(--muted)] mb-1">
+                      ভাউচার নং (ঐচ্ছিক)
+                    </label>
+                    <input
+                      type="text"
+                      value={editVoucherNo}
+                      onChange={(e) => setEditVoucherNo(e.target.value)}
+                      placeholder="যেমন: ০০১"
                       className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs tabular-nums"
                     />
                   </div>
@@ -2046,6 +2103,54 @@ export function BillsPage() {
           </div>
         )}
       </Modal>
+
+      <SubmitBillModal
+        open={Boolean(submitTargetBill)}
+        onClose={() => {
+          if (!acting) setSubmitTargetBill(null);
+        }}
+        onConfirm={handleConfirmSubmitBill}
+        submitting={acting}
+        isOnline={isOnline}
+        fiscalYear={submitTargetBill?.fiscalYear || selectedFy}
+        economicCode={submitTargetBill?.economicCode || ''}
+        headName={submitTargetBill?.headName || ''}
+        headNameBn={submitTargetBill?.headNameBn}
+        grossAmount={submitTargetBill?.grossAmount || 0}
+        netPayable={submitTargetBill?.netPayable || 0}
+        initialValues={
+          submitTargetBill
+            ? {
+                voucherNo:
+                  selectedBill?.id === submitTargetBill.id
+                    ? editVoucherNo || submitTargetBill.voucherNo || ''
+                    : submitTargetBill.voucherNo || '',
+                billDate:
+                  selectedBill?.id === submitTargetBill.id
+                    ? editDraftDate || submitTargetBill.billDate || submitTargetBill.date
+                    : submitTargetBill.billDate || submitTargetBill.date,
+                tokenNo:
+                  selectedBill?.id === submitTargetBill.id
+                    ? editTokenNo
+                    : submitTargetBill.tokenNo || '',
+                purposeText:
+                  selectedBill?.id === submitTargetBill.id
+                    ? editPurposeText
+                    : submitTargetBill.purposeText || '',
+                payeeText:
+                  selectedBill?.id === submitTargetBill.id
+                    ? editPayeeText
+                    : submitTargetBill.payeeText || officeSettings.defaultPayeeText || '',
+              }
+            : {
+                voucherNo: '',
+                billDate: '',
+                tokenNo: '',
+                purposeText: '',
+                payeeText: '',
+              }
+        }
+      />
 
       <BillFormPreviewModal
         open={Boolean(tr21Bill && tr21FormData)}
