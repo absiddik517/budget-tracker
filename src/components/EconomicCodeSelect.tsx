@@ -138,9 +138,13 @@ export function EconomicCodeSelect({
     });
   }, [baseOptions, search]);
 
+  const latestSelectionRef = useRef({ value, filteredOptions });
+  latestSelectionRef.current = { value, filteredOptions };
+
   useEffect(() => {
     if (open) {
-      const idx = filteredOptions.findIndex((o) => o.code === value);
+      const { value: curVal, filteredOptions: curOpts } = latestSelectionRef.current;
+      const idx = curOpts.findIndex((o) => o.code === curVal);
       setActiveIndex(idx >= 0 ? idx : 0);
       requestAnimationFrame(() => {
         searchInputRef.current?.focus();
@@ -148,7 +152,7 @@ export function EconomicCodeSelect({
     } else {
       setSearch('');
     }
-  }, [open, value]); // intentionally only reset on open toggle
+  }, [open]);
 
   useEffect(() => {
     if (activeIndex >= filteredOptions.length) {
@@ -445,7 +449,7 @@ export function EconomicCodeSelect({
           role="presentation"
         >
           <div className="fixed inset-0" onClick={() => setOpen(false)} />
-          <div className="relative z-10 w-full max-h-[85dvh] flex flex-col bg-[var(--card)] border-t border-[var(--line)] rounded-t-[16px] overflow-hidden safe-bottom">
+          <div className="relative z-10 w-full max-h-[88%] flex flex-col bg-[var(--card)] border-t border-[var(--line)] rounded-t-[16px] overflow-hidden safe-bottom">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--line)] shrink-0">
               <span className="text-sm font-semibold text-[var(--text)] truncate">
                 {label || 'Economic code'}

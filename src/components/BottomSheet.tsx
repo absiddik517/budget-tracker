@@ -33,6 +33,8 @@ export function BottomSheet({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!mounted) return;
@@ -49,6 +51,8 @@ export function BottomSheet({
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const raf = window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active && panelRef.current?.contains(active)) return;
       if (closeBtnRef.current) {
         closeBtnRef.current.focus({ preventScroll: true });
       } else {
@@ -59,7 +63,7 @@ export function BottomSheet({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -67,7 +71,7 @@ export function BottomSheet({
       window.cancelAnimationFrame(raf);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (mounted) return;
@@ -84,8 +88,8 @@ export function BottomSheet({
     : 'lg:hidden fixed inset-0 z-50 flex items-end justify-center overscroll-contain no-print';
 
   const panelSizeClass = desktopCenter
-    ? `w-full ${maxWidthClass} max-h-[88dvh] rounded-t-[16px] md:rounded-[16px] border-t md:border border-[var(--line)]`
-    : 'w-full max-h-[88dvh] rounded-t-[16px] border-t border-[var(--line)]';
+    ? `w-full ${maxWidthClass} max-h-[88%] md:max-h-[88dvh] rounded-t-[16px] md:rounded-[16px] border-t md:border border-[var(--line)]`
+    : 'w-full max-h-[88%] rounded-t-[16px] border-t border-[var(--line)]';
 
   const panelTransitionClass = desktopCenter
     ? visible
@@ -104,7 +108,7 @@ export function BottomSheet({
       aria-label={!title ? ariaLabel : undefined}
     >
       <div
-        className={`fixed inset-0 bg-black/50 backdrop-blur-[1px] transition-opacity duration-200 motion-reduce:transition-none ${
+        className={`fixed inset-0 bg-black/50 transition-opacity duration-200 motion-reduce:transition-none ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}

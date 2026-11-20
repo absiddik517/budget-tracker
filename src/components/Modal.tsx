@@ -28,6 +28,8 @@ export function Modal({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!mounted) return;
@@ -44,6 +46,8 @@ export function Modal({
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const raf = window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active && panelRef.current?.contains(active)) return;
       if (closeBtnRef.current) {
         closeBtnRef.current.focus({ preventScroll: true });
       } else {
@@ -52,14 +56,14 @@ export function Modal({
     });
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => {
       window.cancelAnimationFrame(raf);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => {
     if (mounted) return;
@@ -72,8 +76,8 @@ export function Modal({
   if (!mounted) return null;
 
   const containerSizeClass = fullScreenOnMobile
-    ? `w-full h-dvh md:h-auto md:max-h-[88dvh] ${maxWidthClass} rounded-none md:rounded-[14px] border-0 md:border`
-    : `w-[calc(100vw-1rem)] max-w-md md:w-full ${maxWidthClass} max-h-[88dvh] rounded-t-2xl md:rounded-[14px] border border-b-0 md:border-b`;
+    ? `w-full h-full md:h-auto md:max-h-[88dvh] ${maxWidthClass} rounded-none md:rounded-[14px] border-0 md:border`
+    : `w-[calc(100vw-1rem)] max-w-md md:w-full ${maxWidthClass} max-h-[88%] md:max-h-[88dvh] rounded-t-2xl md:rounded-[14px] border border-b-0 md:border-b`;
 
   return (
     <div
@@ -85,7 +89,7 @@ export function Modal({
       aria-labelledby={titleId}
     >
       <div
-        className={`fixed inset-0 bg-black/50 backdrop-blur-[1px] transition-opacity duration-200 motion-reduce:transition-none ${
+        className={`fixed inset-0 bg-black/50 transition-opacity duration-200 motion-reduce:transition-none ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}
