@@ -1,6 +1,7 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Send } from 'lucide-react';
-import { Modal } from './Modal';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Send } from 'lucide-react';
+import { Modal, ModalFooter } from './Modal';
+import { Banner, Field, Section, TextInput, focusFirstInvalidField } from './form';
 import { formatTaka } from '../lib/money';
 import { formatVoucherNoForTr21 } from '../lib/billFormData';
 import { isDateInFiscalYear } from '../lib/fy';
@@ -43,11 +44,14 @@ export function SubmitBillModal({
   initialValues,
 }: SubmitBillModalProps) {
   const formId = useId();
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [voucherNo, setVoucherNo] = useState(initialValues.voucherNo);
   const [billDate, setBillDate] = useState(initialValues.billDate);
   const [tokenNo, setTokenNo] = useState(initialValues.tokenNo);
   const [purposeText, setPurposeText] = useState(initialValues.purposeText);
   const [payeeText, setPayeeText] = useState(initialValues.payeeText);
+  const [voucherError, setVoucherError] = useState('');
+  const [dateError, setDateError] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const initialValuesRef = useRef(initialValues);
@@ -61,8 +65,21 @@ export function SubmitBillModal({
     setTokenNo(init.tokenNo);
     setPurposeText(init.purposeText);
     setPayeeText(init.payeeText);
+    setVoucherError('');
+    setDateError('');
     setErrorMsg('');
   }, [open]);
+
+  const isDirty = useMemo(() => {
+    const init = initialValuesRef.current;
+    return (
+      voucherNo !== init.voucherNo ||
+      billDate !== init.billDate ||
+      tokenNo !== init.tokenNo ||
+      purposeText !== init.purposeText ||
+      payeeText !== init.payeeText
+    );
+  }, [voucherNo, billDate, tokenNo, purposeText, payeeText]);
 
   const previewVoucherBn = formatVoucherNoForTr21(voucherNo, null, fiscalYear);
   const exampleVoucherBn = formatVoucherNoForTr21('001', null, fiscalYear);
@@ -76,13 +93,23 @@ export function SubmitBillModal({
     }
     const cleanVoucher = voucherNo.trim();
     if (!cleanVoucher) {
-      setErrorMsg('ভাউচার নং প্রদান করা আবশ্যক।');
+      const msg = 'ভাউচার নং প্রদান করা আবশ্যক।';
+      setVoucherError(msg);
+      setDateError('');
+      setErrorMsg(msg);
+      window.requestAnimationFrame(() => focusFirstInvalidField(formRef.current));
       return;
     }
     if (!billDate || !isDateInFiscalYear(billDate, fiscalYear)) {
-      setErrorMsg(`বিলের তারিখ অর্থবছর ${fiscalYear} এর মধ্যে হতে হবে।`);
+      const msg = `বিলের তারিখ অর্থবছর ${fiscalYear} এর মধ্যে হতে হবে।`;
+      setVoucherError('');
+      setDateError(msg);
+      setErrorMsg(msg);
+      window.requestAnimationFrame(() => focusFirstInvalidField(formRef.current));
       return;
     }
+    setVoucherError('');
+    setDateError('');
     setErrorMsg('');
     await onConfirm({
       voucherNo: cleanVoucher,
@@ -98,62 +125,66 @@ export function SubmitBillModal({
       open={open}
       onClose={onClose}
       title="বিল জমা দেওয়ার তথ্য"
-      subtitle="অনুমোদনের জন্য বিল জমা দেওয়ার আগে নিচের তথ্যগুলো যাচাই ও পূরণ করুন"
-      maxWidthClass="md:max-w-lg"
+      subtitle={`মোট ${formatTaka(grossAmount)} · নিট প্রদেয় ${formatTaka(netPayable)} · অনুমোদনের জন্য জমা দেওয়ার আগে তথ্য যাচাই করুন`}
+      size="md"
+      confirmClose={isDirty && !submitting}
       footer={
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={onClose}
-            className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm font-medium disabled:opacity-60"
-          >
-            বাতিল
-          </button>
-          <button
-            type="submit"
-            form={formId}
-            disabled={submitting || !isOnline}
-            className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-60"
-          >
-            <Send className="w-4 h-4" />
-            <span>{submitting ? 'জমা হচ্ছে…' : 'জমা নিশ্চিত করুন'}</span>
-          </button>
-        </div>
+        <ModalFooter
+          loading={submitting}
+          secondary={{
+            label: 'বাতিল',
+            onClick: onClose,
+            disabled: submitting,
+          }}
+          primary={{
+            label: submitting ? 'জমা হচ্ছে…' : 'জমা নিশ্চিত করুন',
+            type: 'submit',
+            form: formId,
+            disabled: !isOnline,
+            icon: <Send className="w-4 h-4 shrink-0" aria-hidden="true" />,
+          }}
+        />
       }
     >
-      <form id={formId} onSubmit={handleSubmit} className="space-y-4">
-        {/* Bill Summary */}
-        <div className="p-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] text-xs space-y-1">
-          <div className="font-semibold text-[var(--text)] bn">
-            <span className="tabular-nums text-[var(--accent)]">{economicCode}</span> ·{' '}
-            {headNameBn || headName}
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--muted)] tabular-nums">
-            <span>অর্থবছর: {fiscalYear}</span>
-            <span>
-              মোট: <strong className="text-[var(--text)]">{formatTaka(grossAmount)}</strong> · নিট প্রদেয়:{' '}
-              <strong className="text-[var(--accent)]">{formatTaka(netPayable)}</strong>
-            </span>
-          </div>
-        </div>
+      <form ref={formRef} id={formId} onSubmit={handleSubmit} noValidate className="space-y-4">
+        <Banner variant={isOnline ? 'info' : 'warn'}>
+          বিল জমা দিতে ইন্টারনেট সংযোগ প্রয়োজন।
+        </Banner>
 
-        {/* 1. Voucher No (Required) */}
-        <div>
-          <label className="block text-xs font-semibold text-[var(--text)] mb-1">
-            ভাউচার নং <span className="text-[var(--danger-text)]">*</span>
-          </label>
-          <input
-            type="text"
-            value={voucherNo}
-            onChange={(e) => {
-              setVoucherNo(e.target.value);
-              if (errorMsg) setErrorMsg('');
-            }}
-            placeholder="যেমন: 001 বা ০০১"
-            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
-          />
-          <div className="mt-1.5 px-2.5 py-1.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)] text-xs flex items-center justify-between gap-2">
+        {/* Bill Summary */}
+        <Section>
+          <div className="text-xs space-y-1">
+            <div className="font-semibold text-[var(--text)] bn">
+              <span className="tabular-nums text-[var(--accent)]">{economicCode}</span> ·{' '}
+              {headNameBn || headName}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--muted)] tabular-nums">
+              <span>অর্থবছর: {fiscalYear}</span>
+              <span>
+                মোট: <strong className="text-[var(--text)]">{formatTaka(grossAmount)}</strong> · নিট প্রদেয়:{' '}
+                <strong className="text-[var(--accent)]">{formatTaka(netPayable)}</strong>
+              </span>
+            </div>
+          </div>
+        </Section>
+
+        {/* 1. Voucher No (Required) + P1-S2 Preview Box */}
+        <div className="space-y-2">
+          <Field label="ভাউচার নং" required error={voucherError || undefined}>
+            <TextInput
+              type="text"
+              value={voucherNo}
+              onChange={(e) => {
+                setVoucherNo(e.target.value);
+                if (voucherError) setVoucherError('');
+                if (errorMsg) setErrorMsg('');
+              }}
+              placeholder="যেমন: 001 বা ০০১"
+              className="tabular-nums"
+            />
+          </Field>
+
+          <div className="p-3 rounded-xl bg-[var(--bg)] border border-dashed border-[var(--line)] text-[13px] flex flex-wrap items-center justify-between gap-2">
             <span className="text-[var(--muted)]">টি.আর. ২১ (P1-S2) প্রিভিউ:</span>
             <span
               className={`font-semibold bn tabular-nums ${
@@ -167,75 +198,57 @@ export function SubmitBillModal({
 
         {/* 2. Bill Date & Token No */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              বিলের তারিখ (FY {fiscalYear})
-            </label>
-            <input
+          <Field
+            label={`বিলের তারিখ (FY ${fiscalYear})`}
+            required
+            error={dateError || undefined}
+          >
+            <TextInput
               type="date"
               value={billDate}
               onChange={(e) => {
                 setBillDate(e.target.value);
+                if (dateError) setDateError('');
                 if (errorMsg) setErrorMsg('');
               }}
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+              className="tabular-nums"
             />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              টোকেন নং (ঐচ্ছিক)
-            </label>
-            <input
+          </Field>
+
+          <Field label="টোকেন নং (ঐচ্ছিক)">
+            <TextInput
               type="text"
               value={tokenNo}
               onChange={(e) => setTokenNo(e.target.value)}
               placeholder="যেমন: ১২৩"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+              className="tabular-nums"
             />
-          </div>
+          </Field>
         </div>
 
         {/* 3. Purpose Text */}
-        <div>
-          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-            ব্যয়ের উদ্দেশ্য / বিবরণ (টি.আর. ২১)
-          </label>
-          <input
+        <Field label="ব্যয়ের উদ্দেশ্য / বিবরণ (টি.আর. ২১)">
+          <TextInput
             type="text"
             value={purposeText}
             onChange={(e) => setPurposeText(e.target.value)}
             placeholder={`${headNameBn || headName} বাবদ ব্যয়ের বিল।`}
-            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
+            className="bn"
           />
-        </div>
+        </Field>
 
         {/* 4. Payee Text */}
-        <div>
-          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-            যার নামে চেক ইস্যু করা হবে (টি.আর. ২১ ধারা ১২)
-          </label>
-          <input
+        <Field label="যার নামে চেক ইস্যু করা হবে (টি.আর. ২১ ধারা ১২)">
+          <TextInput
             type="text"
             value={payeeText}
             onChange={(e) => setPayeeText(e.target.value)}
             placeholder="সহকারী পরিচালক, জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো..."
-            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
+            className="bn"
           />
-        </div>
+        </Field>
 
-        {!isOnline && (
-          <div className="p-2.5 rounded-lg bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>বিল জমা দিতে ইন্টারনেট সংযোগ প্রয়োজন।</span>
-          </div>
-        )}
-
-        {errorMsg && (
-          <div className="p-2.5 rounded-lg bg-[var(--danger-bg)] text-[var(--danger-text)] text-xs font-semibold flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
+        {errorMsg && <Banner variant="danger">{errorMsg}</Banner>}
       </form>
     </Modal>
   );

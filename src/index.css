@@ -39,6 +39,7 @@
   --text: #14201D;
   --muted: #55655F;
   --line: #DDE5E1;
+  --border-strong: #7A8B85;
   --accent: #0F766E;
   --accent-hover: #0D655E;
   --accent-soft: #E4F1EE;
@@ -47,7 +48,10 @@
   --warn-text: #7A4B00;
   --danger-bg: #FDE8E8;
   --danger-text: #9B1C1C;
+  --danger-solid: #B42318;
+  --on-danger: #FFFFFF;
   --surface-subtle: #EDF2EF;
+  --backdrop: rgba(10, 16, 14, 0.56);
 }
 
 .dark {
@@ -56,6 +60,7 @@
   --text: #E6EEEB;
   --muted: #9DB0A9;
   --line: #26332F;
+  --border-strong: #667B74;
   --accent: #2DD4BF;
   --accent-hover: #5EEAD4;
   --accent-soft: #1D2E2A;
@@ -64,7 +69,16 @@
   --warn-text: #F5D58A;
   --danger-bg: #3B1A1A;
   --danger-text: #FCA5A5;
+  --danger-solid: #F87171;
+  --on-danger: #2A0A0A;
   --surface-subtle: #1B2723;
+  --backdrop: rgba(4, 8, 7, 0.72);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 *,
@@ -114,15 +128,17 @@ body {
   }
 }
 
-.bn {
-  font-family: Nikosh, 'Noto Sans Bengali', sans-serif;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.65;
-  padding-top: 1px;
-  padding-bottom: 1px;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+@layer components {
+  .bn {
+    font-family: Nikosh, 'Noto Sans Bengali', sans-serif;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.65;
+    padding-top: 1px;
+    padding-bottom: 1px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }
 
 .tabular-nums {

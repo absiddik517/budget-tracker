@@ -17,9 +17,10 @@ import {
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { BillForm, TR21_FORM_SECTIONS } from '../components/BillForm';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { SegmentedChips } from '../components/SegmentedChips';
+import { Field, Segmented, Select, TextInput, Textarea, Toggle, focusFirstInvalidField } from '../components/form';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { toBanglaDigits } from '../lib/banglaFormat';
@@ -257,6 +258,12 @@ export function Tr21SetupPage() {
   const [rangeTo, setRangeTo] = useState<number>(4);
   const [rangePage, setRangePage] = useState<1 | 2>(1);
   const [clauseModal, setClauseModal] = useState<ClauseModalState | null>(null);
+  const [clauseInitial, setClauseInitial] = useState<Pick<
+    ClauseModalState,
+    'numberBn' | 'page' | 'enabled' | 'text'
+  > | null>(null);
+  const [clauseTextError, setClauseTextError] = useState('');
+  const clauseFormRef = useRef<HTMLFormElement>(null);
   const [confirmDeleteClause, setConfirmDeleteClause] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>('setup');
   const [previewSourceId, setPreviewSourceId] = useState<'sample' | string>('sample');
@@ -750,13 +757,22 @@ export function Tr21SetupPage() {
 
   const openCreateClauseModal = () => {
     if (!canEditTr21) return;
+    const defaultNum = toBanglaDigits(tr21Clauses.length + 1);
+    const defaultPage: 1 | 2 = clauseFilter === 'page1' ? 1 : 2;
     setConfirmDeleteClause(false);
+    setClauseTextError('');
+    setClauseInitial({
+      numberBn: defaultNum,
+      page: defaultPage,
+      enabled: true,
+      text: '',
+    });
     setClauseModal({
       mode: 'create',
       index: null,
       id: `clause-${Date.now()}`,
-      numberBn: toBanglaDigits(tr21Clauses.length + 1),
-      page: clauseFilter === 'page1' ? 1 : 2,
+      numberBn: defaultNum,
+      page: defaultPage,
       enabled: true,
       text: '',
     });
@@ -764,6 +780,13 @@ export function Tr21SetupPage() {
 
   const openEditClauseModal = (clause: CertificationClause, index: number) => {
     setConfirmDeleteClause(false);
+    setClauseTextError('');
+    setClauseInitial({
+      numberBn: clause.numberBn,
+      page: clause.page,
+      enabled: clause.enabled,
+      text: clause.text,
+    });
     setClauseModal({
       mode: 'edit',
       index,
@@ -777,16 +800,31 @@ export function Tr21SetupPage() {
 
   const closeClauseModal = () => {
     setClauseModal(null);
+    setClauseInitial(null);
+    setClauseTextError('');
     setConfirmDeleteClause(false);
   };
+
+  const isClauseModalDirty = useMemo(() => {
+    if (!clauseModal || !clauseInitial || !canEditTr21) return false;
+    return (
+      clauseModal.numberBn !== clauseInitial.numberBn ||
+      clauseModal.page !== clauseInitial.page ||
+      clauseModal.enabled !== clauseInitial.enabled ||
+      clauseModal.text !== clauseInitial.text
+    );
+  }, [clauseModal, clauseInitial, canEditTr21]);
 
   const handleSaveClauseModal = () => {
     if (!canEditTr21 || !clauseModal) return;
     const cleanText = clauseModal.text.trim();
     if (!cleanText) {
+      setClauseTextError('ধারার বিবরণ লিখুন।');
       pushToast('error', 'ধারার বিবরণ লিখুন।');
+      requestAnimationFrame(() => focusFirstInvalidField(clauseFormRef.current));
       return;
     }
+    setClauseTextError('');
     const cleanNum =
       clauseModal.numberBn.trim() ||
       toBanglaDigits(
@@ -1251,19 +1289,21 @@ export function Tr21SetupPage() {
                 >
                   ফর্মের ফন্ট
                 </label>
-                <select
+                <Select
                   id="tr21-font-family"
+                  modalTitle="ফর্মের ফন্ট নির্বাচন করুন"
+                  searchable={false}
+                  clearable={false}
                   disabled={!canEditTr21}
                   value={tr21FontFamily}
                   onChange={(e) => setTr21FontFamily(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
                 >
                   {TR21_FONT_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
                       {opt.label}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               <div>
@@ -1273,19 +1313,21 @@ export function Tr21SetupPage() {
                 >
                   ফন্ট সাইজ
                 </label>
-                <select
+                <Select
                   id="tr21-font-size"
+                  modalTitle="ফন্ট সাইজ নির্বাচন করুন"
+                  searchable={false}
+                  clearable={false}
                   disabled={!canEditTr21}
-                  value={tr21FontSize}
+                  value={String(tr21FontSize)}
                   onChange={(e) => setTr21FontSize(resolveTr21FontSize(Number(e.target.value)))}
-                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
                 >
                   {TR21_FONT_SIZE_OPTIONS.map((sz) => (
                     <option key={sz} value={sz}>
                       {toBanglaDigits(sz)} px{sz === DEFAULT_TR21_FONT_SIZE ? ' (ডিফল্ট)' : ''}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 
@@ -1389,14 +1431,16 @@ export function Tr21SetupPage() {
                   >
                     পাতা ১-এ কত নম্বর ধারা পর্যন্ত থাকবে
                   </label>
-                  <select
+                  <Select
                     id="tr21-quick-split"
-                    value={clauseStats.contiguousSplitEnd}
+                    modalTitle="পাতা ১-এ কত নম্বর ধারা পর্যন্ত থাকবে"
+                    searchable={false}
+                    clearable={false}
+                    value={String(clauseStats.contiguousSplitEnd)}
                     onChange={(e) => {
                       const val = Number(e.target.value);
                       if (val >= 0) handleQuickPageSplit(val);
                     }}
-                    className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                   >
                     {clauseStats.contiguousSplitEnd === -1 && (
                       <option value={-1}>কাস্টম বিন্যাস</option>
@@ -1407,7 +1451,7 @@ export function Tr21SetupPage() {
                         {toBanglaDigits(idx + 1)} নম্বর ধারা পর্যন্ত (বাকি পাতা ২-এ)
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
 
                 {/* Expandable Range assignment */}
@@ -1416,49 +1460,64 @@ export function Tr21SetupPage() {
                     কাস্টম রেঞ্জ দিয়ে পাতা নির্ধারণ
                   </summary>
                   <div className="pb-2.5 pt-1 flex flex-wrap items-center gap-2 text-xs">
-                    <select
-                      aria-label="শুরু ধারা"
-                      value={rangeFrom}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setRangeFrom(v);
-                        if (v > rangeTo) setRangeTo(v);
-                      }}
-                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
-                    >
-                      {tr21Clauses.map((c, idx) => (
-                        <option key={c.id} value={idx + 1}>
-                          ধারা {c.numberBn}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="min-w-[100px]">
+                      <Select
+                        variant="compact"
+                        modalTitle="শুরু ধারা"
+                        aria-label="শুরু ধারা"
+                        searchable={false}
+                        clearable={false}
+                        value={String(rangeFrom)}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          setRangeFrom(v);
+                          if (v > rangeTo) setRangeTo(v);
+                        }}
+                      >
+                        {tr21Clauses.map((c, idx) => (
+                          <option key={c.id} value={idx + 1}>
+                            ধারা {c.numberBn}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
                     <span className="text-[var(--muted)]">থেকে</span>
-                    <select
-                      aria-label="শেষ ধারা"
-                      value={rangeTo}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setRangeTo(v);
-                        if (v < rangeFrom) setRangeFrom(v);
-                      }}
-                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
-                    >
-                      {tr21Clauses.map((c, idx) => (
-                        <option key={c.id} value={idx + 1}>
-                          ধারা {c.numberBn}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="min-w-[100px]">
+                      <Select
+                        variant="compact"
+                        modalTitle="শেষ ধারা"
+                        aria-label="শেষ ধারা"
+                        searchable={false}
+                        clearable={false}
+                        value={String(rangeTo)}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          setRangeTo(v);
+                          if (v < rangeFrom) setRangeFrom(v);
+                        }}
+                      >
+                        {tr21Clauses.map((c, idx) => (
+                          <option key={c.id} value={idx + 1}>
+                            ধারা {c.numberBn}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
                     <span className="text-[var(--muted)]">→</span>
-                    <select
-                      aria-label="গন্তব্য পাতা"
-                      value={rangePage}
-                      onChange={(e) => setRangePage(Number(e.target.value) === 2 ? 2 : 1)}
-                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
-                    >
-                      <option value={1}>পাতা ১ (P1-S5)</option>
-                      <option value={2}>পাতা ২ (P2-S1)</option>
-                    </select>
+                    <div className="min-w-[130px]">
+                      <Select
+                        variant="compact"
+                        modalTitle="গন্তব্য পাতা"
+                        aria-label="গন্তব্য পাতা"
+                        searchable={false}
+                        clearable={false}
+                        value={String(rangePage)}
+                        onChange={(e) => setRangePage(Number(e.target.value) === 2 ? 2 : 1)}
+                      >
+                        <option value={1}>পাতা ১ (P1-S5)</option>
+                        <option value={2}>পাতা ২ (P2-S1)</option>
+                      </Select>
+                    </div>
                     <button
                       type="button"
                       onClick={handleApplyRange}
@@ -1648,19 +1707,26 @@ export function Tr21SetupPage() {
               <label htmlFor="tr21-preview-source" className="sr-only">
                 প্রিভিউ ডেটা সোর্স
               </label>
-              <select
-                id="tr21-preview-source"
-                value={previewSourceId}
-                onChange={(e) => setPreviewSourceId(e.target.value)}
-                className="flex-1 min-w-[160px] min-h-[42px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              >
-                <option value="sample">নমুনা বিল (টেমপ্লেট)</option>
-                {fyBills.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.billNo ? `বিল ${b.billNo}` : `খসড়া (${b.economicCode})`} · {b.date}
-                  </option>
-                ))}
-              </select>
+              <div className="flex-1 min-w-[180px]">
+                <Select
+                  id="tr21-preview-source"
+                  variant="compact"
+                  modalTitle="প্রিভিউ ডেটা সোর্স নির্বাচন করুন"
+                  clearable={false}
+                  value={previewSourceId}
+                  onChange={(e) => setPreviewSourceId(e.target.value)}
+                  options={[
+                    { value: 'sample', label: 'নমুনা বিল (টেমপ্লেট)' },
+                    ...fyBills.map((b) => ({
+                      value: b.id,
+                      label: b.billNo ? `বিল ${b.billNo}` : `খসড়া (${b.economicCode})`,
+                      subtitle: `কোড: ${b.economicCode}`,
+                      metaRight: b.date,
+                      keywords: `${b.billNo || ''} ${b.economicCode} ${b.date}`,
+                    })),
+                  ]}
+                />
+              </div>
 
               {previewSourceId === 'sample' && (
                 <div
@@ -1828,61 +1894,60 @@ export function Tr21SetupPage() {
             ? `পাতা ${clauseModal.page === 1 ? '১ (P1-S5)' : '২ (P2-S1)'} · টি.আর. ফরম নং-২১`
             : undefined
         }
-        maxWidthClass="md:max-w-xl"
+        size="md"
+        fullScreenOnMobile
+        confirmClose={isClauseModalDirty}
         footer={
           clauseModal && (
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                {canEditTr21 && clauseModal.mode === 'edit' && tr21Clauses.length > 1 && (
+            <ModalFooter
+              extra={
+                canEditTr21 && clauseModal.mode === 'edit' && tr21Clauses.length > 1 ? (
                   <button
                     type="button"
                     onClick={handleDeleteClauseFromModal}
-                    className={`min-h-[42px] px-3.5 rounded-[10px] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                    className={`min-h-[44px] px-3.5 rounded-xl text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                       confirmDeleteClause
-                        ? 'bg-red-600 text-white hover:bg-red-700'
-                        : 'border border-[var(--line)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)]'
+                        ? 'bg-[var(--danger-solid)] text-[var(--on-danger)] hover:opacity-90'
+                        : 'border border-[var(--border-strong)] bg-[var(--card)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40'
                     }`}
                   >
-                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                    <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
                     <span>{confirmDeleteClause ? 'নিশ্চিত মুছুন' : 'মুছে ফেলুন'}</span>
                   </button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={closeClauseModal}
-                  className="min-h-[42px] px-4 rounded-[10px] border border-[var(--line)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)]"
-                >
-                  {canEditTr21 ? 'বাতিল' : 'বন্ধ করুন'}
-                </button>
-                {canEditTr21 && (
-                  <button
-                    type="button"
-                    onClick={handleSaveClauseModal}
-                    className="min-h-[42px] px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5"
-                  >
-                    <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>{clauseModal.mode === 'create' ? 'যোগ করুন' : 'প্রয়োগ করুন'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
+                ) : undefined
+              }
+              secondary={{
+                label: canEditTr21 ? 'বাতিল' : 'বন্ধ করুন',
+                onClick: closeClauseModal,
+              }}
+              primary={
+                canEditTr21
+                  ? {
+                      label: clauseModal.mode === 'create' ? 'যোগ করুন' : 'প্রয়োগ করুন',
+                      type: 'submit',
+                      form: 'tr21-clause-form',
+                      icon: <Check className="w-4 h-4 shrink-0" aria-hidden="true" />,
+                    }
+                  : undefined
+              }
+            />
           )
         }
       >
         {clauseModal && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="clause-modal-number"
-                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
-                >
-                  ধারা নম্বর
-                </label>
-                <input
-                  id="clause-modal-number"
+          <form
+            ref={clauseFormRef}
+            id="tr21-clause-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveClauseModal();
+            }}
+            noValidate
+            className="space-y-4"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <Field label="ধারা নম্বর">
+                <TextInput
                   type="text"
                   disabled={!canEditTr21}
                   value={clauseModal.numberBn}
@@ -1892,96 +1957,84 @@ export function Tr21SetupPage() {
                     )
                   }
                   placeholder="৮"
-                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                  className="bn"
                 />
-              </div>
+              </Field>
 
-              <div>
-                <span className="block text-xs font-semibold text-[var(--muted)] mb-1.5">
-                  কোন পাতায় যাবে
-                </span>
-                <div className="inline-flex w-full p-1 rounded-[10px] bg-[var(--surface-subtle)] border border-[var(--line)]">
-                  {([1, 2] as const).map((pg) => (
-                    <button
-                      key={pg}
-                      type="button"
-                      disabled={!canEditTr21}
-                      onClick={() =>
-                        setClauseModal((prev) => (prev ? { ...prev, page: pg } : prev))
-                      }
-                      className={`flex-1 min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-all ${
-                        clauseModal.page === pg
-                          ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
-                          : 'text-[var(--muted)] hover:text-[var(--text)]'
-                      }`}
-                    >
-                      পাতা {pg === 1 ? '১ (P1-S5)' : '২ (P2-S1)'}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <Field label="কোন পাতায় যাবে" labelAs="span">
+                <Segmented<'1' | '2'>
+                  ariaLabel="কোন পাতায় যাবে"
+                  fullWidth
+                  value={clauseModal.page === 1 ? '1' : '2'}
+                  onChange={(pg) =>
+                    setClauseModal((prev) =>
+                      prev ? { ...prev, page: pg === '1' ? 1 : 2 } : prev
+                    )
+                  }
+                  options={[
+                    { value: '1', label: 'পাতা ১ (P1-S5)', disabled: !canEditTr21 },
+                    { value: '2', label: 'পাতা ২ (P2-S1)', disabled: !canEditTr21 },
+                  ]}
+                />
+              </Field>
             </div>
 
-            <div className="flex items-center justify-between gap-3 py-1">
-              <span className="text-xs font-semibold text-[var(--text)]">
-                টি.আর. ফরম নং-২১ পাতায় দেখাবে
-              </span>
-              <ToggleSwitch
-                checked={clauseModal.enabled}
-                disabled={!canEditTr21}
-                ariaLabel="টি.আর. ফরম নং-২১ পাতায় দেখাবে"
-                onChange={(checked) =>
-                  setClauseModal((prev) =>
-                    prev ? { ...prev, enabled: checked } : prev
-                  )
-                }
-              />
-            </div>
+            <Toggle
+              checked={clauseModal.enabled}
+              disabled={!canEditTr21}
+              label="টি.আর. ফরম নং-২১ পাতায় দেখাবে"
+              aria-label="টি.আর. ফরম নং-২১ পাতায় দেখাবে"
+              onChange={(checked) =>
+                setClauseModal((prev) =>
+                  prev ? { ...prev, enabled: checked } : prev
+                )
+              }
+            />
 
-            <div>
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <label
-                  htmlFor="clause-modal-text"
-                  className="block text-xs font-semibold text-[var(--muted)]"
-                >
-                  ধারার বিবরণ
-                </label>
-                {canEditTr21 &&
-                  (clauseModal.id === '7' || clauseModal.id === '12') &&
-                  !clauseModal.text.includes('{{payeeText}}') && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setClauseModal((prev) =>
-                          prev
-                            ? { ...prev, text: `${prev.text.trimEnd()} {{payeeText}}` }
-                            : prev
-                        )
-                      }
-                      className="text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap"
-                    >
-                      + {'{{payeeText}}'}
-                    </button>
-                  )}
-              </div>
-              <textarea
-                id="clause-modal-text"
+            <Field
+              label="ধারার বিবরণ"
+              required={canEditTr21}
+              error={clauseTextError}
+              labelAction={
+                canEditTr21 &&
+                (clauseModal.id === '7' || clauseModal.id === '12') &&
+                !clauseModal.text.includes('{{payeeText}}') ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setClauseModal((prev) =>
+                        prev
+                          ? { ...prev, text: `${prev.text.trimEnd()} {{payeeText}}` }
+                          : prev
+                      )
+                    }
+                    className="min-h-[44px] px-2 text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                  >
+                    + {'{{payeeText}}'}
+                  </button>
+                ) : undefined
+              }
+              hint={
+                <>
+                  নতুন লাইনে <code className="font-mono text-[var(--text)]">(ক)</code>,{' '}
+                  <code className="font-mono text-[var(--text)]">(খ)</code> লিখলে ফরমে স্বয়ংক্রিয়ভাবে ইনডেন্ট হবে এবং{' '}
+                  <code className="font-mono text-[var(--text)]">{'{{payeeText}}'}</code> দিলে বিলের প্রাপকের নাম বসবে।
+                </>
+              }
+            >
+              <Textarea
                 rows={6}
                 disabled={!canEditTr21}
                 value={clauseModal.text}
-                onChange={(e) =>
-                  setClauseModal((prev) => (prev ? { ...prev, text: e.target.value } : prev))
-                }
+                onChange={(e) => {
+                  setClauseModal((prev) => (prev ? { ...prev, text: e.target.value } : prev));
+                  if (clauseTextError) setClauseTextError('');
+                }}
                 placeholder="ধারার পূর্ণ বিবরণ লিখুন। প্রয়োজনে নতুন লাইনে (ক), (খ) উপ-ধারা লিখতে পারেন।"
-                className="w-full p-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                className="bn"
               />
-              <p className="mt-1.5 text-xs text-[var(--muted)] leading-relaxed">
-                নতুন লাইনে <code className="font-mono text-[var(--text)]">(ক)</code>,{' '}
-                <code className="font-mono text-[var(--text)]">(খ)</code> লিখলে ফরমে স্বয়ংক্রিয়ভাবে ইনডেন্ট হবে এবং{' '}
-                <code className="font-mono text-[var(--text)]">{'{{payeeText}}'}</code> দিলে বিলের প্রাপকের নাম বসবে।
-              </p>
-            </div>
-          </div>
+            </Field>
+          </form>
         )}
       </Modal>
     </Layout>

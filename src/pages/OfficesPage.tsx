@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
@@ -12,7 +12,8 @@ import {
   Users,
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
+import { Field, Section, TextInput, focusFirstInvalidField } from '../components/form';
 import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
@@ -49,6 +50,13 @@ export function OfficesPage() {
   const [activeFy, setActiveFy] = useState(getCurrentFiscalYear());
   const [fiscalYearsStr, setFiscalYearsStr] = useState('2024-25, 2025-26, 2026-27');
   const [ministryName, setMinistryName] = useState('');
+  const [formErrors, setFormErrors] = useState<{
+    name?: string;
+    nameBn?: string;
+    code?: string;
+    activeFy?: string;
+  }>({});
+  const officeFormRef = useRef<HTMLFormElement>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const [detailOffice, setDetailOffice] = useState<OfficeDoc | null>(null);
@@ -94,6 +102,7 @@ export function OfficesPage() {
     setActiveFy(fy);
     setFiscalYearsStr(`2024-25, ${fy}, 2026-27`);
     setMinistryName('');
+    setFormErrors({});
     setFormOpen(true);
   };
 
@@ -106,13 +115,50 @@ export function OfficesPage() {
     setActiveFy(office.activeFiscalYear);
     setFiscalYearsStr((office.fiscalYears || [office.activeFiscalYear]).join(', '));
     setMinistryName(office.ministryName || '');
+    setFormErrors({});
     setFormOpen(true);
   };
+
+  const isOfficeFormDirty = useMemo(() => {
+    if (!formOpen) return false;
+    if (!editingOffice) {
+      return Boolean(
+        name.trim() || nameBn.trim() || code.trim() || address.trim() || ministryName.trim()
+      );
+    }
+    return (
+      name !== editingOffice.name ||
+      nameBn !== (editingOffice.nameBn || editingOffice.name) ||
+      code !== editingOffice.code ||
+      address !== (editingOffice.address || '') ||
+      activeFy !== editingOffice.activeFiscalYear ||
+      ministryName !== (editingOffice.ministryName || '') ||
+      fiscalYearsStr !== (editingOffice.fiscalYears || [editingOffice.activeFiscalYear]).join(', ')
+    );
+  }, [formOpen, editingOffice, name, nameBn, code, address, activeFy, ministryName, fiscalYearsStr]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!actorSnapshot) return;
 
+    const nextErrors: {
+      name?: string;
+      nameBn?: string;
+      code?: string;
+      activeFy?: string;
+    } = {};
+    if (!name.trim()) nextErrors.name = 'Office name (English) is required.';
+    if (!nameBn.trim()) nextErrors.nameBn = 'অফিসের নাম (বাংলা) আবশ্যক।';
+    if (!code.trim()) nextErrors.code = 'Office code is required.';
+    if (!activeFy.trim()) nextErrors.activeFy = 'চলতি অর্থবছর আবশ্যক।';
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFormErrors(nextErrors);
+      window.requestAnimationFrame(() => focusFirstInvalidField(officeFormRef.current));
+      return;
+    }
+
+    setFormErrors({});
     const fiscalYears = Array.from(
       new Set([
         activeFy.trim(),
@@ -400,126 +446,155 @@ export function OfficesPage() {
       {/* Create / Edit Office Modal */}
       <Modal
         open={formOpen}
-        onClose={() => setFormOpen(false)}
+        onClose={() => !submitting && setFormOpen(false)}
         title={editingOffice ? 'অফিস সম্পাদনা' : 'নতুন অফিস তৈরি করুন'}
+        size="md"
         fullScreenOnMobile
+        confirmClose={isOfficeFormDirty && !submitting}
         footer={
-          <div className="flex gap-2 justify-end">
-            <button
-              type="button"
-              onClick={() => setFormOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="office-form"
-              disabled={submitting}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {submitting ? 'সংরক্ষণ হচ্ছে…' : t('save')}
-            </button>
-          </div>
+          <ModalFooter
+            loading={submitting}
+            secondary={{
+              label: t('cancel'),
+              onClick: () => setFormOpen(false),
+              disabled: submitting,
+            }}
+            primary={{
+              label: submitting ? 'সংরক্ষণ হচ্ছে…' : t('save'),
+              type: 'submit',
+              form: 'office-form',
+            }}
+          />
         }
       >
-        <form id="office-form" onSubmit={handleSubmit} className="space-y-4">
+        <form
+          ref={officeFormRef}
+          id="office-form"
+          onSubmit={handleSubmit}
+          noValidate
+          className="space-y-4"
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                Office Name (English) *
-              </label>
-              <input
+            <Field
+              label="Office Name (English)"
+              htmlFor="office-name-en"
+              required
+              error={formErrors.name}
+            >
+              <TextInput
+                id="office-name-en"
                 type="text"
                 required
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (formErrors.name) {
+                    setFormErrors((prev) => ({ ...prev, name: undefined }));
+                  }
+                }}
                 placeholder="District Primary Education Office, Mymensingh"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                অফিসের নাম (বাংলা) *
-              </label>
-              <input
+            </Field>
+            <Field
+              label="অফিসের নাম (বাংলা)"
+              htmlFor="office-name-bn"
+              required
+              error={formErrors.nameBn}
+            >
+              <TextInput
+                id="office-name-bn"
                 type="text"
                 required
                 value={nameBn}
-                onChange={(e) => setNameBn(e.target.value)}
+                onChange={(e) => {
+                  setNameBn(e.target.value);
+                  if (formErrors.nameBn) {
+                    setFormErrors((prev) => ({ ...prev, nameBn: undefined }));
+                  }
+                }}
                 placeholder="জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো, ময়মনসিংহ"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+                className="bn"
               />
-            </div>
+            </Field>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                Office Code (Unique) *
-              </label>
-              <input
+            <Field
+              label="Office Code (Unique)"
+              htmlFor="office-code"
+              required
+              error={formErrors.code}
+            >
+              <TextInput
+                id="office-code"
                 type="text"
                 required
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  if (formErrors.code) {
+                    setFormErrors((prev) => ({ ...prev, code: undefined }));
+                  }
+                }}
                 placeholder="OFF-MYM-01"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm font-mono"
+                className="font-mono"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                চলতি অর্থবছর *
-              </label>
-              <input
+            </Field>
+            <Field
+              label="চলতি অর্থবছর"
+              htmlFor="office-active-fy"
+              required
+              error={formErrors.activeFy}
+            >
+              <TextInput
+                id="office-active-fy"
                 type="text"
                 required
                 value={activeFy}
-                onChange={(e) => setActiveFy(e.target.value)}
+                onChange={(e) => {
+                  setActiveFy(e.target.value);
+                  if (formErrors.activeFy) {
+                    setFormErrors((prev) => ({ ...prev, activeFy: undefined }));
+                  }
+                }}
                 placeholder="2025-26"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+                className="tabular-nums"
               />
-            </div>
+            </Field>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              ঠিকানা (Address)
-            </label>
-            <input
+          <Field label="ঠিকানা (Address)" htmlFor="office-address">
+            <TextInput
+              id="office-address"
               type="text"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="ময়মনসিংহ সদর, ময়মনসিংহ"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+              className="bn"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              মন্ত্রণালয় / বিভাগ
-            </label>
-            <input
+          <Field label="মন্ত্রণালয় / বিভাগ" htmlFor="office-ministry">
+            <TextInput
+              id="office-ministry"
               type="text"
               value={ministryName}
               onChange={(e) => setMinistryName(e.target.value)}
               placeholder="প্রাথমিক ও গণশিক্ষা মন্ত্রণালয়"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+              className="bn"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              সকল অর্থবছর তালিকা (কমা দিয়ে আলাদা করুন)
-            </label>
-            <input
+          <Field label="সকল অর্থবছর তালিকা (কমা দিয়ে আলাদা করুন)" htmlFor="office-fy-list">
+            <TextInput
+              id="office-fy-list"
               type="text"
               value={fiscalYearsStr}
               onChange={(e) => setFiscalYearsStr(e.target.value)}
               placeholder="2024-25, 2025-26, 2026-27"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm tabular-nums"
+              className="tabular-nums"
             />
-          </div>
+          </Field>
         </form>
       </Modal>
 
@@ -528,50 +603,71 @@ export function OfficesPage() {
         open={Boolean(detailOffice)}
         onClose={() => setDetailOffice(null)}
         title={detailOffice ? detailOffice.nameBn || detailOffice.name : ''}
-        subtitle={detailOffice ? `Code: ${detailOffice.code} · FY ${detailOffice.activeFiscalYear}` : undefined}
-        maxWidthClass="md:max-w-2xl"
+        subtitle={
+          detailOffice
+            ? `Code: ${detailOffice.code} · FY ${detailOffice.activeFiscalYear}`
+            : undefined
+        }
+        size="lg"
         fullScreenOnMobile
       >
         {detailOffice && (
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
-                <div className="text-[var(--muted)] flex items-center gap-1.5 mb-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+              <Section>
+                <div className="text-[var(--muted)] flex items-center gap-1.5 font-medium">
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>বর্তমান DDO</span>
                 </div>
                 {(() => {
                   const ddo = detailPostings.find((p) => p.status === 'active' && p.role === 'ddo');
-                  if (!ddo) return <div className="font-semibold text-[var(--warning-text)]">অনির্ধারিত</div>;
+                  if (!ddo) {
+                    return <div className="font-semibold text-[var(--warn-text)]">অনির্ধারিত</div>;
+                  }
                   const u = usersById.get(ddo.userId);
                   return (
-                    <div>
-                      <div className="font-semibold text-[var(--text)]">{ddo.userName}</div>
+                    <div className="space-y-0.5">
+                      <div className="text-sm font-semibold text-[var(--text)]">{ddo.userName}</div>
                       <div className="text-[var(--muted)]">
-                        {ddo.designation} · {ddo.kind === 'additionalCharge' ? 'অতিরিক্ত দায়িত্ব' : 'নিয়মিত'}
+                        {ddo.designation} ·{' '}
+                        {ddo.kind === 'additionalCharge' ? 'অতিরিক্ত দায়িত্ব' : 'নিয়মিত'}
                       </div>
-                      {u?.email && <div className="text-[var(--muted)]">{u.email}</div>}
+                      {u?.email && <div className="text-[var(--muted)] break-all">{u.email}</div>}
                     </div>
                   );
                 })()}
-              </div>
+              </Section>
 
-              <div className="p-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
-                <div className="text-[var(--muted)] flex items-center gap-1.5 mb-1">
+              <Section>
+                <div className="text-[var(--muted)] flex items-center gap-1.5 font-medium">
                   <Building2 className="w-3.5 h-3.5" />
                   <span>অফিসের তথ্য</span>
                 </div>
-                <div className="font-medium text-[var(--text)] bn">{detailOffice.address || '—'}</div>
-                <div className="text-[var(--muted)] mt-0.5">{detailOffice.ministryName || ''}</div>
-              </div>
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium text-[var(--text)] bn break-words">
+                    {detailOffice.address || '—'}
+                  </div>
+                  {detailOffice.ministryName && (
+                    <div className="text-[var(--muted)] bn break-words">
+                      {detailOffice.ministryName}
+                    </div>
+                  )}
+                </div>
+              </Section>
             </div>
 
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-2 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>কর্মরত কর্মকর্তা ও কর্মচারী ({detailPostings.filter((p) => p.status === 'active').length})</span>
-              </h3>
-              <div className="divide-y divide-[var(--line)] border border-[var(--line)] rounded-xl overflow-hidden">
+            <Section
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  <UserCheck className="w-4 h-4 text-[var(--accent)]" />
+                  <span>
+                    কর্মরত কর্মকর্তা ও কর্মচারী (
+                    {detailPostings.filter((p) => p.status === 'active').length})
+                  </span>
+                </span>
+              }
+            >
+              <div className="divide-y divide-[var(--line)] border border-[var(--line)] rounded-xl overflow-hidden bg-[var(--card)]">
                 {detailPostings.filter((p) => p.status === 'active').length === 0 ? (
                   <div className="p-4 text-xs text-[var(--muted)] text-center">
                     এই অফিসে কোনো সক্রিয় পদায়ন নেই।
@@ -580,15 +676,18 @@ export function OfficesPage() {
                   detailPostings
                     .filter((p) => p.status === 'active')
                     .map((p) => (
-                      <div key={p.id} className="p-3 text-xs flex items-center justify-between gap-2 bg-[var(--card)]">
-                        <div>
+                      <div
+                        key={p.id}
+                        className="p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0">
                           <div className="font-semibold text-[var(--text)]">{p.userName}</div>
-                          <div className="text-[var(--muted)]">
+                          <div className="text-[var(--muted)] break-words">
                             {p.designation} · {formatRoleLabel(p.role)} ·{' '}
                             {p.kind === 'additionalCharge' ? 'অতিরিক্ত দায়িত্ব' : 'নিয়মিত'}
                           </div>
                         </div>
-                        <div className="text-right text-[var(--muted)] tabular-nums">
+                        <div className="sm:text-right text-[var(--muted)] tabular-nums shrink-0">
                           <div>{formatDateDisplay(p.startDate)} থেকে</div>
                           <div>আদেশ: {p.orderNo || '—'}</div>
                         </div>
@@ -596,35 +695,40 @@ export function OfficesPage() {
                     ))
                 )}
               </div>
-            </div>
+            </Section>
 
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)] mb-2">
-                পূর্ববর্তী পদায়ন ইতিহাস ({detailPostings.filter((p) => p.status === 'ended').length})
-              </h3>
-              <div className="divide-y divide-[var(--line)] border border-[var(--line)] rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+            <Section
+              title={`পূর্ববর্তী পদায়ন ইতিহাস (${detailPostings.filter((p) => p.status === 'ended').length})`}
+            >
+              <div className="divide-y divide-[var(--line)] border border-[var(--line)] rounded-xl overflow-hidden max-h-60 overflow-y-auto bg-[var(--card)]">
                 {detailPostings.filter((p) => p.status === 'ended').length === 0 ? (
-                  <div className="p-4 text-xs text-[var(--muted)] text-center">কোনো পূর্ববর্তী ইতিহাস নেই।</div>
+                  <div className="p-4 text-xs text-[var(--muted)] text-center">
+                    কোনো পূর্ববর্তী ইতিহাস নেই।
+                  </div>
                 ) : (
                   detailPostings
                     .filter((p) => p.status === 'ended')
                     .map((p) => (
-                      <div key={p.id} className="p-3 text-xs flex items-center justify-between gap-2 bg-[var(--card)]">
-                        <div>
+                      <div
+                        key={p.id}
+                        className="p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0">
                           <div className="font-medium text-[var(--text)]">{p.userName}</div>
-                          <div className="text-[var(--muted)]">
-                            {formatRoleLabel(p.role)} ({p.kind === 'additionalCharge' ? 'Addl.' : 'Regular'}) ·{' '}
+                          <div className="text-[var(--muted)] break-words">
+                            {formatRoleLabel(p.role)} (
+                            {p.kind === 'additionalCharge' ? 'Addl.' : 'Regular'}) ·{' '}
                             {p.endReason || 'ended'}
                           </div>
                         </div>
-                        <div className="text-right text-[var(--muted)] tabular-nums">
+                        <div className="sm:text-right text-[var(--muted)] tabular-nums shrink-0">
                           {formatDateDisplay(p.startDate)} → {formatDateDisplay(p.endDate)}
                         </div>
                       </div>
                     ))
                 )}
               </div>
-            </div>
+            </Section>
           </div>
         )}
       </Modal>

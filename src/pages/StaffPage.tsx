@@ -1,8 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { Edit2, Mail, Plus, Trash2, UserCheck, UserMinus } from 'lucide-react';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
+import {
+  Banner,
+  Field,
+  OptionCardList,
+  TextInput,
+  focusFirstInvalidField,
+} from '../components/form';
 import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useApp } from '../contexts/AppContext';
@@ -43,11 +50,15 @@ export function StaffPage() {
   const [invDesig, setInvDesig] = useState('');
   const [invPhone, setInvPhone] = useState('');
   const [invOrderNo, setInvOrderNo] = useState('');
+  const [inviteErrors, setInviteErrors] = useState<{ email?: string; designation?: string }>({});
+  const inviteFormRef = useRef<HTMLFormElement>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const [editTarget, setEditTarget] = useState<WorkHistoryDoc | null>(null);
   const [editDesig, setEditDesig] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editErrors, setEditErrors] = useState<{ designation?: string }>({});
+  const editFormRef = useRef<HTMLFormElement>(null);
 
   const [endTarget, setEndTarget] = useState<WorkHistoryDoc | null>(null);
   const [endReason, setEndReason] = useState<WorkHistoryEndReason>('relieved');
@@ -75,9 +86,37 @@ export function StaffPage() {
     [officePostings]
   );
 
+  const isInviteDirty = Boolean(
+    invEmail.trim() || invName.trim() || invDesig.trim() || invPhone.trim() || invOrderNo.trim()
+  );
+
+  const isEditDirty = Boolean(
+    editTarget &&
+      (editDesig !== editTarget.designation ||
+        editPhone !== (usersById.get(editTarget.userId)?.phone || ''))
+  );
+
+  const isEndDirty = Boolean(endTarget && (endRemarks.trim() !== '' || endReason !== 'relieved'));
+
   const handleInviteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!actorSnapshot || !currentOfficeId) return;
+
+    const nextErrors: { email?: string; designation?: string } = {};
+    const emailTrimmed = invEmail.trim();
+    if (!emailTrimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+      nextErrors.email = 'সঠিক ইমেইল ঠিকানা লিখুন।';
+    }
+    if (!invDesig.trim()) {
+      nextErrors.designation = 'পদবী আবশ্যক।';
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setInviteErrors(nextErrors);
+      window.requestAnimationFrame(() => focusFirstInvalidField(inviteFormRef.current));
+      return;
+    }
+
+    setInviteErrors({});
     setSubmitting(true);
     try {
       await createMultiOfficeInvite({
@@ -109,6 +148,14 @@ export function StaffPage() {
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!actorSnapshot || !editTarget) return;
+
+    if (!editDesig.trim()) {
+      setEditErrors({ designation: 'পদবী আবশ্যক।' });
+      window.requestAnimationFrame(() => focusFirstInvalidField(editFormRef.current));
+      return;
+    }
+
+    setEditErrors({});
     setSubmitting(true);
     try {
       await updateStaffDesignationTx({
@@ -162,7 +209,10 @@ export function StaffPage() {
   const headerActions = (
     <button
       type="button"
-      onClick={() => setInviteOpen(true)}
+      onClick={() => {
+        setInviteErrors({});
+        setInviteOpen(true);
+      }}
       className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
     >
       <Plus className="w-4 h-4" />
@@ -223,6 +273,7 @@ export function StaffPage() {
                           setEditTarget(wh);
                           setEditDesig(wh.designation);
                           setEditPhone(u?.phone || '');
+                          setEditErrors({});
                         }}
                         className="min-h-[38px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1"
                       >
@@ -314,193 +365,233 @@ export function StaffPage() {
       {/* Invite Regular Employee Modal */}
       <Modal
         open={inviteOpen}
-        onClose={() => setInviteOpen(false)}
+        onClose={() => !submitting && setInviteOpen(false)}
         title="নতুন কর্মচারী আমন্ত্রণ (নিয়মিত)"
         subtitle={currentOffice ? currentOffice.nameBn || currentOffice.name : undefined}
+        size="md"
         fullScreenOnMobile
+        confirmClose={isInviteDirty && !submitting}
         footer={
-          <div className="flex gap-2 justify-end">
-            <button
-              type="button"
-              onClick={() => setInviteOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="ddo-invite-form"
-              disabled={submitting}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {submitting ? 'পাঠানো হচ্ছে…' : 'আমন্ত্রণ পাঠান'}
-            </button>
-          </div>
+          <ModalFooter
+            loading={submitting}
+            secondary={{
+              label: t('cancel'),
+              onClick: () => setInviteOpen(false),
+              disabled: submitting,
+            }}
+            primary={{
+              label: submitting ? 'পাঠানো হচ্ছে…' : 'আমন্ত্রণ পাঠান',
+              type: 'submit',
+              form: 'ddo-invite-form',
+            }}
+          />
         }
       >
-        <form id="ddo-invite-form" onSubmit={handleInviteSubmit} className="space-y-3.5">
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">Email *</label>
-            <input
+        <form
+          ref={inviteFormRef}
+          id="ddo-invite-form"
+          onSubmit={handleInviteSubmit}
+          noValidate
+          className="space-y-4"
+        >
+          <Field
+            label="Email"
+            htmlFor="staff-inv-email"
+            required
+            error={inviteErrors.email}
+          >
+            <TextInput
+              id="staff-inv-email"
               type="email"
               required
               value={invEmail}
-              onChange={(e) => setInvEmail(e.target.value)}
+              onChange={(e) => {
+                setInvEmail(e.target.value);
+                if (inviteErrors.email) {
+                  setInviteErrors((prev) => ({ ...prev, email: undefined }));
+                }
+              }}
               placeholder="staff@example.com"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
             />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">Name</label>
-            <input
+          </Field>
+
+          <Field label="Name" htmlFor="staff-inv-name">
+            <TextInput
+              id="staff-inv-name"
               type="text"
               value={invName}
               onChange={(e) => setInvName(e.target.value)}
               placeholder="নাম"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="bn"
             />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                Designation *
-              </label>
-              <input
+          </Field>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <Field
+              label="Designation"
+              htmlFor="staff-inv-desig"
+              required
+              error={inviteErrors.designation}
+            >
+              <TextInput
+                id="staff-inv-desig"
                 type="text"
                 required
                 value={invDesig}
-                onChange={(e) => setInvDesig(e.target.value)}
+                onChange={(e) => {
+                  setInvDesig(e.target.value);
+                  if (inviteErrors.designation) {
+                    setInviteErrors((prev) => ({ ...prev, designation: undefined }));
+                  }
+                }}
                 placeholder="হিসাবরক্ষক / উচ্চমান সহকারী"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                className="bn"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--muted)] mb-1">Phone</label>
-              <input
+            </Field>
+            <Field label="Phone" htmlFor="staff-inv-phone">
+              <TextInput
+                id="staff-inv-phone"
                 type="tel"
                 value={invPhone}
                 onChange={(e) => setInvPhone(e.target.value)}
                 placeholder="017XXXXXXXX"
-                className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
               />
-            </div>
+            </Field>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              যোগদান / আদেশ নং
-            </label>
-            <input
+
+          <Field label="যোগদান / আদেশ নং" htmlFor="staff-inv-order-no">
+            <TextInput
+              id="staff-inv-order-no"
               type="text"
               value={invOrderNo}
               onChange={(e) => setInvOrderNo(e.target.value)}
               placeholder="Order No (ঐচ্ছিক)"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
             />
-          </div>
+          </Field>
         </form>
       </Modal>
 
       {/* Edit Staff Modal */}
       <Modal
         open={Boolean(editTarget)}
-        onClose={() => setEditTarget(null)}
+        onClose={() => !submitting && setEditTarget(null)}
         title="কর্মচারীর তথ্য সংশোধন"
         subtitle={editTarget?.userName}
+        size="sm"
+        confirmClose={isEditDirty && !submitting}
         footer={
-          <div className="flex gap-2 justify-end">
-            <button
-              type="button"
-              onClick={() => setEditTarget(null)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="ddo-edit-staff-form"
-              disabled={submitting}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold"
-            >
-              {t('save')}
-            </button>
-          </div>
+          <ModalFooter
+            loading={submitting}
+            secondary={{
+              label: t('cancel'),
+              onClick: () => setEditTarget(null),
+              disabled: submitting,
+            }}
+            primary={{
+              label: submitting ? 'সংরক্ষণ হচ্ছে…' : t('save'),
+              type: 'submit',
+              form: 'ddo-edit-staff-form',
+            }}
+          />
         }
       >
-        <form id="ddo-edit-staff-form" onSubmit={handleSaveEdit} className="space-y-3.5">
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-              Designation *
-            </label>
-            <input
+        <form
+          ref={editFormRef}
+          id="ddo-edit-staff-form"
+          onSubmit={handleSaveEdit}
+          noValidate
+          className="space-y-4"
+        >
+          <Field
+            label="Designation"
+            htmlFor="staff-edit-desig"
+            required
+            error={editErrors.designation}
+          >
+            <TextInput
+              id="staff-edit-desig"
               type="text"
               required
               value={editDesig}
-              onChange={(e) => setEditDesig(e.target.value)}
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              onChange={(e) => {
+                setEditDesig(e.target.value);
+                if (editErrors.designation) {
+                  setEditErrors((prev) => ({ ...prev, designation: undefined }));
+                }
+              }}
+              className="bn"
             />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">Phone</label>
-            <input
+          </Field>
+          <Field label="Phone" htmlFor="staff-edit-phone">
+            <TextInput
+              id="staff-edit-phone"
               type="tel"
               value={editPhone}
               onChange={(e) => setEditPhone(e.target.value)}
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
             />
-          </div>
+          </Field>
         </form>
       </Modal>
 
       {/* End Posting Modal */}
       <Modal
         open={Boolean(endTarget)}
-        onClose={() => setEndTarget(null)}
+        onClose={() => !submitting && setEndTarget(null)}
         title="কর্মচারীর পদায়ন সমাপ্ত করুন"
         subtitle={endTarget?.userName}
+        size="sm"
+        confirmClose={isEndDirty && !submitting}
         footer={
-          <div className="flex gap-2 justify-end">
-            <button
-              type="button"
-              onClick={() => setEndTarget(null)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="ddo-end-posting-form"
-              disabled={submitting}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--danger-text)] text-white text-sm font-semibold"
-            >
-              পদায়ন সমাপ্ত করুন
-            </button>
-          </div>
+          <ModalFooter
+            danger
+            loading={submitting}
+            secondary={{
+              label: t('cancel'),
+              onClick: () => setEndTarget(null),
+              disabled: submitting,
+            }}
+            primary={{
+              label: submitting ? 'সমাপ্ত করা হচ্ছে…' : 'পদায়ন সমাপ্ত করুন',
+              type: 'submit',
+              form: 'ddo-end-posting-form',
+            }}
+          />
         }
       >
-        <form id="ddo-end-posting-form" onSubmit={handleEndPosting} className="space-y-3.5">
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">কারণ *</label>
-            <select
+        <form
+          id="ddo-end-posting-form"
+          onSubmit={handleEndPosting}
+          noValidate
+          className="space-y-4"
+        >
+          <Banner variant="warn">
+            পদায়ন সমাপ্ত করলে এই অফিসে কর্মচারীর প্রবেশাধিকার অবিলম্বে বন্ধ হয়ে যাবে।
+          </Banner>
+
+          <Field label="কারণ" labelAs="span" required>
+            <OptionCardList
+              ariaLabel="পদায়ন সমাপ্তির কারণ"
               value={endReason}
-              onChange={(e) => setEndReason(e.target.value as WorkHistoryEndReason)}
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-            >
-              <option value="relieved">Relieved (অব্যাহতি)</option>
-              <option value="transferred">Transferred (বদলি)</option>
-              <option value="retired">Retired (অবসর)</option>
-              <option value="other">Other (অন্যান্য)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[var(--muted)] mb-1">মন্তব্য</label>
-            <input
+              onChange={(val) => setEndReason(val)}
+              options={[
+                { value: 'relieved', title: 'Relieved (অব্যাহতি)' },
+                { value: 'transferred', title: 'Transferred (বদলি)' },
+                { value: 'retired', title: 'Retired (অবসর)' },
+                { value: 'other', title: 'Other (অন্যান্য)' },
+              ]}
+            />
+          </Field>
+
+          <Field label="মন্তব্য" htmlFor="staff-end-remarks">
+            <TextInput
+              id="staff-end-remarks"
               type="text"
               value={endRemarks}
               onChange={(e) => setEndRemarks(e.target.value)}
               placeholder="আদেশ নং বা মন্তব্য"
-              className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+              className="bn"
             />
-          </div>
+          </Field>
         </form>
       </Modal>
     </Layout>

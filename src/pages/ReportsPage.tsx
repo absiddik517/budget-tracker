@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { Layout } from '../components/Layout';
 import { PageHeader } from '../components/PageHeader';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { Select } from '../components/form';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
@@ -545,36 +546,46 @@ export function ReportsPage() {
             </span>
 
             {isSuperAdmin && offices.length > 0 && (
-              <select
-                value={reportOfficeId}
-                onChange={(e) => setReportOfficeId(e.target.value)}
-                aria-label="Select report office"
-                className="min-h-[44px] md:min-h-[36px] px-3 rounded-lg md:rounded-full text-base md:text-xs border border-[var(--line)] bg-[var(--card)] text-[var(--text)] bn"
-              >
-                <option value={ALL_OFFICES_ID}>
-                  সকল অফিস ({offices.filter((o) => o.status === 'active').length})
-                </option>
-                {offices.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.nameBn || o.name} ({o.code})
-                  </option>
-                ))}
-              </select>
+              <div className="min-w-[200px]">
+                <Select
+                  variant="compact"
+                  modalTitle="অফিস নির্বাচন করুন"
+                  value={reportOfficeId}
+                  onChange={(e) => setReportOfficeId(e.target.value)}
+                  aria-label="Select report office"
+                  options={[
+                    {
+                      value: ALL_OFFICES_ID,
+                      label: `সকল অফিস (${offices.filter((o) => o.status === 'active').length})`,
+                    },
+                    ...offices.map((o) => ({
+                      value: o.id,
+                      label: o.nameBn || o.name,
+                      subtitle: `কোড: ${o.code}`,
+                      keywords: `${o.name} ${o.nameBn} ${o.code}`,
+                    })),
+                  ]}
+                />
+              </div>
             )}
 
             {!isAllOfficesReport && (tab === 'allocations' || tab === 'summary') && (
-              <select
-                value={budgetStatusFilter}
-                onChange={(e) =>
-                  setBudgetStatusFilter(e.target.value as 'all' | 'active' | 'executed')
-                }
-                aria-label="Filter budget status"
-                className="min-h-[44px] md:min-h-[36px] px-3 rounded-lg md:rounded-full text-base md:text-xs border border-[var(--line)] bg-[var(--card)] text-[var(--text)]"
-              >
-                <option value="all">All statuses</option>
-                <option value="active">Active only</option>
-                <option value="executed">Executed only</option>
-              </select>
+              <div className="min-w-[160px]">
+                <Select
+                  variant="compact"
+                  modalTitle="বাজেট অবস্থা"
+                  searchable={false}
+                  value={budgetStatusFilter}
+                  onChange={(e) =>
+                    setBudgetStatusFilter(e.target.value as 'all' | 'active' | 'executed')
+                  }
+                  aria-label="Filter budget status"
+                >
+                  <option value="all">All statuses</option>
+                  <option value="active">Active only</option>
+                  <option value="executed">Executed only</option>
+                </Select>
+              </div>
             )}
           </div>
 
@@ -586,6 +597,7 @@ export function ReportsPage() {
                 placeholder="All economic codes"
                 clearable
                 includeInactive
+                variant="compact"
               />
             </div>
           )}

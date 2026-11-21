@@ -25,9 +25,16 @@ try {
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager(),
     }),
+    experimentalForceLongPolling: true,
   });
 } catch {
-  dbInstance = getFirestore(app);
+  try {
+    dbInstance = initializeFirestore(app, {
+      experimentalForceLongPolling: true,
+    });
+  } catch {
+    dbInstance = getFirestore(app);
+  }
 }
 
 export const db = dbInstance;

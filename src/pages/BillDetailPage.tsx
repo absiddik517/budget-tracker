@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { doc, getDoc, type Timestamp } from 'firebase/firestore';
 import {
@@ -17,11 +17,12 @@ import {
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { PageHeader } from '../components/PageHeader';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { Timeline, type TimelineStep } from '../components/Timeline';
 import { ActivityList } from '../components/ActivityList';
+import { Banner, Field, Select, Textarea, focusFirstInvalidField } from '../components/form';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
 import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { db } from '../lib/firebase';
@@ -692,6 +693,10 @@ export function BillDetailPage() {
       setSavingDraftEdit(false);
     }
   };
+  const [reasonError, setReasonError] = useState('');
+  const [superDeleteError, setSuperDeleteError] = useState('');
+  const reasonFormRef = useRef<HTMLFormElement>(null);
+  const superDeleteFormRef = useRef<HTMLFormElement>(null);
 
   const handleConfirmSuperDelete = async () => {
     if (!userDoc || !effectiveActor || !canSuperCorrect || !bill || bill.status !== 'approved') {
@@ -702,9 +707,12 @@ export function BillDetailPage() {
       return;
     }
     if (!superReason.trim()) {
+      setSuperDeleteError('কারণ উল্লেখ করা আবশ্যক।');
       pushToast('error', 'কারণ উল্লেখ করা আবশ্যক।');
+      requestAnimationFrame(() => focusFirstInvalidField(superDeleteFormRef.current));
       return;
     }
+    setSuperDeleteError('');
     setActing(true);
     try {
       await softDeleteApprovedBillTx(bill.id, superReason.trim(), effectiveActor);
@@ -787,9 +795,12 @@ export function BillDetailPage() {
       return;
     }
     if (!reasonText.trim()) {
+      setReasonError('কারণ উল্লেখ করা আবশ্যক।');
       pushToast('error', 'কারণ উল্লেখ করা আবশ্যক।');
+      requestAnimationFrame(() => focusFirstInvalidField(reasonFormRef.current));
       return;
     }
+    setReasonError('');
     setActing(true);
     try {
       if (reasonMode === 'reject') {
@@ -1399,7 +1410,10 @@ export function BillDetailPage() {
                       <label className="block text-[11px] text-[var(--muted)] mb-1">
                         ভ্যাটের ধরন ({previewDraftRate?.vatRate ?? bill.vatRate}%)
                       </label>
-                      <select
+                      <Select
+                        modalTitle="ভ্যাটের ধরন নির্বাচন করুন"
+                        searchable={false}
+                        clearable={false}
                         value={editDraftVariantKey}
                         onChange={(e) => {
                           const key = e.target.value;
@@ -1414,14 +1428,12 @@ export function BillDetailPage() {
                             );
                           }
                         }}
-                        className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs"
-                      >
-                        {billRates.vat.map((v) => (
-                          <option key={v.key} value={v.key}>
-                            {v.label} ({v.rate}%)
-                          </option>
-                        ))}
-                      </select>
+                        options={billRates.vat.map((v) => ({
+                          value: v.key,
+                          label: v.label,
+                          metaRight: `${v.rate}%`,
+                        }))}
+                      />
                     </div>
                   </div>
 
@@ -1922,31 +1934,34 @@ export function BillDetailPage() {
           if (!acting) setDeleteDraftOpen(false);
         }}
         title={t('deleteDraftConfirmTitle')}
-        maxWidthClass="md:max-w-md"
+        size="sm"
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={acting}
-              onClick={() => setDeleteDraftOpen(false)}
-              className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={acting}
-              onClick={handleConfirmDeleteDraft}
-              className="min-h-[44px] px-4 rounded-xl bg-[var(--danger-text)] text-white text-sm font-semibold disabled:opacity-60"
-            >
-              {acting ? 'মুছে ফেলা হচ্ছে…' : t('confirmDeleteBtn')}
-            </button>
-          </div>
+          <ModalFooter
+            danger
+            loading={acting}
+            secondary={{
+              label: t('cancel'),
+              disabled: acting,
+              onClick: () => setDeleteDraftOpen(false),
+            }}
+            primary={{
+              label: acting ? 'মুছে ফেলা হচ্ছে…' : t('confirmDeleteBtn'),
+              onClick: handleConfirmDeleteDraft,
+            }}
+          />
         }
       >
-        <p className="text-sm text-[var(--muted)] leading-relaxed">
-          {t('deleteDraftConfirmBody')}
-        </p>
+        <div className="space-y-4">
+          <div
+            aria-hidden="true"
+            className="w-14 h-14 rounded-full bg-[var(--danger-bg)] text-[var(--danger-text)] flex items-center justify-center mx-auto"
+          >
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <Banner variant="danger">
+            {t('deleteDraftConfirmBody')}
+          </Banner>
+        </div>
       </Modal>
 
       {/* Reject / Cancel Reason Modal */}
@@ -1956,6 +1971,7 @@ export function BillDetailPage() {
           if (!acting) {
             setReasonMode(null);
             setReasonText('');
+            setReasonError('');
           }
         }}
         title={
@@ -1963,49 +1979,70 @@ export function BillDetailPage() {
             ? 'বিল প্রত্যাখ্যানের কারণ'
             : 'অনুমোদিত বিল বাতিলের কারণ'
         }
-        maxWidthClass="md:max-w-md"
+        size="sm"
+        confirmClose={Boolean(reasonText.trim()) && !acting}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={acting}
-              onClick={() => {
+          <ModalFooter
+            danger
+            loading={acting}
+            secondary={{
+              label: t('cancel'),
+              disabled: acting,
+              onClick: () => {
                 setReasonMode(null);
                 setReasonText('');
-              }}
-              className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={acting || !reasonText.trim() || !isOnline}
-              onClick={handleConfirmReasonAction}
-              className="min-h-[44px] px-4 rounded-xl bg-[var(--danger-text)] text-white text-sm font-semibold disabled:opacity-60"
-            >
-              {acting
+                setReasonError('');
+              },
+            }}
+            primary={{
+              label: acting
                 ? 'সম্পন্ন হচ্ছে…'
                 : reasonMode === 'reject'
                 ? 'প্রত্যাখ্যান নিশ্চিত করুন'
-                : 'বিল বাতিল নিশ্চিত করুন'}
-            </button>
-          </div>
+                : 'বিল বাতিল নিশ্চিত করুন',
+              type: 'submit',
+              form: 'bill-reason-form',
+              disabled: !isOnline,
+            }}
+          />
         }
       >
-        <div className="space-y-2">
-          <label className="block text-xs font-semibold text-[var(--text)]">
-            {reasonMode === 'reject'
-              ? 'প্রত্যাখ্যানের কারণ লিখুন (বাধ্যতামূলক)'
-              : 'অনুমোদিত বিল বাতিলের কারণ লিখুন (বাধ্যতামূলক)'}
-          </label>
-          <textarea
-            rows={3}
-            value={reasonText}
-            onChange={(e) => setReasonText(e.target.value)}
-            placeholder="কারণ লিখুন…"
-            className="w-full p-3 rounded-xl border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
-          />
-        </div>
+        <form
+          ref={reasonFormRef}
+          id="bill-reason-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleConfirmReasonAction();
+          }}
+          noValidate
+          className="space-y-4"
+        >
+          {!isOnline && (
+            <Banner variant="warn">
+              এই কাজটি করতে ইন্টারনেট সংযোগ প্রয়োজন।
+            </Banner>
+          )}
+          <Field
+            label={
+              reasonMode === 'reject'
+                ? 'প্রত্যাখ্যানের কারণ লিখুন (বাধ্যতামূলক)'
+                : 'অনুমোদিত বিল বাতিলের কারণ লিখুন (বাধ্যতামূলক)'
+            }
+            required
+            error={reasonError}
+          >
+            <Textarea
+              rows={3}
+              value={reasonText}
+              onChange={(e) => {
+                setReasonText(e.target.value);
+                if (reasonError) setReasonError('');
+              }}
+              placeholder="কারণ লিখুন…"
+              className="bn"
+            />
+          </Field>
+        </form>
       </Modal>
 
       {/* Super Admin Audited Delete Modal */}
@@ -2015,51 +2052,71 @@ export function BillDetailPage() {
           if (!acting) {
             setSuperCorrectMode(null);
             setSuperReason('');
+            setSuperDeleteError('');
           }
         }}
         title="সুপার অ্যাডমিন অডিটেড বিল মুছে ফেলা"
-        maxWidthClass="md:max-w-md"
+        size="sm"
+        confirmClose={Boolean(superReason.trim()) && !acting}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={acting}
-              onClick={() => {
+          <ModalFooter
+            danger
+            loading={acting}
+            secondary={{
+              label: t('cancel'),
+              disabled: acting,
+              onClick: () => {
                 setSuperCorrectMode(null);
                 setSuperReason('');
-              }}
-              className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={acting || !superReason.trim() || !isOnline}
-              onClick={handleConfirmSuperDelete}
-              className="min-h-[44px] px-4 rounded-xl bg-[var(--danger-text)] text-white text-sm font-semibold disabled:opacity-60"
-            >
-              {acting ? 'মুছে ফেলা হচ্ছে…' : 'অডিটেড মুছুন নিশ্চিত করুন'}
-            </button>
-          </div>
+                setSuperDeleteError('');
+              },
+            }}
+            primary={{
+              label: acting ? 'মুছে ফেলা হচ্ছে…' : 'অডিটেড মুছুন নিশ্চিত করুন',
+              type: 'submit',
+              form: 'super-delete-form',
+              disabled: !isOnline,
+            }}
+          />
         }
       >
-        <div className="space-y-3">
-          <p className="text-xs text-[var(--muted)] leading-relaxed">
+        <form
+          ref={superDeleteFormRef}
+          id="super-delete-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleConfirmSuperDelete();
+          }}
+          noValidate
+          className="space-y-4"
+        >
+          {!isOnline && (
+            <Banner variant="warn">
+              অনুমোদিত বিল মুছে ফেলতে ইন্টারনেট সংযোগ প্রয়োজন।
+            </Banner>
+          )}
+          <div
+            aria-hidden="true"
+            className="w-14 h-14 rounded-full bg-[var(--danger-bg)] text-[var(--danger-text)] flex items-center justify-center mx-auto"
+          >
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <Banner variant="danger">
             বিলটি মুছে ফেলা হলে বাজেটের ব্যয়িত অর্থ ফেরত আসবে, অন্তর্ভুক্ত খরচ আইটেমগুলো তালিকাভুক্ত অবস্থায় ফিরে যাবে এবং অডিট লগে রেকর্ড থাকবে।
-          </p>
-          <div>
-            <label className="block text-xs font-semibold text-[var(--danger-text)] mb-1">
-              মুছে ফেলার কারণ (বাধ্যতামূলক)
-            </label>
-            <textarea
+          </Banner>
+          <Field label="মুছে ফেলার কারণ (বাধ্যতামূলক)" required error={superDeleteError}>
+            <Textarea
               rows={3}
               value={superReason}
-              onChange={(e) => setSuperReason(e.target.value)}
+              onChange={(e) => {
+                setSuperReason(e.target.value);
+                if (superDeleteError) setSuperDeleteError('');
+              }}
               placeholder="মুছে ফেলার সুনির্দিষ্ট কারণ লিখুন…"
-              className="w-full p-3 rounded-xl border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
+              className="bn"
             />
-          </div>
-        </div>
+          </Field>
+        </form>
       </Modal>
 
       {/* Submit Draft Modal */}

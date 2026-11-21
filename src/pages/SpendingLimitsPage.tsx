@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { Building2, Wallet } from 'lucide-react';
 import { db } from '../lib/firebase';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { StatusChip } from '../components/StatusChip';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { Field, Segmented, Select, TextInput, focusFirstInvalidField } from '../components/form';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
@@ -121,6 +123,10 @@ export function SpendingLimitsPage() {
   const [rateStr, setRateStr] = useState('80');
   const [effectiveDate, setEffectiveDate] = useState(todayYmd());
   const [refNo, setRefNo] = useState('');
+  const [budgetError, setBudgetError] = useState('');
+  const [rateError, setRateError] = useState('');
+  const [dateError, setDateError] = useState('');
+  const [refError, setRefError] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Sync default targetScope when header office changes
@@ -179,6 +185,7 @@ export function SpendingLimitsPage() {
   const handleSelectBudget = (id: string) => {
     setBudgetId(id);
     setCodeError('');
+    setBudgetError('');
     const b = budgets.find((item) => item.id === id);
     if (b) {
       const head = getHead(b.economicCode, { headName: b.headName, headNameBn: b.headNameBn });
@@ -255,6 +262,10 @@ export function SpendingLimitsPage() {
     setLimitType('code');
     setEconomicCode('');
     setCodeError('');
+    setBudgetError('');
+    setRateError('');
+    setDateError('');
+    setRefError('');
     setHeadName('');
     setHeadNameBn('');
     setBudgetId('');
@@ -263,19 +274,69 @@ export function SpendingLimitsPage() {
     setRefNo('');
   };
 
-  const handleSaveLimit = async (e: React.FormEvent) => {
+  const isLimitDirty = useMemo(
+    () =>
+      Boolean(
+        economicCode.trim() ||
+          budgetId ||
+          rateStr !== '80' ||
+          refNo.trim() ||
+          limitType !== 'code'
+      ),
+    [economicCode, budgetId, rateStr, refNo, limitType]
+  );
+
+  const handleSaveLimit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!effectiveActor || !canManage) return;
+    const formEl = e.currentTarget;
     const code = economicCode.trim();
     const masterEntry = getCodeEntry(code);
+    const rateParsed = parseFloat(rateStr);
+
+    let hasError = false;
     if (!masterEntry) {
       setCodeError('Select a valid economic code from Economic Codes.');
-      pushToast('error', 'Select a valid economic code.');
-      return;
-    }
-    if (masterEntry.special) {
+      hasError = true;
+    } else if (masterEntry.special) {
       setCodeError('GENERAL-CONSTRUCTION cannot be used for a spending limit.');
-      pushToast('error', 'GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+      hasError = true;
+    } else {
+      setCodeError('');
+    }
+
+    if (limitType === 'budget' && !budgetId) {
+      setBudgetError('Select a budget entry.');
+      hasError = true;
+    } else {
+      setBudgetError('');
+    }
+
+    if (Number.isNaN(rateParsed) || rateParsed < 1 || rateParsed > 100) {
+      setRateError('Enter a rate between 1 and 100%.');
+      hasError = true;
+    } else {
+      setRateError('');
+    }
+
+    if (!effectiveDate) {
+      setDateError('Effective date is required.');
+      hasError = true;
+    } else {
+      setDateError('');
+    }
+
+    if (!refNo.trim()) {
+      setRefError('Letter / reference no. is required.');
+      hasError = true;
+    } else {
+      setRefError('');
+    }
+
+    if (hasError || !masterEntry || masterEntry.special) {
+      if (!masterEntry) pushToast('error', 'Select a valid economic code.');
+      else if (masterEntry.special) pushToast('error', 'GENERAL-CONSTRUCTION cannot be used for a spending limit.');
+      requestAnimationFrame(() => focusFirstInvalidField(formEl));
       return;
     }
 
@@ -391,81 +452,72 @@ export function SpendingLimitsPage() {
     isBatchAllOffices || (isSuperAdmin && targetScope !== realOfficeId);
 
   const renderAddLimitForm = (formId: string, showInlineButtons: boolean) => (
-    <form id={formId} onSubmit={handleSaveLimit} className="space-y-3.5">
+    <form id={formId} onSubmit={handleSaveLimit} noValidate className="space-y-4">
       {isSuperAdmin && (
-        <div>
-          <label
-            htmlFor={`${formId}-office`}
-            className="block text-xs font-medium text-[var(--muted)] mb-1"
-          >
-            Target Office
-          </label>
-          <select
+        <Field
+          label="Target Office"
+          htmlFor={`${formId}-office`}
+          hint={
+            isBatchAllOffices
+              ? 'Applies an economic-code limit to every active office simultaneously.'
+              : undefined
+          }
+        >
+          <Select
             id={`${formId}-office`}
+            modalTitle="Select Target Office"
+            modalIcon={<Building2 className="w-5 h-5" />}
+            optionIcon={<Building2 className="w-4 h-4" />}
+            clearable={false}
             value={targetScope}
             onChange={(e) => setTargetScope(e.target.value)}
-            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
-          >
-            <option value={ALL_ACTIVE_OFFICES_TARGET}>
-              All active offices ({activeOffices.length})
-            </option>
-            {activeOffices.map((off) => (
-              <option key={off.id} value={off.id}>
-                {off.nameBn || off.name} ({off.code})
-              </option>
-            ))}
-          </select>
-          {isBatchAllOffices && (
-            <p className="text-[11px] text-[var(--muted)] mt-1">
-              Applies an economic-code limit to every active office simultaneously.
-            </p>
-          )}
-        </div>
+            options={[
+              {
+                value: ALL_ACTIVE_OFFICES_TARGET,
+                label: `All active offices (${activeOffices.length})`,
+                subtitle: 'Applies to all active offices simultaneously',
+              },
+              ...activeOffices.map((off) => ({
+                value: off.id,
+                label: off.nameBn || off.name,
+                subtitle: `কোড: ${off.code}`,
+                keywords: `${off.name} ${off.nameBn} ${off.code}`,
+              })),
+            ]}
+          />
+        </Field>
       )}
 
-      <div>
-        <div className="text-xs font-medium text-[var(--muted)] mb-1.5">Type</div>
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setLimitType('code');
+      <Field label="Type" labelAs="span">
+        <Segmented
+          ariaLabel="Limit type"
+          value={limitType}
+          onChange={(next) => {
+            setLimitType(next);
+            if (next === 'code') {
               setBudgetId('');
-            }}
-            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors ${
-              limitType === 'code'
-                ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                : 'border border-[var(--line)] text-[var(--text)]'
-            }`}
-          >
-            On economic code
-          </button>
-          <button
-            type="button"
-            disabled={singleBudgetDisabled}
-            onClick={() => setLimitType('budget')}
-            className={`min-h-[44px] md:min-h-[40px] px-2.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
-              limitType === 'budget'
-                ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                : 'border border-[var(--line)] text-[var(--text)]'
-            }`}
-          >
-            On single budget
-          </button>
-        </div>
-      </div>
+              setBudgetError('');
+            }
+          }}
+          options={[
+            { value: 'code', label: 'On economic code' },
+            { value: 'budget', label: 'On single budget', disabled: singleBudgetDisabled },
+          ]}
+        />
+      </Field>
 
-      <EconomicCodeSelect
-        label="Economic code"
-        value={economicCode}
-        onChange={handleCodeChange}
-        error={codeError}
-        includeSpecial={false}
-        placeholder="Select economic code…"
-      />
+      <Field label="Economic code" labelAs="span" required error={codeError}>
+        <EconomicCodeSelect
+          label=""
+          value={economicCode}
+          onChange={handleCodeChange}
+          includeSpecial={false}
+          placeholder="Select economic code…"
+        />
+      </Field>
 
       {economicCode && (
-        <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+        <div className="px-3.5 py-2.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
           <div className="text-[11px] font-medium text-[var(--muted)]">
             ব্যয়ের খাত
           </div>
@@ -476,83 +528,80 @@ export function SpendingLimitsPage() {
       )}
 
       {limitType === 'budget' && (
-        <div>
-          <label htmlFor={`${formId}-budget`} className="block text-xs font-medium text-[var(--muted)] mb-1">
-            Budget entry
-          </label>
-          <select
+        <Field label="Budget entry" htmlFor={`${formId}-budget`} required error={budgetError}>
+          <Select
             id={`${formId}-budget`}
-            required
+            placeholder="Select budget…"
+            modalTitle="Select Budget Entry"
+            modalIcon={<Wallet className="w-5 h-5" />}
+            emptyIcon={<Wallet className="w-4 h-4" />}
+            optionIcon={<Wallet className="w-4 h-4" />}
+            clearable
             value={budgetId}
             onChange={(e) => handleSelectBudget(e.target.value)}
-            className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
-          >
-            <option value="">Select budget…</option>
-            {budgets
+            options={budgets
               .filter((b) => !economicCode.trim() || b.economicCode === economicCode.trim())
               .map((b) => {
                 const head = getHead(b.economicCode, {
                   headName: b.headName,
                   headNameBn: b.headNameBn,
                 });
-                return (
-                  <option key={b.id} value={b.id}>
-                    {b.memoNo} · {b.economicCode} {head.displayName} ({formatTaka(b.allocated)})
-                  </option>
-                );
+                return {
+                  value: b.id,
+                  label: `${b.memoNo} · ${b.economicCode}`,
+                  subtitle: head.displayName,
+                  metaRight: formatTaka(b.allocated),
+                  keywords: `${b.memoNo} ${b.economicCode} ${head.displayName}`,
+                };
               })}
-          </select>
-        </div>
+          />
+        </Field>
       )}
 
-      <div>
-        <label htmlFor={`${formId}-rate`} className="block text-xs font-medium text-[var(--muted)] mb-1">
-          Rate (% of allocation)
-        </label>
-        <input
+      <Field label="Rate (% of allocation)" htmlFor={`${formId}-rate`} required error={rateError}>
+        <TextInput
           id={`${formId}-rate`}
           type="number"
           step="0.01"
           min="1"
           max="100"
-          required
           value={rateStr}
-          onChange={(e) => setRateStr(e.target.value)}
-          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+          onChange={(e) => {
+            setRateStr(e.target.value);
+            if (rateError) setRateError('');
+          }}
+          className="tabular-nums"
         />
-      </div>
+      </Field>
 
-      <div>
-        <label htmlFor={`${formId}-date`} className="block text-xs font-medium text-[var(--muted)] mb-1">
-          Effective date
-        </label>
-        <input
+      <Field label="Effective date" htmlFor={`${formId}-date`} required error={dateError}>
+        <TextInput
           id={`${formId}-date`}
           type="date"
-          required
           value={effectiveDate}
-          onChange={(e) => setEffectiveDate(e.target.value)}
-          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+          onChange={(e) => {
+            setEffectiveDate(e.target.value);
+            if (dateError) setDateError('');
+          }}
+          className="tabular-nums"
         />
-      </div>
+      </Field>
 
-      <div>
-        <label htmlFor={`${formId}-ref`} className="block text-xs font-medium text-[var(--muted)] mb-1">
-          Letter / reference no.
-        </label>
-        <input
+      <Field label="Letter / reference no." htmlFor={`${formId}-ref`} required error={refError}>
+        <TextInput
           id={`${formId}-ref`}
           type="text"
-          required
           value={refNo}
-          onChange={(e) => setRefNo(e.target.value)}
+          onChange={(e) => {
+            setRefNo(e.target.value);
+            if (refError) setRefError('');
+          }}
           placeholder="Ref-001"
-          className="w-full min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
         />
-      </div>
+      </Field>
 
       {/* Live Preview */}
-      <div className="pt-2 space-y-1.5">
+      <div className="pt-1 space-y-1.5">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium">
           <span className="tabular-nums">Cap {formatTaka(previewStats.cap)}</span>
           <span className="tabular-nums text-[var(--accent)]">
@@ -568,21 +617,22 @@ export function SpendingLimitsPage() {
       </div>
 
       {showInlineButtons && (
-        <div className="flex gap-2 pt-2">
+        <div className="flex gap-2.5 pt-2">
           <button
             type="button"
+            disabled={saving}
             onClick={() => {
               resetForm();
               setMobileAddOpen(false);
             }}
-            className="flex-1 min-h-[44px] rounded-lg border border-[var(--line)] text-sm font-medium"
+            className="flex-1 min-h-[44px] rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--text)] hover:bg-[var(--surface-subtle)] text-sm font-medium transition-colors disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           >
             {t('cancel')}
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="flex-1 min-h-[44px] rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+            className="flex-1 min-h-[44px] rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           >
             {saving ? 'Saving…' : 'Save limit'}
           </button>
@@ -859,31 +909,29 @@ export function SpendingLimitsPage() {
       {/* Mobile Add Limit Modal */}
       <Modal
         open={mobileAddOpen}
-        onClose={() => setMobileAddOpen(false)}
+        onClose={() => !saving && setMobileAddOpen(false)}
         title="Add limit"
         subtitle={`FY ${selectedFy}`}
-        maxWidthClass="md:max-w-lg"
+        size="md"
+        fullScreenOnMobile
+        confirmClose={isLimitDirty && !saving}
         footer={
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
+          <ModalFooter
+            loading={saving}
+            secondary={{
+              label: t('cancel'),
+              disabled: saving,
+              onClick: () => {
                 resetForm();
                 setMobileAddOpen(false);
-              }}
-              className="flex-1 min-h-[44px] rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="mobile-limit-form"
-              disabled={saving}
-              className="flex-1 min-h-[44px] rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : 'Save limit'}
-            </button>
-          </div>
+              },
+            }}
+            primary={{
+              label: saving ? 'Saving…' : 'Save limit',
+              type: 'submit',
+              form: 'mobile-limit-form',
+            }}
+          />
         }
       >
         {renderAddLimitForm('mobile-limit-form', false)}

@@ -4,11 +4,12 @@ import { BookOpen, MoreVertical, Pencil, Plus, Power, Search, Trash2, Upload } f
 import { BottomSheet } from '../components/BottomSheet';
 import { EmptyState } from '../components/EmptyState';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { SegmentedChips } from '../components/SegmentedChips';
 import { StatusChip } from '../components/StatusChip';
+import { Field, TextInput, Toggle, focusFirstInvalidField } from '../components/form';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
@@ -153,7 +154,10 @@ export function EconomicCodesPage() {
   const [codeInput, setCodeInput] = useState('');
   const [headNameBnInput, setHeadNameBnInput] = useState('');
   const [activeInput, setActiveInput] = useState(true);
+  const [codeError, setCodeError] = useState('');
+  const [headError, setHeadError] = useState('');
   const [saving, setSaving] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // 3-dot Action Menu Sheet
   const [menuEntry, setMenuEntry] = useState<EconomicCodeDoc | null>(null);
@@ -196,6 +200,8 @@ export function EconomicCodesPage() {
     setCodeInput('');
     setHeadNameBnInput('');
     setActiveInput(true);
+    setCodeError('');
+    setHeadError('');
     setModalOpen(true);
   };
 
@@ -206,25 +212,59 @@ export function EconomicCodesPage() {
     setCodeInput(entry.code);
     setHeadNameBnInput(entry.headNameBn || entry.headName);
     setActiveInput(entry.active);
+    setCodeError('');
+    setHeadError('');
     setModalOpen(true);
   };
+
+  const isCodeModalDirty = useMemo(() => {
+    if (!modalOpen) return false;
+    if (!editingEntry) {
+      return Boolean(codeInput.trim() || headNameBnInput.trim() || !activeInput);
+    }
+    const origHead = editingEntry.headNameBn || editingEntry.headName;
+    return headNameBnInput.trim() !== origHead.trim() || activeInput !== editingEntry.active;
+  }, [modalOpen, editingEntry, codeInput, headNameBnInput, activeInput]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc || !canEdit) return;
     const trimmedCode = codeInput.trim();
-    if (!editingEntry && trimmedCode === 'GENERAL-CONSTRUCTION') {
-      pushToast('error', 'Enter a 7-digit economic code.');
+    const trimmedHead = headNameBnInput.trim();
+
+    let hasError = false;
+    if (!editingEntry) {
+      if (trimmedCode === 'GENERAL-CONSTRUCTION' || !/^\d{7}$/.test(trimmedCode)) {
+        setCodeError('Enter a 7-digit economic code.');
+        hasError = true;
+      } else {
+        setCodeError('');
+      }
+    } else {
+      setCodeError('');
+    }
+    if (!trimmedHead) {
+      setHeadError('ব্যয়ের খাত লিখুন।');
+      hasError = true;
+    } else {
+      setHeadError('');
+    }
+    if (hasError) {
+      if (!editingEntry && trimmedCode === 'GENERAL-CONSTRUCTION') {
+        pushToast('error', 'Enter a 7-digit economic code.');
+      }
+      requestAnimationFrame(() => focusFirstInvalidField(formRef.current));
       return;
     }
+
     setSaving(true);
     const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
       await upsertEconomicCode(
         {
           code: trimmedCode,
-          headName: headNameBnInput,
-          headNameBn: headNameBnInput,
+          headName: trimmedHead,
+          headNameBn: trimmedHead,
           active: activeInput,
         },
         actor
@@ -545,91 +585,74 @@ export function EconomicCodesPage() {
       {/* Add / Edit Modal */}
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => !saving && setModalOpen(false)}
         title={editingEntry ? `Edit Code · ${editingEntry.code}` : 'New Economic Code'}
         subtitle="Master entry, shared by all offices"
-        maxWidthClass="md:max-w-lg"
+        size="md"
+        confirmClose={isCodeModalDirty && !saving}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setModalOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="economic-code-form"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : t('save')}
-            </button>
-          </div>
+          <ModalFooter
+            loading={saving}
+            secondary={{
+              label: t('cancel'),
+              disabled: saving,
+              onClick: () => setModalOpen(false),
+            }}
+            primary={{
+              label: saving ? 'Saving…' : t('save'),
+              type: 'submit',
+              form: 'economic-code-form',
+            }}
+          />
         }
       >
-        <form id="economic-code-form" onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label htmlFor="ec-code" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Code (7 digits)
-            </label>
-            <input
-              id="ec-code"
+        <form
+          ref={formRef}
+          id="economic-code-form"
+          onSubmit={handleSave}
+          noValidate
+          className="space-y-4"
+        >
+          <Field
+            label="Code (7 digits)"
+            required={!editingEntry}
+            error={codeError}
+          >
+            <TextInput
               type="text"
-              required
               inputMode="numeric"
               maxLength={editingEntry?.special ? undefined : 7}
               disabled={Boolean(editingEntry)}
-              pattern={editingEntry?.special ? undefined : '\\d{7}'}
-              title="Economic code must be 7 digits"
               value={codeInput}
-              onChange={(e) => setCodeInput(e.target.value)}
+              onChange={(e) => {
+                setCodeInput(e.target.value);
+                if (codeError) setCodeError('');
+              }}
               placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              className="tabular-nums"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label htmlFor="ec-bn" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              ব্যয়ের খাত
-            </label>
-            <input
-              id="ec-bn"
+          <Field label="ব্যয়ের খাত" required error={headError}>
+            <TextInput
               type="text"
-              required
               value={headNameBnInput}
-              onChange={(e) => setHeadNameBnInput(e.target.value)}
+              onChange={(e) => {
+                setHeadNameBnInput(e.target.value);
+                if (headError) setHeadError('');
+              }}
               placeholder="আপ্যায়ন ব্যয়"
-              style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              className="bn"
             />
-          </div>
+          </Field>
 
-          <div className="flex items-center justify-between gap-3 py-2">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-[var(--text)]">{t('active')}</div>
-              <div className="text-xs text-[var(--muted)]">
-                Inactive codes are hidden from selects while existing records keep their name.
-              </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={activeInput}
-              aria-label="Toggle code active"
-              onClick={() => setActiveInput((prev) => !prev)}
-              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
-                activeInput ? 'bg-[var(--accent)]' : 'bg-[var(--line)]'
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition-transform ${
-                  activeInput ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
+          <Toggle
+            checked={activeInput}
+            onChange={setActiveInput}
+            label={t('active')}
+            description="Inactive codes are hidden from selects while existing records keep their name."
+            aria-label="Toggle code active"
+          />
         </form>
       </Modal>
     </Layout>

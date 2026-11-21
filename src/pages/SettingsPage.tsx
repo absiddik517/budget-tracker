@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import {
@@ -12,6 +12,7 @@ import {
   Download,
   FileSpreadsheet,
   History,
+  Loader2,
   RefreshCw,
   Search,
   Square,
@@ -19,8 +20,9 @@ import {
 } from 'lucide-react';
 import { BottomSheet } from '../components/BottomSheet';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
+import { Banner, Field, Section, Select, TextInput, focusFirstInvalidField } from '../components/form';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -97,7 +99,9 @@ export function SettingsPage() {
   const [activeFiscalYear, setActiveFiscalYear] = useState(officeSettings.activeFiscalYear);
   const [fiscalYears, setFiscalYears] = useState<string[]>(officeSettings.fiscalYears);
   const [newFyInput, setNewFyInput] = useState('');
+  const [newFyError, setNewFyError] = useState('');
   const [addFyModalOpen, setAddFyModalOpen] = useState(false);
+  const addFyFormRef = useRef<HTMLFormElement>(null);
   const [fyPickerOpen, setFyPickerOpen] = useState(false);
   const [fySearch, setFySearch] = useState('');
   const [saving, setSaving] = useState(false);
@@ -188,9 +192,12 @@ export function SettingsPage() {
     e?.preventDefault();
     const trimmed = newFyInput.trim();
     if (!isValidFiscalYear(trimmed)) {
+      setNewFyError('Enter a valid fiscal year format like 2026-27.');
       pushToast('error', 'Enter a valid fiscal year format like 2026-27.');
+      requestAnimationFrame(() => focusFirstInvalidField(addFyFormRef.current));
       return;
     }
+    setNewFyError('');
     if (!fiscalYears.includes(trimmed)) {
       setFiscalYears((prev) => [...prev, trimmed].sort());
     }
@@ -671,21 +678,22 @@ export function SettingsPage() {
                   >
                     {t('activeFiscalYearOfficeDefault')}
                   </label>
-                  <select
+                  <Select
                     id="active-fy"
+                    modalTitle={t('activeFiscalYearOfficeDefault')}
                     value={activeFiscalYear}
                     onChange={(e) => setActiveFiscalYear(e.target.value)}
-                    className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                  >
-                    {Array.from(new Set([...fiscalYears, activeFiscalYear]))
+                    clearable={false}
+                    options={Array.from(new Set([...fiscalYears, activeFiscalYear]))
                       .sort()
                       .reverse()
-                      .map((fy) => (
-                        <option key={fy} value={fy}>
-                          {fy}
-                        </option>
-                      ))}
-                  </select>
+                      .map((fy) => ({
+                        value: fy,
+                        label: `অর্থবছর ${fy}`,
+                        metaRight: fy === activeFiscalYear ? 'সক্রিয়' : undefined,
+                        keywords: fy,
+                      }))}
+                  />
                 </div>
 
                 <button
@@ -1018,22 +1026,27 @@ export function SettingsPage() {
                     </p>
 
                     <div className="flex flex-wrap items-center gap-2">
-                      <select
-                        value={wipeOfficeFilter}
-                        onChange={(e) => {
-                          setWipeOfficeFilter(e.target.value);
-                          setSelectedTables(new Set());
-                        }}
-                        aria-label="Filter wipe by office"
-                        className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs bn"
-                      >
-                        <option value={ALL_OFFICES_ID}>সকল দপ্তর + গ্লোবাল</option>
-                        {offices.map((o) => (
-                          <option key={o.id} value={o.id}>
-                            {o.nameBn || o.name} ({o.code})
-                          </option>
-                        ))}
-                      </select>
+                      <div className="min-w-[220px] flex-1 sm:flex-initial">
+                        <Select
+                          variant="compact"
+                          modalTitle="দপ্তর নির্বাচন করুন"
+                          value={wipeOfficeFilter}
+                          onChange={(e) => {
+                            setWipeOfficeFilter(e.target.value);
+                            setSelectedTables(new Set());
+                          }}
+                          aria-label="Filter wipe by office"
+                          options={[
+                            { value: ALL_OFFICES_ID, label: 'সকল দপ্তর + গ্লোবাল' },
+                            ...offices.map((o) => ({
+                              value: o.id,
+                              label: o.nameBn || o.name,
+                              subtitle: `কোড: ${o.code}`,
+                              keywords: `${o.name} ${o.nameBn} ${o.code}`,
+                            })),
+                          ]}
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={loadTableCounts}
@@ -1229,47 +1242,50 @@ export function SettingsPage() {
       {/* Add Fiscal Year Modal */}
       <Modal
         open={addFyModalOpen}
-        onClose={() => setAddFyModalOpen(false)}
+        onClose={() => {
+          setAddFyModalOpen(false);
+          setNewFyError('');
+        }}
         title="Add fiscal year"
         subtitle="Format: YYYY-YY (runs July to June)"
-        maxWidthClass="md:max-w-sm"
+        size="sm"
+        confirmClose={Boolean(newFyInput.trim())}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setAddFyModalOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="add-fy-form"
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold"
-            >
-              Add FY
-            </button>
-          </div>
+          <ModalFooter
+            secondary={{
+              label: t('cancel'),
+              onClick: () => {
+                setAddFyModalOpen(false);
+                setNewFyError('');
+              },
+            }}
+            primary={{
+              label: 'Add FY',
+              type: 'submit',
+              form: 'add-fy-form',
+            }}
+          />
         }
       >
-        <form id="add-fy-form" onSubmit={handleAddFiscalYear} className="space-y-3">
-          <div>
-            <label
-              htmlFor="new-fy-modal-input"
-              className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-            >
-              Fiscal year
-            </label>
-            <input
-              id="new-fy-modal-input"
+        <form
+          ref={addFyFormRef}
+          id="add-fy-form"
+          onSubmit={handleAddFiscalYear}
+          noValidate
+          className="space-y-4"
+        >
+          <Field label="Fiscal year" required error={newFyError}>
+            <TextInput
               type="text"
-              required
               value={newFyInput}
-              onChange={(e) => setNewFyInput(e.target.value)}
+              onChange={(e) => {
+                setNewFyInput(e.target.value);
+                if (newFyError) setNewFyError('');
+              }}
               placeholder="2026-27"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              className="tabular-nums"
             />
-          </div>
+          </Field>
         </form>
       </Modal>
 
@@ -1277,46 +1293,50 @@ export function SettingsPage() {
       <Modal
         open={sampleToolsOpen}
         onClose={() => setSampleToolsOpen(false)}
-        title="Sample data &amp; global codes"
+        title="Sample data & global codes"
         subtitle="Super Admin tools"
-        maxWidthClass="md:max-w-md"
+        size="sm"
       >
         <div className="space-y-3">
-          <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] space-y-2.5">
-            <div className="text-sm font-semibold text-[var(--text)]">{t('loadSampleData')}</div>
-            <p className="text-xs text-[var(--muted)]">
-              Seeds demo budgets, expenses, bills and economic codes for FY 2025-26 in the selected
-              office.
-            </p>
+          <Section
+            title={t('loadSampleData')}
+            description="Seeds demo budgets, expenses, bills and economic codes for FY 2025-26 in the selected office."
+          >
             <button
               type="button"
               onClick={handleLoadSampleData}
               disabled={seeding}
-              className="min-h-[44px] w-full px-4 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-sm font-semibold text-[var(--text)] inline-flex items-center justify-center gap-2 disabled:opacity-60"
+              aria-busy={seeding}
+              className="min-h-[44px] w-full px-4 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-sm font-semibold text-[var(--text)] inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              <Database className="w-4 h-4 shrink-0" />
+              {seeding ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <Database className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
               <span>{seeding ? 'Loading…' : t('loadSampleData')}</span>
             </button>
-          </div>
+          </Section>
 
-          <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] space-y-2.5">
-            <div className="text-sm font-semibold text-[var(--text)]">
-              Build economic codes from existing data
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              Scans existing budgets, rates, limits and bills to backfill missing global master
-              economic codes.
-            </p>
+          <Section
+            title="Build economic codes from existing data"
+            description="Scans existing budgets, rates, limits and bills to backfill missing global master economic codes."
+          >
             <button
               type="button"
               onClick={handleBuildEconomicCodes}
               disabled={migratingCodes}
-              className="min-h-[44px] w-full px-4 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-sm font-semibold text-[var(--text)] inline-flex items-center justify-center gap-2 disabled:opacity-60"
+              aria-busy={migratingCodes}
+              className="min-h-[44px] w-full px-4 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-sm font-semibold text-[var(--text)] inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              <Database className="w-4 h-4 shrink-0" />
+              {migratingCodes ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <Database className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
               <span>{migratingCodes ? 'Building codes…' : 'Sync global codes'}</span>
             </button>
-          </div>
+          </Section>
         </div>
       </Modal>
 
@@ -1327,7 +1347,7 @@ export function SettingsPage() {
         title={t('globalActivity')}
         subtitle="Audit trail across budgets, expense items, bills, rates, limits, and users"
         fullScreenOnMobile
-        maxWidthClass="md:max-w-3xl"
+        size="lg"
       >
         {logsLoading ? (
           <p className="text-sm text-[var(--muted)]">Loading activity log…</p>
@@ -1336,7 +1356,7 @@ export function SettingsPage() {
         ) : (
           <>
             {/* Mobile Activity Cards */}
-            <div className="md:hidden divide-y divide-[var(--line)]">
+            <div className="md:hidden rounded-xl border border-[var(--line)] bg-[var(--card)] divide-y divide-[var(--line)]">
               {globalLogs.map((log) => {
                 const ts = log.timestamp
                   ? (() => {
@@ -1350,7 +1370,7 @@ export function SettingsPage() {
                     })()
                   : 'Pending';
                 return (
-                  <div key={log.id} className="py-3 space-y-1 text-xs">
+                  <div key={log.id} className="p-3.5 space-y-1 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-[var(--text)] capitalize">
                         {log.action} · {log.collection}
@@ -1369,17 +1389,17 @@ export function SettingsPage() {
             </div>
 
             {/* Desktop Table */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-x-auto rounded-xl border border-[var(--line)] bg-[var(--card)]">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-[var(--line)] text-[var(--muted)]">
-                    <th className="sticky left-0 z-10 bg-[var(--card)] py-2.5 pr-3 font-medium whitespace-nowrap">
+                    <th className="sticky left-0 z-10 bg-[var(--card)] py-2.5 px-3 font-medium whitespace-nowrap">
                       Time
                     </th>
                     <th className="py-2.5 pr-3 font-medium whitespace-nowrap">User</th>
                     <th className="py-2.5 pr-3 font-medium whitespace-nowrap">Action</th>
                     <th className="py-2.5 pr-3 font-medium whitespace-nowrap">Collection</th>
-                    <th className="py-2.5 font-medium whitespace-nowrap">Document ID</th>
+                    <th className="py-2.5 pr-3 font-medium whitespace-nowrap">Document ID</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--line)]">
@@ -1397,7 +1417,7 @@ export function SettingsPage() {
                       : 'Pending';
                     return (
                       <tr key={log.id}>
-                        <td className="sticky left-0 z-10 bg-[var(--card)] py-2.5 pr-3 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                        <td className="sticky left-0 z-10 bg-[var(--card)] py-2.5 px-3 tabular-nums whitespace-nowrap text-[var(--muted)]">
                           {ts}
                         </td>
                         <td className="py-2.5 pr-3 font-medium text-[var(--text)] whitespace-nowrap">
@@ -1407,7 +1427,7 @@ export function SettingsPage() {
                         <td className="py-2.5 pr-3 text-[var(--muted)] whitespace-nowrap">
                           {log.collection}
                         </td>
-                        <td className="py-2.5 font-mono text-[11px] text-[var(--muted)] whitespace-nowrap">
+                        <td className="py-2.5 pr-3 font-mono text-[11px] text-[var(--muted)] whitespace-nowrap">
                           {log.docId}
                         </td>
                       </tr>
@@ -1426,46 +1446,47 @@ export function SettingsPage() {
         onClose={() => !clearingTables && setConfirmTables(null)}
         title="ডাটাবেইজ টেবিল মুছে ফেলার নিশ্চিতকরণ"
         subtitle="এই কাজটি পূর্বাবস্থায় ফেরানো যাবে না"
-        maxWidthClass="md:max-w-lg"
+        size="sm"
+        confirmClose={Boolean(confirmText.trim()) && !clearingTables}
         footer={
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              disabled={clearingTables}
-              onClick={() => setConfirmTables(null)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium disabled:opacity-60"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={clearingTables || !confirmPhraseValid}
-              onClick={handleConfirmClearTables}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--danger-text)] text-white text-sm font-semibold inline-flex items-center gap-1.5 disabled:opacity-40"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>{clearingTables ? 'মুছে ফেলা হচ্ছে…' : 'স্থায়ীভাবে মুছুন'}</span>
-            </button>
-          </div>
+          <ModalFooter
+            danger
+            loading={clearingTables}
+            secondary={{
+              label: t('cancel'),
+              disabled: clearingTables,
+              onClick: () => setConfirmTables(null),
+            }}
+            primary={{
+              label: clearingTables ? 'মুছে ফেলা হচ্ছে…' : 'স্থায়ীভাবে মুছুন',
+              icon: <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />,
+              disabled: !confirmPhraseValid,
+              onClick: handleConfirmClearTables,
+            }}
+          />
         }
       >
         {confirmTables && (
           <div className="space-y-4">
-            <div className="p-3 rounded-xl bg-[var(--danger-bg)]/50 border border-[var(--danger-text)]/30 text-xs text-[var(--danger-text)] space-y-1">
-              <div className="font-semibold">
-                সতর্কতা: নিচের টেবিল(গুলোর) সকল ডকুমেন্ট ডাটাবেইজ থেকে স্থায়ীভাবে মুছে যাবে।
-              </div>
-              <div>
-                প্রয়োজনে আগে উপরের <strong>Download JSON backup</strong> বাটন থেকে JSON ব্যাকআপ সংরক্ষণ করুন।
-              </div>
+            <div
+              aria-hidden="true"
+              className="w-14 h-14 rounded-full bg-[var(--danger-bg)] text-[var(--danger-text)] flex items-center justify-center mx-auto"
+            >
+              <AlertTriangle className="w-7 h-7" />
             </div>
+            <Banner
+              variant="danger"
+              title="সতর্কতা: নিচের টেবিল(গুলোর) সকল ডকুমেন্ট ডাটাবেইজ থেকে স্থায়ীভাবে মুছে যাবে।"
+            >
+              প্রয়োজনে আগে উপরের <strong>Download JSON backup</strong> বাটন থেকে JSON ব্যাকআপ সংরক্ষণ করুন।
+            </Banner>
 
-            <div className="rounded-lg border border-[var(--line)] divide-y divide-[var(--line)] text-xs">
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] divide-y divide-[var(--line)] text-xs">
               {confirmTables.map((k) => {
                 const meta = DELETABLE_DB_TABLES.find((item) => item.key === k);
                 const cnt = tableCounts[k] ?? 0;
                 return (
-                  <div key={k} className="px-3 py-2 flex items-center justify-between gap-2">
+                  <div key={k} className="px-3.5 py-2.5 flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-semibold text-[var(--text)] bn">
                         {meta?.labelBn || k}
@@ -1480,24 +1501,23 @@ export function SettingsPage() {
               })}
             </div>
 
-            <div>
-              <label
-                htmlFor="confirm-db-delete-input"
-                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-              >
-                নিশ্চিত করতে নিচে <strong className="text-[var(--text)]">DELETE</strong> অথবা{' '}
-                <strong className="text-[var(--text)]">মুছুন</strong> লিখুন:
-              </label>
-              <input
-                id="confirm-db-delete-input"
+            <Field
+              label={
+                <>
+                  নিশ্চিত করতে নিচে <strong className="text-[var(--text)]">DELETE</strong> অথবা{' '}
+                  <strong className="text-[var(--text)]">মুছুন</strong> লিখুন:
+                </>
+              }
+              required
+            >
+              <TextInput
                 type="text"
                 autoComplete="off"
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 placeholder="DELETE বা মুছুন লিখুন…"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-[var(--danger-text)]"
               />
-            </div>
+            </Field>
           </div>
         )}
       </Modal>

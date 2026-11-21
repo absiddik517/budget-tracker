@@ -12,6 +12,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromCache,
   getDocs,
   limit,
   onSnapshot,
@@ -93,7 +94,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const userRef = doc(db, 'users', fbUser.uid);
-        let userSnap = await getDoc(userRef);
+        let userSnap;
+        const isNavigatorOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        if (isNavigatorOffline) {
+          try {
+            userSnap = await getDocFromCache(userRef);
+          } catch {
+            userSnap = await getDoc(userRef);
+          }
+        } else {
+          try {
+            userSnap = await getDoc(userRef);
+          } catch (readErr) {
+            const msg = readErr instanceof Error ? readErr.message.toLowerCase() : String(readErr).toLowerCase();
+            if (msg.includes('offline') || msg.includes('unavailable')) {
+              userSnap = await getDocFromCache(userRef);
+            } else {
+              throw readErr;
+            }
+          }
+        }
 
         if (!userSnap.exists()) {
           // 1. Check pending invite by email lowercase
@@ -286,9 +306,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to verify user access.';
-        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+        const lower = msg.toLowerCase();
+        if (lower.includes('permission') || lower.includes('insufficient')) {
           setAuthError(
             'Firestore permission denied. Please publish firestore.rules in Firebase Console for project budget-tracker-f7025.'
+          );
+        } else if (lower.includes('offline') || lower.includes('unavailable')) {
+          setAuthError(
+            'Unable to reach Cloud Firestore. Please check your internet connection and try again.'
           );
         } else {
           setAuthError(msg);

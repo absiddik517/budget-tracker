@@ -3,6 +3,7 @@ import { Activity } from 'lucide-react';
 import { ActivityList } from '../components/ActivityList';
 import { Layout } from '../components/Layout';
 import { PageHeader } from '../components/PageHeader';
+import { Select } from '../components/form';
 import { useApp } from '../contexts/AppContext';
 import { useGlobalAuditLogs } from '../hooks/useAuditLogs';
 
@@ -34,24 +35,30 @@ export function ActivityPage() {
       <PageHeader title={t('navActivity')} />
       <div className="space-y-4">
         <div className="card-surface p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          <select
+          <Select
+            variant="compact"
+            modalTitle="কার্যালয় ফিল্টার"
+            aria-label="Filter by office"
             value={officeFilter}
             onChange={(e) => setOfficeFilter(e.target.value)}
-            className="min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-          >
-            <option value="ALL">সকল অফিস + গ্লোবাল</option>
-            <option value="GLOBAL">শুধু গ্লোবাল কার্যক্রম</option>
-            {offices.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.nameBn || o.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: 'ALL', label: 'সকল অফিস + গ্লোবাল' },
+              { value: 'GLOBAL', label: 'শুধু গ্লোবাল কার্যক্রম' },
+              ...offices.map((o) => ({
+                value: o.id,
+                label: o.nameBn || o.name,
+                subtitle: `কোড: ${o.code}`,
+                keywords: `${o.name} ${o.nameBn} ${o.code}`,
+              })),
+            ]}
+          />
 
-          <select
+          <Select
+            variant="compact"
+            modalTitle="কার্যক্রমের ধরন"
+            aria-label="Filter by action"
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
-            className="min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
           >
             <option value="ALL">সকল ধরন</option>
             <option value="create">Create</option>
@@ -66,7 +73,7 @@ export function ActivityPage() {
             <option value="chargeGrant">Grant Addl. Charge</option>
             <option value="chargeWithdraw">Withdraw Charge</option>
             <option value="migrate">Migrate</option>
-          </select>
+          </Select>
 
           <input
             type="search"

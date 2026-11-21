@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileDown, FileText, Layers, Maximize2, Minimize2, Printer } from 'lucide-react';
+import { FileDown, FileText, Layers, Loader2, Maximize2, Minimize2, Printer } from 'lucide-react';
 import { Modal } from './Modal';
 import { BillForm } from './BillForm';
 import { sanitizeBillFileSegment, type Tr21FormData } from '../lib/billFormData';
@@ -133,60 +133,80 @@ export const BillFormPreviewModal: React.FC<BillFormPreviewModalProps> = ({
       fullScreenOnMobile
       maxWidthClass="md:max-w-5xl"
       footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:justify-between">
+          <div className="grid grid-cols-2 md:flex md:flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setFitToWidth((v) => !v)}
-              className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium inline-flex items-center gap-1.5 hover:bg-[var(--surface-subtle)]"
+              className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--text)] text-xs font-medium inline-flex items-center justify-center gap-1.5 hover:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              {fitToWidth ? <Maximize2 className="w-3.5 h-3.5" /> : <Minimize2 className="w-3.5 h-3.5" />}
+              {fitToWidth ? (
+                <Maximize2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <Minimize2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              )}
               <span>{fitToWidth ? '১০০% জুম' : 'স্ক্রিন ফিট'}</span>
             </button>
 
             <button
               type="button"
+              aria-pressed={showSectionGuides}
               onClick={() => setShowSectionGuides((v) => !v)}
-              className={`min-h-[40px] px-3 rounded-lg border text-xs font-medium inline-flex items-center gap-1.5 ${
+              className={`min-h-[44px] px-3 rounded-xl border text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                 showSectionGuides
-                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'border-[var(--line)] hover:bg-[var(--surface-subtle)]'
+                  ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--on-accent)]'
+                  : 'border-[var(--border-strong)] bg-[var(--card)] text-[var(--text)] hover:bg-[var(--surface-subtle)]'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
+              <Layers className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               <span>{showSectionGuides ? 'সেকশন গাইড চালু' : 'সেকশন গাইড'}</span>
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-3 md:flex md:flex-wrap items-center gap-2">
             <button
               type="button"
               disabled={Boolean(busyAction)}
+              aria-busy={busyAction === 'print'}
               onClick={handlePrint}
-              className="min-h-[42px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
+              className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--text)] hover:bg-[var(--surface-subtle)] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              <Printer className="w-4 h-4 shrink-0" />
+              {busyAction === 'print' ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <Printer className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
               <span>{busyAction === 'print' ? 'প্রিন্ট…' : 'Print'}</span>
             </button>
 
             <button
               type="button"
               disabled={Boolean(busyAction)}
+              aria-busy={busyAction === 'pdf'}
               onClick={handleExportPdf}
-              className="min-h-[42px] px-3.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
+              className="min-h-[44px] px-3.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              <FileDown className="w-4 h-4 shrink-0" />
+              {busyAction === 'pdf' ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <FileDown className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
               <span>{busyAction === 'pdf' ? 'PDF হচ্ছে…' : 'PDF'}</span>
             </button>
 
             <button
               type="button"
               disabled={Boolean(busyAction)}
+              aria-busy={busyAction === 'docx'}
               onClick={handleExportDocx}
-              className="min-h-[42px] px-3.5 rounded-lg border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
+              className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
             >
-              <FileText className="w-4 h-4 shrink-0" />
-              <span>{busyAction === 'docx' ? 'Word হচ্ছে…' : 'Word (.docx)'}</span>
+              {busyAction === 'docx' ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <FileText className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
+              <span className="truncate">{busyAction === 'docx' ? 'Word হচ্ছে…' : 'Word (.docx)'}</span>
             </button>
           </div>
         </div>

@@ -204,6 +204,12 @@ const en = {
   confirmDeleteBtn: 'Delete draft',
   editDraftRatesBtn: 'Edit rates & details',
   hideEditFormBtn: 'Close editor',
+  requiredFieldAria: 'required',
+  discardChangesTitle: 'Discard changes?',
+  discardChangesBody: 'You have unsaved changes. Close without saving?',
+  keepEditing: 'Keep editing',
+  itemLabel: 'Item',
+  removeItemLabel: 'Remove item',
 };
 
 const bn: Record<keyof typeof en, string> = {
@@ -410,6 +416,12 @@ const bn: Record<keyof typeof en, string> = {
   confirmDeleteBtn: 'খসড়া মুছুন',
   editDraftRatesBtn: 'হার ও তথ্য সম্পাদনা',
   hideEditFormBtn: 'সম্পাদনা বন্ধ করুন',
+  requiredFieldAria: 'আবশ্যক',
+  discardChangesTitle: 'পরিবর্তন বাতিল করবেন?',
+  discardChangesBody: 'আপনার অসংরক্ষিত পরিবর্তন রয়েছে। সংরক্ষণ না করেই বন্ধ করতে চান?',
+  keepEditing: 'সম্পাদনা চালিয়ে যান',
+  itemLabel: 'আইটেম',
+  removeItemLabel: 'আইটেম সরান',
 };
 
 export type TranslationKey = keyof typeof en;

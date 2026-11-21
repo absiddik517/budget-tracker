@@ -1,10 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Trash2, Upload } from 'lucide-react';
+import { Plus, Trash2, Upload } from 'lucide-react';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { Field, Section, TextInput, focusFirstInvalidField } from '../components/form';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
@@ -42,8 +43,11 @@ export function VatTaxModelPage() {
     { key: 'ac', label: 'AC', rate: 15 },
     { key: 'nonAc', label: 'Non-AC', rate: 10 },
   ]);
+  const [itError, setItError] = useState('');
+  const [vatError, setVatError] = useState('');
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const rateFormRef = useRef<HTMLFormElement>(null);
 
   const pagedRates = useMemo(() => {
     const start = (page - 1) * 50;
@@ -54,6 +58,8 @@ export function VatTaxModelPage() {
     setEditingRate(null);
     setCode('');
     setCodeError('');
+    setItError('');
+    setVatError('');
     setDescription('');
     setDescriptionBn('');
     setIncomeTax('5');
@@ -75,6 +81,8 @@ export function VatTaxModelPage() {
     setEditingRate(rate);
     setCode(rate.economicCode);
     setCodeError('');
+    setItError('');
+    setVatError('');
     setDescription(head.headName);
     setDescriptionBn(head.headNameBn);
     setIncomeTax(String(rate.incomeTax));
@@ -95,14 +103,56 @@ export function VatTaxModelPage() {
     setDescriptionBn(entry?.headNameBn || '');
   };
 
+  const isRateModalDirty = useMemo(() => {
+    if (!modalOpen) return false;
+    if (!editingRate) {
+      return (
+        Boolean(code.trim()) ||
+        incomeTax !== '5' ||
+        hasVariants ||
+        singleVat !== '10'
+      );
+    }
+    const origHasVariants = editingRate.vat.length > 1;
+    const origSingleVat = String(editingRate.vat[0]?.rate ?? 0);
+    return (
+      incomeTax !== String(editingRate.incomeTax) ||
+      hasVariants !== origHasVariants ||
+      (!hasVariants && singleVat !== origSingleVat) ||
+      (hasVariants && JSON.stringify(variants) !== JSON.stringify(editingRate.vat))
+    );
+  }, [modalOpen, editingRate, code, incomeTax, hasVariants, singleVat, variants]);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc || !canEdit) return;
     const trimmedCode = code.trim();
     const entry = getCodeEntry(trimmedCode);
+    const itParsed = parseFloat(incomeTax);
+    const singleParsed = parseFloat(singleVat);
+
+    let hasError = false;
     if (!entry) {
       setCodeError('Select a valid economic code from Economic Codes.');
-      pushToast('error', 'Select a valid economic code.');
+      hasError = true;
+    } else {
+      setCodeError('');
+    }
+    if (incomeTax.trim() !== '' && (Number.isNaN(itParsed) || itParsed < 0 || itParsed > 100)) {
+      setItError('Enter a rate between 0 and 100%.');
+      hasError = true;
+    } else {
+      setItError('');
+    }
+    if (!hasVariants && singleVat.trim() !== '' && (Number.isNaN(singleParsed) || singleParsed < 0 || singleParsed > 100)) {
+      setVatError('Enter a VAT rate between 0 and 100%.');
+      hasError = true;
+    } else {
+      setVatError('');
+    }
+    if (hasError || !entry) {
+      if (!entry) pushToast('error', 'Select a valid economic code.');
+      requestAnimationFrame(() => focusFirstInvalidField(rateFormRef.current));
       return;
     }
 
@@ -452,44 +502,48 @@ export function VatTaxModelPage() {
 
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => !saving && setModalOpen(false)}
         title={editingRate ? `Edit Rate · ${editingRate.economicCode}` : 'New Vat & Tax Rate'}
         subtitle={`FY ${selectedFy}`}
-        maxWidthClass="md:max-w-lg"
+        size="md"
+        fullScreenOnMobile
+        confirmClose={isRateModalDirty && !saving}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setModalOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="vat-tax-form"
-              disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : t('save')}
-            </button>
-          </div>
+          <ModalFooter
+            loading={saving}
+            secondary={{
+              label: t('cancel'),
+              disabled: saving,
+              onClick: () => setModalOpen(false),
+            }}
+            primary={{
+              label: saving ? 'Saving…' : t('save'),
+              type: 'submit',
+              form: 'vat-tax-form',
+            }}
+          />
         }
       >
-        <form id="vat-tax-form" onSubmit={handleSave} className="space-y-4">
-          <EconomicCodeSelect
+        <form ref={rateFormRef} id="vat-tax-form" onSubmit={handleSave} noValidate className="space-y-4">
+          <Field
             label="Economic code (7 digits or GENERAL-CONSTRUCTION)"
-            value={code}
-            onChange={handleCodeSelect}
+            labelAs="span"
+            required={!editingRate}
             error={codeError}
-            disabled={Boolean(editingRate)}
-            includeInactive={Boolean(editingRate)}
-            includeSpecial={true}
-            placeholder="Select economic code…"
-          />
+          >
+            <EconomicCodeSelect
+              label=""
+              value={code}
+              onChange={handleCodeSelect}
+              disabled={Boolean(editingRate)}
+              includeInactive={Boolean(editingRate)}
+              includeSpecial={true}
+              placeholder="Select economic code…"
+            />
+          </Field>
 
           {code && (
-            <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+            <div className="px-3.5 py-2.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
               <div className="text-[11px] font-medium text-[var(--muted)]">
                 ব্যয়ের খাত
               </div>
@@ -499,56 +553,58 @@ export function VatTaxModelPage() {
             </div>
           )}
 
-          <div>
-            <label htmlFor="rate-it" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              Income tax (%)
-            </label>
-            <input
-              id="rate-it"
+          <Field label="Income tax (%)" error={itError}>
+            <TextInput
               type="number"
               step="0.01"
               min="0"
               max="100"
               value={incomeTax}
-              onChange={(e) => setIncomeTax(e.target.value)}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+              onChange={(e) => {
+                setIncomeTax(e.target.value);
+                if (itError) setItError('');
+              }}
+              className="tabular-nums"
             />
-          </div>
+          </Field>
 
-          <div className="space-y-3 pt-1">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-medium text-[var(--muted)]">VAT structure</span>
+          <Section
+            title="VAT structure"
+            action={
               <button
                 type="button"
-                onClick={() => setHasVariants((v) => !v)}
-                className="min-h-[36px] text-xs font-medium text-[var(--accent)] hover:underline text-left"
+                onClick={() => {
+                  setHasVariants((v) => !v);
+                  if (vatError) setVatError('');
+                }}
+                className="min-h-[44px] px-2 text-xs font-semibold text-[var(--accent)] hover:underline text-right rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
               >
                 {hasVariants ? 'Switch to single rate' : 'Use multiple VAT variants (e.g. AC / Non-AC)'}
               </button>
-            </div>
-
+            }
+          >
             {!hasVariants ? (
-              <div>
-                <label htmlFor="rate-vat-single" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                  VAT (%)
-                </label>
-                <input
-                  id="rate-vat-single"
+              <Field label="VAT (%)" error={vatError}>
+                <TextInput
                   type="number"
                   step="0.01"
                   min="0"
                   max="100"
                   value={singleVat}
-                  onChange={(e) => setSingleVat(e.target.value)}
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                  onChange={(e) => {
+                    setSingleVat(e.target.value);
+                    if (vatError) setVatError('');
+                  }}
+                  className="tabular-nums"
                 />
-              </div>
+              </Field>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {variants.map((v, idx) => (
                   <div key={idx} className="flex items-center gap-2">
-                    <input
+                    <TextInput
                       type="text"
+                      aria-label={`Variant ${idx + 1} label`}
                       value={v.label}
                       onChange={(e) => {
                         const next = [...variants];
@@ -556,30 +612,33 @@ export function VatTaxModelPage() {
                         setVariants(next);
                       }}
                       placeholder="Variant label (e.g. AC)"
-                      className="min-w-0 flex-1 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+                      className="min-w-0 flex-1"
                     />
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      value={v.rate}
-                      onChange={(e) => {
-                        const next = [...variants];
-                        next[idx] = { ...v, rate: parseFloat(e.target.value) || 0 };
-                        setVariants(next);
-                      }}
-                      placeholder="%"
-                      className="w-20 sm:w-24 shrink-0 min-h-[44px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-right"
-                    />
+                    <div className="w-24 shrink-0">
+                      <TextInput
+                        type="number"
+                        aria-label={`Variant ${idx + 1} rate percentage`}
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={v.rate}
+                        onChange={(e) => {
+                          const next = [...variants];
+                          next[idx] = { ...v, rate: parseFloat(e.target.value) || 0 };
+                          setVariants(next);
+                        }}
+                        placeholder="%"
+                        className="tabular-nums text-right"
+                      />
+                    </div>
                     <button
                       type="button"
                       disabled={variants.length <= 2}
                       onClick={() => setVariants(variants.filter((_, i) => i !== idx))}
                       aria-label="Remove VAT variant"
-                      className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center rounded-lg border border-[var(--line)] text-[var(--danger-text)] disabled:opacity-30"
+                      className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 disabled:opacity-30 disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -591,13 +650,14 @@ export function VatTaxModelPage() {
                       { key: `v${variants.length + 1}`, label: 'Variant', rate: 0 },
                     ])
                   }
-                  className="min-h-[36px] text-xs font-medium text-[var(--accent)] hover:underline"
+                  className="min-h-[44px] w-full rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--accent)] inline-flex items-center justify-center gap-1.5 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                 >
-                  + Add variant
+                  <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>Add variant</span>
                 </button>
               </div>
             )}
-          </div>
+          </Section>
         </form>
       </Modal>
     </Layout>

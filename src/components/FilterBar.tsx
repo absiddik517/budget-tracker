@@ -31,6 +31,7 @@ export function FilterBar({
           placeholder={codePlaceholder}
           clearable
           includeInactive
+          variant="compact"
         />
       </div>
       <div className="relative w-full sm:w-64">

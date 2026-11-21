@@ -1,7 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
+import { Loader2 } from 'lucide-react';
 import { Layout } from '../components/Layout';
-import { Modal } from '../components/Modal';
+import { Modal, ModalFooter } from '../components/Modal';
+import {
+  Banner,
+  Field,
+  Section,
+  Segmented,
+  Select,
+  TextInput,
+  focusFirstInvalidField,
+} from '../components/form';
 import { PageHeader } from '../components/PageHeader';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
@@ -66,6 +76,12 @@ export function UsersPage() {
   const [invDesignation, setInvDesignation] = useState('');
   const [invOrderNo, setInvOrderNo] = useState('');
   const [invOrderDate, setInvOrderDate] = useState(todayYmd());
+  const [inviteErrors, setInviteErrors] = useState<{
+    email?: string;
+    officeId?: string;
+    designation?: string;
+  }>({});
+  const inviteFormRef = useRef<HTMLFormElement>(null);
   const [savingInvite, setSavingInvite] = useState(false);
 
   // User Detail & Postings modal state
@@ -78,6 +94,13 @@ export function UsersPage() {
   const [actOrderNo, setActOrderNo] = useState('');
   const [actOrderDate, setActOrderDate] = useState(todayYmd());
   const [actRemarks, setActRemarks] = useState('');
+  const [postingErrors, setPostingErrors] = useState<{
+    officeId?: string;
+    designation?: string;
+    orderNo?: string;
+    orderDate?: string;
+  }>({});
+  const postingFormRef = useRef<HTMLFormElement>(null);
   const [acting, setActing] = useState(false);
 
   // End regular posting inline state
@@ -227,6 +250,7 @@ export function UsersPage() {
     setInvDesignation('');
     setInvOrderNo('');
     setInvOrderDate(todayYmd());
+    setInviteErrors({});
     setInviteOpen(true);
   };
 
@@ -241,13 +265,37 @@ export function UsersPage() {
     setActOrderNo('');
     setActOrderDate(todayYmd());
     setActRemarks('');
+    setPostingErrors({});
     setEndingWhId(null);
     setEditingWhId(null);
   };
 
+  const isInviteDirty = Boolean(
+    invEmail.trim() || invName.trim() || invPhone.trim() || invDesignation.trim() || invOrderNo.trim()
+  );
+
   const handleInviteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!actorSnapshot) return;
+
+    const nextErrors: { email?: string; officeId?: string; designation?: string } = {};
+    const emailTrimmed = invEmail.trim();
+    if (!emailTrimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+      nextErrors.email = 'সঠিক ইমেইল ঠিকানা লিখুন।';
+    }
+    if (!invOfficeId) {
+      nextErrors.officeId = 'কার্যালয় নির্বাচন করুন।';
+    }
+    if (!invDesignation.trim()) {
+      nextErrors.designation = 'পদবি আবশ্যক।';
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setInviteErrors(nextErrors);
+      window.requestAnimationFrame(() => focusFirstInvalidField(inviteFormRef.current));
+      return;
+    }
+
+    setInviteErrors({});
     setSavingInvite(true);
     try {
       await createMultiOfficeInvite({
@@ -283,7 +331,26 @@ export function UsersPage() {
 
   const handlePostingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedUser || !actorSnapshot || !actOfficeId) return;
+    if (!selectedUser || !actorSnapshot) return;
+
+    const nextErrors: {
+      officeId?: string;
+      designation?: string;
+      orderNo?: string;
+      orderDate?: string;
+    } = {};
+    if (!actOfficeId) nextErrors.officeId = 'লক্ষ্য কার্যালয় নির্বাচন করুন।';
+    if (!actDesignation.trim()) nextErrors.designation = 'পদবি আবশ্যক।';
+    if (!actOrderNo.trim()) nextErrors.orderNo = 'আদেশ নং আবশ্যক।';
+    if (!actOrderDate) nextErrors.orderDate = 'আদেশের তারিখ আবশ্যক।';
+
+    if (Object.keys(nextErrors).length > 0) {
+      setPostingErrors(nextErrors);
+      window.requestAnimationFrame(() => focusFirstInvalidField(postingFormRef.current));
+      return;
+    }
+
+    setPostingErrors({});
     setActing(true);
     try {
       if (actionTab === 'ddo') {
@@ -453,40 +520,47 @@ export function UsersPage() {
             placeholder="নাম, ইমেইল, পদবি বা ফোন খুঁজুন…"
             className="min-h-[42px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
           />
-          <select
+          <Select
+            variant="compact"
+            modalTitle="কার্যালয় ফিল্টার"
             value={officeFilter}
             onChange={(e) => setOfficeFilter(e.target.value)}
             aria-label="Filter by office"
-            className="min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
-          >
-            <option value="all">সকল কার্যালয়</option>
-            {offices.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.nameBn || o.name} ({o.code})
-              </option>
-            ))}
-          </select>
-          <select
+            options={[
+              { value: 'all', label: 'সকল কার্যালয়' },
+              ...offices.map((o) => ({
+                value: o.id,
+                label: o.nameBn || o.name,
+                subtitle: `কোড: ${o.code}`,
+                keywords: `${o.name} ${o.nameBn} ${o.code}`,
+              })),
+            ]}
+          />
+          <Select
+            variant="compact"
+            modalTitle="ভূমিকা ফিল্টার"
+            searchable={false}
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
             aria-label="Filter by role"
-            className="min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
           >
             <option value="all">সকল ভূমিকা</option>
             <option value="superAdmin">Super Admin</option>
             <option value="ddo">DDO</option>
             <option value="employee">Employee</option>
-          </select>
-          <select
+          </Select>
+          <Select
+            variant="compact"
+            modalTitle="অবস্থা ফিল্টার"
+            searchable={false}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'disabled')}
             aria-label="Filter by status"
-            className="min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
           >
             <option value="all">সকল অবস্থা</option>
             <option value="active">{t('active')}</option>
             <option value="disabled">{t('disabled')}</option>
-          </select>
+          </Select>
         </div>
 
         {/* Users Table / Cards */}
@@ -755,166 +829,167 @@ export function UsersPage() {
       {/* Invite User Modal */}
       <Modal
         open={inviteOpen}
-        onClose={() => setInviteOpen(false)}
+        onClose={() => !savingInvite && setInviteOpen(false)}
         title="নতুন ব্যবহারকারী আমন্ত্রণ"
         subtitle="প্রথমবার সাইন-ইন করার সাথে সাথেই ব্যবহারকারী নির্ধারিত কার্যালয়ে পদায়ন পাবেন।"
-        maxWidthClass="md:max-w-lg"
+        size="md"
+        fullScreenOnMobile
+        confirmClose={isInviteDirty && !savingInvite}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setInviteOpen(false)}
-              className="min-h-[44px] px-4 rounded-lg border border-[var(--line)] text-sm font-medium"
-            >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              form="invite-user-form"
-              disabled={savingInvite}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
-            >
-              {savingInvite ? 'পাঠানো হচ্ছে…' : 'আমন্ত্রণ পাঠান'}
-            </button>
-          </div>
+          <ModalFooter
+            loading={savingInvite}
+            secondary={{
+              label: t('cancel'),
+              onClick: () => setInviteOpen(false),
+              disabled: savingInvite,
+            }}
+            primary={{
+              label: savingInvite ? 'পাঠানো হচ্ছে…' : 'আমন্ত্রণ পাঠান',
+              type: 'submit',
+              form: 'invite-user-form',
+            }}
+          />
         }
       >
-        <form id="invite-user-form" onSubmit={handleInviteSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="inv-email" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              ইমেইল ঠিকানা *
-            </label>
-            <input
+        <form
+          ref={inviteFormRef}
+          id="invite-user-form"
+          onSubmit={handleInviteSubmit}
+          noValidate
+          className="space-y-4"
+        >
+          <Field
+            label="ইমেইল ঠিকানা"
+            htmlFor="inv-email"
+            required
+            error={inviteErrors.email}
+          >
+            <TextInput
               id="inv-email"
               type="email"
               required
               value={invEmail}
-              onChange={(e) => setInvEmail(e.target.value)}
+              onChange={(e) => {
+                setInvEmail(e.target.value);
+                if (inviteErrors.email) {
+                  setInviteErrors((prev) => ({ ...prev, email: undefined }));
+                }
+              }}
               placeholder="officer@office.gov.bd"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
             />
-          </div>
+          </Field>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="inv-name" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                নাম (ঐচ্ছিক)
-              </label>
-              <input
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <Field label="নাম (ঐচ্ছিক)" htmlFor="inv-name">
+              <TextInput
                 id="inv-name"
                 type="text"
                 value={invName}
                 onChange={(e) => setInvName(e.target.value)}
                 placeholder="পূর্ণ নাম"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+                className="bn"
               />
-            </div>
-            <div>
-              <label htmlFor="inv-phone" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                ফোন নম্বর (ঐচ্ছিক)
-              </label>
-              <input
+            </Field>
+            <Field label="ফোন নম্বর (ঐচ্ছিক)" htmlFor="inv-phone">
+              <TextInput
                 id="inv-phone"
-                type="text"
+                type="tel"
                 value={invPhone}
                 onChange={(e) => setInvPhone(e.target.value)}
                 placeholder="01XXXXXXXXX"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               />
-            </div>
+            </Field>
           </div>
 
-          <div>
-            <label htmlFor="inv-office" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              কার্যালয় *
-            </label>
-            <select
+          <Field
+            label="কার্যালয়"
+            htmlFor="inv-office"
+            required
+            error={inviteErrors.officeId}
+          >
+            <Select
               id="inv-office"
               required
               value={invOfficeId}
-              onChange={(e) => setInvOfficeId(e.target.value)}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+              onChange={(e) => {
+                setInvOfficeId(e.target.value);
+                if (inviteErrors.officeId) {
+                  setInviteErrors((prev) => ({ ...prev, officeId: undefined }));
+                }
+              }}
             >
               {offices.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.nameBn || o.name} ({o.code})
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="inv-role" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                ভূমিকা *
-              </label>
-              <select
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <Field label="ভূমিকা" htmlFor="inv-role" required>
+              <Select
                 id="inv-role"
                 value={invRole}
                 onChange={(e) => setInvRole(e.target.value as OfficeRole)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               >
                 <option value="employee">Employee</option>
                 <option value="ddo">DDO</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="inv-kind" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                পদায়নের ধরন *
-              </label>
-              <select
+              </Select>
+            </Field>
+            <Field label="পদায়নের ধরন" htmlFor="inv-kind" required>
+              <Select
                 id="inv-kind"
                 value={invKind}
                 onChange={(e) => setInvKind(e.target.value as PostingKind)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               >
                 <option value="regular">নিয়মিত (Regular)</option>
                 <option value="additionalCharge">অতিরিক্ত দায়িত্ব (Additional Charge)</option>
-              </select>
-            </div>
+              </Select>
+            </Field>
           </div>
 
-          <div>
-            <label htmlFor="inv-desig" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-              পদবি *
-            </label>
-            <input
+          <Field
+            label="পদবি"
+            htmlFor="inv-desig"
+            required
+            error={inviteErrors.designation}
+          >
+            <TextInput
               id="inv-desig"
               type="text"
               required
               value={invDesignation}
-              onChange={(e) => setInvDesignation(e.target.value)}
+              onChange={(e) => {
+                setInvDesignation(e.target.value);
+                if (inviteErrors.designation) {
+                  setInviteErrors((prev) => ({ ...prev, designation: undefined }));
+                }
+              }}
               placeholder="উপজেলা নির্বাহী অফিসার / হিসাবরক্ষক"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+              className="bn"
             />
-          </div>
+          </Field>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="inv-order-no" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                আদেশ নং (ঐচ্ছিক)
-              </label>
-              <input
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <Field label="আদেশ নং (ঐচ্ছিক)" htmlFor="inv-order-no">
+              <TextInput
                 id="inv-order-no"
                 type="text"
                 value={invOrderNo}
                 onChange={(e) => setInvOrderNo(e.target.value)}
                 placeholder="পদায়ন / বদলি আদেশ নং"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               />
-            </div>
-            <div>
-              <label htmlFor="inv-order-date" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
-                আদেশের তারিখ
-              </label>
-              <input
+            </Field>
+            <Field label="আদেশের তারিখ" htmlFor="inv-order-date">
+              <TextInput
                 id="inv-order-date"
                 type="date"
                 value={invOrderDate}
                 onChange={(e) => setInvOrderDate(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+                className="tabular-nums"
               />
-            </div>
+            </Field>
           </div>
         </form>
       </Modal>
@@ -922,228 +997,238 @@ export function UsersPage() {
       {/* User Detail, Postings & Work History Modal */}
       <Modal
         open={Boolean(selectedUser)}
-        onClose={() => setSelectedUserId(null)}
+        onClose={() => !acting && setSelectedUserId(null)}
         title={selectedUser ? `${selectedUser.name}` : ''}
         subtitle={
           selectedUser
             ? `${selectedUser.email}${selectedUser.designation ? ` · ${selectedUser.designation}` : ''}`
             : ''
         }
-        maxWidthClass="md:max-w-3xl"
+        size="lg"
+        fullScreenOnMobile
       >
         {selectedUser && (
-          <div className="space-y-5">
+          <div className="space-y-4">
             {/* Account Header Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <StatusChip variant={selectedUser.status === 'active' ? 'active' : 'disabled'}>
-                  {selectedUser.status === 'active' ? t('active') : t('disabled')}
-                </StatusChip>
-                {selectedUser.globalRole === 'superAdmin' && (
-                  <StatusChip variant="roleAccent">Super Admin</StatusChip>
-                )}
-                {selectedUser.phone && (
-                  <span className="text-[var(--muted)]">ফোন: {selectedUser.phone}</span>
-                )}
+            <Section>
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <StatusChip variant={selectedUser.status === 'active' ? 'active' : 'disabled'}>
+                    {selectedUser.status === 'active' ? t('active') : t('disabled')}
+                  </StatusChip>
+                  {selectedUser.globalRole === 'superAdmin' && (
+                    <StatusChip variant="roleAccent">Super Admin</StatusChip>
+                  )}
+                  {selectedUser.phone && (
+                    <span className="text-[var(--muted)]">ফোন: {selectedUser.phone}</span>
+                  )}
+                </div>
+                {selectedUser.id !== userDoc?.id &&
+                  selectedUser.globalRole !== 'superAdmin' && (
+                    <button
+                      type="button"
+                      disabled={acting}
+                      onClick={() => handleToggleUserStatus(selectedUser)}
+                      className="min-h-[44px] px-3.5 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                    >
+                      {selectedUser.status === 'disabled'
+                        ? 'অ্যাকাউন্ট সক্রিয় করুন'
+                        : 'অ্যাকাউন্ট নিষ্ক্রিয় করুন'}
+                    </button>
+                  )}
               </div>
-              {selectedUser.id !== userDoc?.id &&
-                selectedUser.globalRole !== 'superAdmin' && (
-                  <button
-                    type="button"
-                    disabled={acting}
-                    onClick={() => handleToggleUserStatus(selectedUser)}
-                    className="min-h-[36px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
-                  >
-                    {selectedUser.status === 'disabled'
-                      ? 'অ্যাকাউন্ট সক্রিয় করুন'
-                      : 'অ্যাকাউন্ট নিষ্ক্রিয় করুন'}
-                  </button>
-                )}
-            </div>
+            </Section>
 
             {/* Posting Actions for non-SuperAdmin active users */}
             {selectedUser.globalRole !== 'superAdmin' &&
               selectedUser.status === 'active' &&
               offices.length > 0 && (
-                <div className="border border-[var(--line)] rounded-xl p-4 space-y-3.5">
-                  <div className="flex flex-wrap gap-1.5 border-b border-[var(--line)] pb-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setActionTab('ddo')}
-                      className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors ${
-                        actionTab === 'ddo'
-                          ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                          : 'bg-[var(--surface-subtle)] text-[var(--text)]'
-                      }`}
-                    >
-                      DDO পদায়ন / হস্তান্তর
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActionTab('transfer')}
-                      className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors ${
-                        actionTab === 'transfer'
-                          ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                          : 'bg-[var(--surface-subtle)] text-[var(--text)]'
-                      }`}
-                    >
-                      বদলি (Transfer)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActionTab('additionalCharge')}
-                      className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors ${
-                        actionTab === 'additionalCharge'
-                          ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                          : 'bg-[var(--surface-subtle)] text-[var(--text)]'
-                      }`}
-                    >
-                      অতিরিক্ত দায়িত্ব (Additional Charge)
-                    </button>
-                  </div>
+                <Section title="পদায়ন ও বদলি">
+                  <Segmented
+                    ariaLabel="পদায়ন কার্যক্রম"
+                    fullWidth={false}
+                    className="w-full"
+                    value={actionTab}
+                    onChange={(tab) => {
+                      setActionTab(tab);
+                      setPostingErrors({});
+                    }}
+                    options={[
+                      { value: 'ddo', label: 'DDO পদায়ন / হস্তান্তর' },
+                      { value: 'transfer', label: 'বদলি (Transfer)' },
+                      { value: 'additionalCharge', label: 'অতিরিক্ত দায়িত্ব (Additional Charge)' },
+                    ]}
+                  />
 
                   {currentDdoConflict && (
-                    <div className="p-3 rounded-lg bg-[var(--warn-bg)] text-[var(--warn-text)] text-xs font-medium">
+                    <Banner variant="warn">
                       সতর্কতা: এই কার্যালয়ে বর্তমানে <strong>{currentDdoConflict.userName}</strong>{' '}
                       সক্রিয় DDO হিসেবে দায়িত্বরত আছেন। নতুন DDO পদায়ন করলে একই লেনদেনে পূর্বের DDO-এর পদায়ন সমাপ্ত (Handover) হয়ে যাবে।
-                    </div>
+                    </Banner>
                   )}
 
-                  <form onSubmit={handlePostingSubmit} className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                          লক্ষ্য কার্যালয় *
-                        </label>
-                        <select
+                  <form
+                    ref={postingFormRef}
+                    onSubmit={handlePostingSubmit}
+                    noValidate
+                    className="space-y-3.5"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      <Field
+                        label="লক্ষ্য কার্যালয়"
+                        htmlFor="user-act-office"
+                        required
+                        error={postingErrors.officeId}
+                      >
+                        <Select
+                          id="user-act-office"
                           required
                           value={actOfficeId}
-                          onChange={(e) => setActOfficeId(e.target.value)}
-                          className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                          onChange={(e) => {
+                            setActOfficeId(e.target.value);
+                            if (postingErrors.officeId) {
+                              setPostingErrors((prev) => ({ ...prev, officeId: undefined }));
+                            }
+                          }}
                         >
                           {offices.map((o) => (
                             <option key={o.id} value={o.id}>
                               {o.nameBn || o.name} ({o.code})
                             </option>
                           ))}
-                        </select>
-                      </div>
+                        </Select>
+                      </Field>
 
                       {actionTab === 'ddo' ? (
-                        <div>
-                          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                            পদায়নের ধরন *
-                          </label>
-                          <select
+                        <Field label="পদায়নের ধরন" htmlFor="user-act-kind" required>
+                          <Select
+                            id="user-act-kind"
                             value={actKind}
                             onChange={(e) => setActKind(e.target.value as PostingKind)}
-                            className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
                           >
                             <option value="regular">নিয়মিত (Regular)</option>
                             <option value="additionalCharge">অতিরিক্ত দায়িত্ব (Additional Charge)</option>
-                          </select>
-                        </div>
+                          </Select>
+                        </Field>
                       ) : (
-                        <div>
-                          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                            ভূমিকা *
-                          </label>
-                          <select
+                        <Field label="ভূমিকা" htmlFor="user-act-role" required>
+                          <Select
+                            id="user-act-role"
                             value={actRole}
                             onChange={(e) => setActRole(e.target.value as OfficeRole)}
-                            className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
                           >
                             <option value="employee">Employee</option>
                             <option value="ddo">DDO</option>
-                          </select>
-                        </div>
+                          </Select>
+                        </Field>
                       )}
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                          পদবি *
-                        </label>
-                        <input
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                      <Field
+                        label="পদবি"
+                        htmlFor="user-act-desig"
+                        required
+                        error={postingErrors.designation}
+                      >
+                        <TextInput
+                          id="user-act-desig"
                           type="text"
                           required
                           value={actDesignation}
-                          onChange={(e) => setActDesignation(e.target.value)}
+                          onChange={(e) => {
+                            setActDesignation(e.target.value);
+                            if (postingErrors.designation) {
+                              setPostingErrors((prev) => ({ ...prev, designation: undefined }));
+                            }
+                          }}
                           placeholder="পদবি"
-                          className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                          className="bn"
                         />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                          আদেশ নং *
-                        </label>
-                        <input
+                      </Field>
+                      <Field
+                        label="আদেশ নং"
+                        htmlFor="user-act-order-no"
+                        required
+                        error={postingErrors.orderNo}
+                      >
+                        <TextInput
+                          id="user-act-order-no"
                           type="text"
                           required
                           value={actOrderNo}
-                          onChange={(e) => setActOrderNo(e.target.value)}
+                          onChange={(e) => {
+                            setActOrderNo(e.target.value);
+                            if (postingErrors.orderNo) {
+                              setPostingErrors((prev) => ({ ...prev, orderNo: undefined }));
+                            }
+                          }}
                           placeholder="অফিস আদেশ নং"
-                          className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
                         />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                          আদেশের তারিখ *
-                        </label>
-                        <input
+                      </Field>
+                      <Field
+                        label="আদেশের তারিখ"
+                        htmlFor="user-act-order-date"
+                        required
+                        error={postingErrors.orderDate}
+                      >
+                        <TextInput
+                          id="user-act-order-date"
                           type="date"
                           required
                           value={actOrderDate}
-                          onChange={(e) => setActOrderDate(e.target.value)}
-                          className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                          onChange={(e) => {
+                            setActOrderDate(e.target.value);
+                            if (postingErrors.orderDate) {
+                              setPostingErrors((prev) => ({ ...prev, orderDate: undefined }));
+                            }
+                          }}
+                          className="tabular-nums"
                         />
-                      </div>
+                      </Field>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-                        মন্তব্য (ঐচ্ছিক)
-                      </label>
-                      <input
+                    <Field label="মন্তব্য (ঐচ্ছিক)" htmlFor="user-act-remarks">
+                      <TextInput
+                        id="user-act-remarks"
                         type="text"
                         value={actRemarks}
                         onChange={(e) => setActRemarks(e.target.value)}
                         placeholder="প্রয়োজনে মন্তব্য লিখুন"
-                        className="w-full min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                        className="bn"
                       />
-                    </div>
+                    </Field>
 
-                    <div className="flex justify-end">
+                    <div className="flex justify-end pt-1">
                       <button
                         type="submit"
                         disabled={acting}
-                        className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold disabled:opacity-60"
+                        className="w-full sm:w-auto min-h-[44px] px-5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                       >
-                        {acting
-                          ? 'সংরক্ষণ হচ্ছে…'
-                          : actionTab === 'ddo'
-                            ? 'DDO পদায়ন নিশ্চিত করুন'
-                            : actionTab === 'transfer'
-                              ? 'বদলি সম্পন্ন করুন'
-                              : 'অতিরিক্ত দায়িত্ব দিন'}
+                        {acting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+                        <span>
+                          {acting
+                            ? 'সংরক্ষণ হচ্ছে…'
+                            : actionTab === 'ddo'
+                              ? 'DDO পদায়ন নিশ্চিত করুন'
+                              : actionTab === 'transfer'
+                                ? 'বদলি সম্পন্ন করুন'
+                                : 'অতিরিক্ত দায়িত্ব দিন'}
+                        </span>
                       </button>
                     </div>
                   </form>
-                </div>
+                </Section>
               )}
 
             {/* Work History Timeline */}
-            <div className="space-y-2.5">
-              <h3 className="text-sm font-semibold text-[var(--text)]">
-                কর্ম-ইতিহাস ({selectedUserHistory.length})
-              </h3>
+            <Section title={`কর্ম-ইতিহাস (${selectedUserHistory.length})`}>
               {selectedUserHistory.length === 0 ? (
-                <p className="text-xs text-[var(--muted)] py-3">
+                <p className="text-xs text-[var(--muted)] py-2">
                   এখনো কোনো পদায়ন ইতিহাস নথিভুক্ত নেই।
                 </p>
               ) : (
-                <div className="space-y-2.5">
+                <div className="space-y-3">
                   {selectedUserHistory.map((wh) => {
                     const off = officesById.get(wh.officeId);
                     const offName = off?.nameBn || off?.name || wh.officeName || wh.officeId;
@@ -1153,16 +1238,16 @@ export function UsersPage() {
                     return (
                       <div
                         key={wh.id}
-                        className={`p-3 rounded-lg border ${
+                        className={`p-3.5 rounded-xl border ${
                           wh.status === 'active'
-                            ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)]/25'
+                            ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
                             : 'border-[var(--line)] bg-[var(--card)]'
-                        } space-y-2`}
+                        } space-y-2.5`}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div className="space-y-0.5">
+                        <div className="flex flex-wrap items-start justify-between gap-2.5">
+                          <div className="space-y-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="text-sm font-semibold text-[var(--text)] bn">
+                              <span className="text-sm font-semibold text-[var(--text)] bn break-words">
                                 {offName}
                               </span>
                               <StatusChip variant={wh.role === 'ddo' ? 'roleAccent' : 'roleNeutral'}>
@@ -1175,13 +1260,13 @@ export function UsersPage() {
                                 {wh.status === 'active' ? 'সক্রিয়' : 'সমাপ্ত'}
                               </StatusChip>
                             </div>
-                            <div className="text-xs text-[var(--muted)]">
+                            <div className="text-xs text-[var(--muted)] break-words">
                               পদবি: {wh.designation} · শুরু: {formatDateDisplay(wh.startDate)}
                               {wh.endDate ? ` · সমাপ্তি: ${formatDateDisplay(wh.endDate)}` : ''}
                               {wh.endReason ? ` (${wh.endReason})` : ''}
                             </div>
                             {(wh.orderNo || wh.remarks) && (
-                              <div className="text-xs text-[var(--muted)]">
+                              <div className="text-xs text-[var(--muted)] break-words">
                                 {wh.orderNo ? `আদেশ: ${wh.orderNo}` : ''}
                                 {wh.orderDate ? ` (${formatDateDisplay(wh.orderDate)})` : ''}
                                 {wh.remarks ? ` · ${wh.remarks}` : ''}
@@ -1189,13 +1274,13 @@ export function UsersPage() {
                             )}
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
                             {wh.status === 'active' && wh.kind === 'additionalCharge' && (
                               <button
                                 type="button"
                                 disabled={acting}
                                 onClick={() => handleWithdrawCharge(wh)}
-                                className="min-h-[32px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
+                                className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-xs font-semibold text-[var(--danger-text)] hover:bg-[var(--danger-bg)] transition-colors disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                               >
                                 দায়িত্ব প্রত্যাহার
                               </button>
@@ -1208,7 +1293,7 @@ export function UsersPage() {
                                   setEndReason('retired');
                                   setEndRemarks('');
                                 }}
-                                className="min-h-[32px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
+                                className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                               >
                                 পদায়ন সমাপ্ত
                               </button>
@@ -1225,7 +1310,7 @@ export function UsersPage() {
                                   setEditRemarks(wh.remarks || '');
                                 }
                               }}
-                              className="min-h-[32px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
+                              className="min-h-[44px] px-3 rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                             >
                               সংশোধন
                             </button>
@@ -1233,70 +1318,90 @@ export function UsersPage() {
                         </div>
 
                         {isEndingThis && (
-                          <div className="pt-2 border-t border-[var(--line)] flex flex-wrap items-end gap-2">
-                            <div>
-                              <label className="block text-[11px] text-[var(--muted)] mb-1">কারণ</label>
-                              <select
-                                value={endReason}
-                                onChange={(e) => setEndReason(e.target.value as WorkHistoryEndReason)}
-                                className="min-h-[34px] px-2.5 rounded border border-[var(--line)] bg-[var(--card)] text-xs"
+                          <div className="pt-3 border-t border-[var(--line)] grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                            <div className="sm:col-span-4">
+                              <Field label="কারণ" htmlFor={`wh-end-reason-${wh.id}`}>
+                                <Select
+                                  id={`wh-end-reason-${wh.id}`}
+                                  value={endReason}
+                                  onChange={(e) => setEndReason(e.target.value as WorkHistoryEndReason)}
+                                >
+                                  <option value="retired">অবসর (retired)</option>
+                                  <option value="relieved">অব্যাহতি (relieved)</option>
+                                  <option value="transferred">বদলি (transferred)</option>
+                                  <option value="other">অন্যান্য (other)</option>
+                                </Select>
+                              </Field>
+                            </div>
+                            <div className="sm:col-span-5">
+                              <Field label="মন্তব্য" htmlFor={`wh-end-remarks-${wh.id}`}>
+                                <TextInput
+                                  id={`wh-end-remarks-${wh.id}`}
+                                  type="text"
+                                  value={endRemarks}
+                                  onChange={(e) => setEndRemarks(e.target.value)}
+                                  placeholder="আদেশ নং বা মন্তব্য"
+                                  className="bn"
+                                />
+                              </Field>
+                            </div>
+                            <div className="sm:col-span-3">
+                              <button
+                                type="button"
+                                disabled={acting}
+                                onClick={() => handleEndRegularConfirm(wh)}
+                                className="w-full min-h-[48px] px-4 rounded-xl bg-[var(--danger-solid)] text-[var(--on-danger)] hover:opacity-90 text-sm font-semibold inline-flex items-center justify-center gap-2 transition-opacity disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                               >
-                                <option value="retired">অবসর (retired)</option>
-                                <option value="relieved">অব্যাহতি (relieved)</option>
-                                <option value="transferred">বদলি (transferred)</option>
-                                <option value="other">অন্যান্য (other)</option>
-                              </select>
+                                {acting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+                                <span>নিশ্চিত</span>
+                              </button>
                             </div>
-                            <div className="flex-1 min-w-[160px]">
-                              <label className="block text-[11px] text-[var(--muted)] mb-1">মন্তব্য</label>
-                              <input
-                                type="text"
-                                value={endRemarks}
-                                onChange={(e) => setEndRemarks(e.target.value)}
-                                className="w-full min-h-[34px] px-2.5 rounded border border-[var(--line)] bg-[var(--card)] text-xs"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              disabled={acting}
-                              onClick={() => handleEndRegularConfirm(wh)}
-                              className="min-h-[34px] px-3 rounded bg-[var(--danger-text)] text-white text-xs font-semibold"
-                            >
-                              নিশ্চিত
-                            </button>
                           </div>
                         )}
 
                         {isEditingThis && (
-                          <div className="pt-2 border-t border-[var(--line)] grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <input
-                              type="text"
-                              value={editOrderNo}
-                              onChange={(e) => setEditOrderNo(e.target.value)}
-                              placeholder="আদেশ নং"
-                              className="min-h-[34px] px-2.5 rounded border border-[var(--line)] bg-[var(--card)] text-xs"
-                            />
-                            <input
-                              type="date"
-                              value={editOrderDate}
-                              onChange={(e) => setEditOrderDate(e.target.value)}
-                              className="min-h-[34px] px-2.5 rounded border border-[var(--line)] bg-[var(--card)] text-xs"
-                            />
-                            <div className="flex gap-1.5">
-                              <input
-                                type="text"
-                                value={editRemarks}
-                                onChange={(e) => setEditRemarks(e.target.value)}
-                                placeholder="সংশোধনের মন্তব্য"
-                                className="flex-1 min-h-[34px] px-2.5 rounded border border-[var(--line)] bg-[var(--card)] text-xs"
-                              />
+                          <div className="pt-3 border-t border-[var(--line)] space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <Field label="আদেশ নং" htmlFor={`wh-edit-order-${wh.id}`}>
+                                <TextInput
+                                  id={`wh-edit-order-${wh.id}`}
+                                  type="text"
+                                  value={editOrderNo}
+                                  onChange={(e) => setEditOrderNo(e.target.value)}
+                                  placeholder="আদেশ নং"
+                                />
+                              </Field>
+                              <Field label="আদেশের তারিখ" htmlFor={`wh-edit-date-${wh.id}`}>
+                                <TextInput
+                                  id={`wh-edit-date-${wh.id}`}
+                                  type="date"
+                                  value={editOrderDate}
+                                  onChange={(e) => setEditOrderDate(e.target.value)}
+                                  className="tabular-nums"
+                                />
+                              </Field>
+                            </div>
+                            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                              <div className="flex-1 min-w-0">
+                                <Field label="সংশোধনের মন্তব্য" htmlFor={`wh-edit-remarks-${wh.id}`}>
+                                  <TextInput
+                                    id={`wh-edit-remarks-${wh.id}`}
+                                    type="text"
+                                    value={editRemarks}
+                                    onChange={(e) => setEditRemarks(e.target.value)}
+                                    placeholder="সংশোধনের মন্তব্য"
+                                    className="bn"
+                                  />
+                                </Field>
+                              </div>
                               <button
                                 type="button"
                                 disabled={acting}
                                 onClick={() => handleSaveWhCorrection(wh)}
-                                className="min-h-[34px] px-3 rounded bg-[var(--accent)] text-[var(--on-accent)] text-xs font-semibold"
+                                className="min-h-[48px] px-5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center justify-center gap-2 shrink-0 transition-colors disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                               >
-                                সংরক্ষণ
+                                {acting && <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />}
+                                <span>সংরক্ষণ</span>
                               </button>
                             </div>
                           </div>
@@ -1306,7 +1411,7 @@ export function UsersPage() {
                   })}
                 </div>
               )}
-            </div>
+            </Section>
           </div>
         )}
       </Modal>
