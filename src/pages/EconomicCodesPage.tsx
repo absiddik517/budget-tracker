@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
-import { Search, Upload } from 'lucide-react';
+import { BookOpen, MoreVertical, Pencil, Plus, Power, Search, Trash2, Upload } from 'lucide-react';
+import { BottomSheet } from '../components/BottomSheet';
+import { EmptyState } from '../components/EmptyState';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
+import { SegmentedChips } from '../components/SegmentedChips';
 import { StatusChip } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { useApp } from '../contexts/AppContext';
@@ -45,7 +48,14 @@ function parseCsvLine(line: string): string[] {
 
 export function EconomicCodesPage() {
   const { userDoc, accessState, isSuperAdmin } = useAuth();
-  const { currentOfficeRole, actorSnapshot, pushToast, t, reportPermissionError, clearPermissionError } = useApp();
+  const {
+    currentOfficeRole,
+    actorSnapshot,
+    pushToast,
+    t,
+    reportPermissionError,
+    clearPermissionError,
+  } = useApp();
   const { economicCodes, loading } = useEconomicCodes();
 
   const canEdit = canManageRates({ isSuperAdmin, officeRole: currentOfficeRole });
@@ -145,7 +155,22 @@ export function EconomicCodesPage() {
   const [activeInput, setActiveInput] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // 3-dot Action Menu Sheet
+  const [menuEntry, setMenuEntry] = useState<EconomicCodeDoc | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const statusCounts = useMemo(() => {
+    let activeCount = 0;
+    for (const item of economicCodes) {
+      if (item.active) activeCount += 1;
+    }
+    return {
+      all: economicCodes.length,
+      active: activeCount,
+      inactive: economicCodes.length - activeCount,
+    };
+  }, [economicCodes]);
 
   const filtered = useMemo(() => {
     const q = search.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -176,6 +201,7 @@ export function EconomicCodesPage() {
 
   const openEditModal = (entry: EconomicCodeDoc) => {
     if (!canEdit) return;
+    setMenuEntry(null);
     setEditingEntry(entry);
     setCodeInput(entry.code);
     setHeadNameBnInput(entry.headNameBn || entry.headName);
@@ -214,6 +240,7 @@ export function EconomicCodesPage() {
 
   const handleToggleActive = async (entry: EconomicCodeDoc) => {
     if (!userDoc || !canEdit) return;
+    setMenuEntry(null);
     const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
       await setEconomicCodeActive(entry, !entry.active, actor);
@@ -228,6 +255,7 @@ export function EconomicCodesPage() {
 
   const handleDelete = async (entry: EconomicCodeDoc) => {
     if (!userDoc || !isSuperAdmin) return;
+    setMenuEntry(null);
     const actor = actorSnapshot || { uid: userDoc.id, name: userDoc.name };
     try {
       await deleteEconomicCodeIfUnused(entry, actor);
@@ -286,24 +314,31 @@ export function EconomicCodesPage() {
   };
 
   const actions = canEdit ? (
-    <button
-      type="button"
-      onClick={openCreateModal}
-      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
-    >
-      {t('newEconomicCode')}
-    </button>
+    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        className="min-h-[44px] md:min-h-[40px] flex-1 sm:flex-initial px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-sm font-semibold text-[var(--text)] inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
+        <Upload className="w-4 h-4 shrink-0" />
+        <span>{t('importCsv')}</span>
+      </button>
+      <button
+        type="button"
+        onClick={openCreateModal}
+        className="min-h-[44px] md:min-h-[40px] flex-1 sm:flex-initial px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
+        <Plus className="w-4 h-4 shrink-0" />
+        <span>{t('newEconomicCode')}</span>
+      </button>
+    </div>
   ) : null;
 
   return (
     <Layout title={t('navEconomicCodes')}>
       <PageHeader title={t('navEconomicCodes')} actions={actions} />
-      <div className="space-y-3.5 md:space-y-4">
-        {!canEdit && (
-          <div className="card-surface px-3.5 md:px-4 py-2.5 text-xs text-[var(--muted)]">
-            গ্লোবাল অর্থনৈতিক কোড তালিকা (সকল কার্যালয়ের জন্য অভিন্ন) — শুধুমাত্র সুপার অ্যাডমিন নতুন কোড যোগ বা সম্পাদনা করতে পারবেন।
-          </div>
-        )}
+
+      <div className="space-y-3.5">
         {canEdit && (
           <input
             ref={fileInputRef}
@@ -314,232 +349,205 @@ export function EconomicCodesPage() {
           />
         )}
 
-        {/* Filters, Search & CSV Import */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            {(['all', 'active', 'inactive'] as const).map((f) => {
-              const active = statusFilter === f;
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => {
-                    setStatusFilter(f);
-                    setPage(1);
-                  }}
-                  className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                      : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  {t(f)}
-                </button>
-              );
-            })}
-          </div>
+        {/* Filter Chips */}
+        <SegmentedChips
+          ariaLabel="Filter economic codes by status"
+          value={statusFilter}
+          onChange={(next) => {
+            setStatusFilter(next);
+            setPage(1);
+          }}
+          options={[
+            { value: 'all', label: t('all'), count: statusCounts.all },
+            { value: 'active', label: t('active'), count: statusCounts.active },
+            { value: 'inactive', label: t('inactive'), count: statusCounts.inactive },
+          ]}
+        />
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
-            <div className="relative flex-1 min-w-0 md:w-72">
-              <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="কোড বা ব্যয়ের খাত খুঁজুন…"
-                aria-label="Search economic codes"
-                className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              />
-            </div>
-
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="min-h-[44px] md:min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>{t('importCsv')}</span>
-              </button>
-            )}
-          </div>
+        {/* Full-width Search Bar */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-[var(--muted)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            placeholder="কোড বা ব্যয়ের খাত খুঁজুন…"
+            aria-label="Search economic codes"
+            className="w-full min-h-[44px] pl-10 pr-3.5 rounded-[12px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          />
         </div>
 
-        {/* Table / Mobile Cards */}
-        <div className="card-surface overflow-hidden">
-          {/* Mobile Card List */}
-          <div className="md:hidden divide-y divide-[var(--line)]">
-            {loading ? (
-              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                Loading economic codes…
+        {/* 2-column Responsive Card Grid */}
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div
+                key={idx}
+                className="card-surface p-4 space-y-2.5 animate-pulse"
+                aria-hidden="true"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="h-4 w-24 rounded bg-[var(--surface-subtle)]" />
+                  <div className="h-5 w-16 rounded-full bg-[var(--surface-subtle)]" />
+                </div>
+                <div className="h-4 w-3/4 rounded bg-[var(--surface-subtle)]" />
+                <div className="h-3 w-1/3 rounded bg-[var(--surface-subtle)]" />
               </div>
-            ) : paged.length === 0 ? (
-              <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                {t('noDataFound')}
-              </div>
-            ) : (
-              paged.map((item) => {
+            ))}
+          </div>
+        ) : paged.length === 0 ? (
+          <EmptyState
+            icon={<BookOpen className="w-5 h-5" />}
+            title={t('noDataFound')}
+            description={
+              search || statusFilter !== 'all'
+                ? 'অন্য কোড বা স্ট্যাটাস দিয়ে খুঁজে দেখুন।'
+                : 'এখনো কোনো অর্থনৈতিক কোড যোগ করা হয়নি।'
+            }
+            action={
+              canEdit && !search && statusFilter === 'all' ? (
+                <button
+                  type="button"
+                  onClick={openCreateModal}
+                  className="min-h-[44px] px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{t('newEconomicCode')}</span>
+                </button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {paged.map((item) => {
                 const budgetCount = budgetUsageMap.get(item.code) || 0;
-                const usedAnywhere = isCodeUsedAnywhere(item.code);
-                return (
-                  <div key={item.code} className="p-3.5 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-bold tabular-nums text-[var(--text)]">
-                            {item.code}
-                          </span>
-                          <span className="text-xs text-[var(--muted)] tabular-nums">
-                            · {budgetCount} {budgetCount === 1 ? 'budget' : 'budgets'}
-                          </span>
-                        </div>
-                        <div
-                          className="text-sm font-medium text-[var(--text)] mt-1 break-words bn"
-                          style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
-                        >
-                          {item.headNameBn || item.headName}
-                        </div>
-                      </div>
+                const displayName = item.headNameBn || item.headName || '—';
+
+                const cardMainContent = (
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[15px] font-bold tabular-nums tracking-[0.01em] text-[var(--text)]">
+                        {item.code}
+                      </span>
                       <StatusChip variant={item.active ? 'active' : 'withdrawn'}>
                         {item.active ? t('active') : t('inactive')}
                       </StatusChip>
                     </div>
+                    <div
+                      className="text-[15px] font-medium text-[var(--text)] bn leading-snug"
+                      style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
+                    >
+                      {displayName}
+                    </div>
+                    <div className="text-xs text-[var(--muted)] tabular-nums">
+                      {isSuperAdmin
+                        ? `Used in ${budgetCount} ${budgetCount === 1 ? 'budget' : 'budgets'}`
+                        : item.special
+                        ? 'Special economic code'
+                        : 'Global economic code'}
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <div
+                    key={item.code}
+                    className={`card-surface flex items-center gap-2 transition-colors ${
+                      canEdit ? 'hover:border-[var(--muted)]/45 py-3 pl-4 pr-2' : 'p-4'
+                    }`}
+                  >
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(item)}
+                        className="flex-1 min-w-0 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                      >
+                        {cardMainContent}
+                      </button>
+                    ) : (
+                      cardMainContent
+                    )}
 
                     {canEdit && (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(item)}
-                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
-                        >
-                          {t('edit')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(item)}
-                          className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium hover:bg-[var(--surface-subtle)]"
-                        >
-                          {item.active ? 'Deactivate' : 'Activate'}
-                        </button>
-                        {isSuperAdmin && !usedAnywhere && (
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(item)}
-                            className="min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
-                          >
-                            {t('delete')}
-                          </button>
-                        )}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMenuEntry(item)}
+                        aria-label={`Actions for ${item.code}`}
+                        aria-haspopup="dialog"
+                        className="min-h-[44px] min-w-[44px] rounded-xl inline-flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                      >
+                        <MoreVertical className="w-5 h-5" />
+                      </button>
                     )}
                   </div>
                 );
-              })
+              })}
+            </div>
+
+            {filtered.length > 50 && (
+              <div className="card-surface overflow-hidden">
+                <Pagination page={page} totalItems={filtered.length} onPageChange={setPage} />
+              </div>
+            )}
+          </>
+        )}
+
+        <p className="text-xs text-[var(--muted)] text-center pt-1">
+          Global list, shared by all offices. Only Super Admin can add or edit.
+        </p>
+      </div>
+
+      {/* 3-dot Action Menu BottomSheet */}
+      <BottomSheet
+        open={Boolean(menuEntry)}
+        onClose={() => setMenuEntry(null)}
+        title={menuEntry?.code}
+        subtitle={menuEntry ? menuEntry.headNameBn || menuEntry.headName : undefined}
+        desktopMode="center"
+        closeLabel={t('closeLabel')}
+      >
+        {menuEntry && (
+          <div className="p-2 divide-y divide-[var(--line)]">
+            <button
+              type="button"
+              onClick={() => openEditModal(menuEntry)}
+              className="w-full min-h-[52px] px-3 flex items-center gap-3 text-left text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg transition-colors"
+            >
+              <Pencil className="w-4 h-4 text-[var(--muted)] shrink-0" />
+              <span>{t('edit')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleActive(menuEntry)}
+              className="w-full min-h-[52px] px-3 flex items-center gap-3 text-left text-sm font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg transition-colors"
+            >
+              <Power className="w-4 h-4 text-[var(--muted)] shrink-0" />
+              <span>{menuEntry.active ? 'Deactivate' : 'Activate'}</span>
+            </button>
+            {isSuperAdmin && !isCodeUsedAnywhere(menuEntry.code) && (
+              <button
+                type="button"
+                onClick={() => handleDelete(menuEntry)}
+                className="w-full min-h-[52px] px-3 flex items-center gap-3 text-left text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4 shrink-0" />
+                <span>{t('delete')}</span>
+              </button>
             )}
           </div>
-
-          {/* Desktop Table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                  <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">Code</th>
-                  <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
-                  <th className="py-3 px-4 font-medium whitespace-nowrap">{t('status')}</th>
-                  <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Used in</th>
-                  {canEdit && (
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Actions</th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--line)]">
-                {loading ? (
-                  <tr>
-                    <td colSpan={canEdit ? 5 : 4} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                      Loading economic codes…
-                    </td>
-                  </tr>
-                ) : paged.length === 0 ? (
-                  <tr>
-                    <td colSpan={canEdit ? 5 : 4} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                      {t('noDataFound')}
-                    </td>
-                  </tr>
-                ) : (
-                  paged.map((item) => {
-                    const budgetCount = budgetUsageMap.get(item.code) || 0;
-                    const usedAnywhere = isCodeUsedAnywhere(item.code);
-                    return (
-                      <tr
-                        key={item.code}
-                        className="group hover:bg-[var(--surface-subtle)] transition-colors"
-                      >
-                        <td className="sticky left-0 z-10 bg-[var(--card)] group-hover:bg-[var(--surface-subtle)] py-3 px-4 font-semibold tabular-nums whitespace-nowrap transition-colors">
-                          {item.code}
-                        </td>
-                        <td
-                          className="py-3 px-4 font-medium text-[var(--text)]"
-                          style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
-                        >
-                          {item.headNameBn || item.headName || '—'}
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <StatusChip variant={item.active ? 'active' : 'withdrawn'}>
-                            {item.active ? t('active') : t('inactive')}
-                          </StatusChip>
-                        </td>
-                        <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-[var(--muted)]">
-                          {budgetCount} {budgetCount === 1 ? 'budget' : 'budgets'}
-                        </td>
-                        {canEdit && (
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(item)}
-                                className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium hover:bg-[var(--card)]"
-                              >
-                                {t('edit')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleToggleActive(item)}
-                                className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium hover:bg-[var(--card)]"
-                              >
-                                {item.active ? 'Deactivate' : 'Activate'}
-                              </button>
-                              {isSuperAdmin && !usedAnywhere && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDelete(item)}
-                                  className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
-                                >
-                                  {t('delete')}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-          <Pagination page={page} totalItems={filtered.length} onPageChange={setPage} />
-        </div>
-      </div>
+        )}
+      </BottomSheet>
 
       {/* Add / Edit Modal */}
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingEntry ? `Edit Code · ${editingEntry.code}` : 'New Economic Code'}
-        subtitle="Master economic code entry"
+        subtitle="Master entry, shared by all offices"
         maxWidthClass="md:max-w-lg"
         footer={
           <div className="flex justify-end gap-2">
@@ -554,7 +562,7 @@ export function EconomicCodesPage() {
               type="submit"
               form="economic-code-form"
               disabled={saving}
-              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+              className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
             >
               {saving ? 'Saving…' : t('save')}
             </button>
@@ -570,13 +578,15 @@ export function EconomicCodesPage() {
               id="ec-code"
               type="text"
               required
+              inputMode="numeric"
+              maxLength={editingEntry?.special ? undefined : 7}
               disabled={Boolean(editingEntry)}
               pattern={editingEntry?.special ? undefined : '\\d{7}'}
               title="Economic code must be 7 digits"
               value={codeInput}
               onChange={(e) => setCodeInput(e.target.value)}
               placeholder="3211106"
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums disabled:opacity-60"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             />
           </div>
 
@@ -592,13 +602,13 @@ export function EconomicCodesPage() {
               onChange={(e) => setHeadNameBnInput(e.target.value)}
               placeholder="আপ্যায়ন ব্যয়"
               style={{ fontFamily: "Nikosh, 'Noto Sans Bengali', sans-serif" }}
-              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+              className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             />
           </div>
 
           <div className="flex items-center justify-between gap-3 py-2">
             <div className="min-w-0">
-              <div className="text-sm font-medium text-[var(--text)]">Active</div>
+              <div className="text-sm font-medium text-[var(--text)]">{t('active')}</div>
               <div className="text-xs text-[var(--muted)]">
                 Inactive codes are hidden from selects while existing records keep their name.
               </div>

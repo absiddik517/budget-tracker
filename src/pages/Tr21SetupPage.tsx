@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
   Eye,
   FileDown,
   FileText,
   Layers,
-  Maximize2,
-  Minimize2,
   Pencil,
   Plus,
   Printer,
@@ -20,6 +19,7 @@ import { Layout } from '../components/Layout';
 import { BillForm, TR21_FORM_SECTIONS } from '../components/BillForm';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
+import { SegmentedChips } from '../components/SegmentedChips';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { toBanglaDigits } from '../lib/banglaFormat';
@@ -29,6 +29,7 @@ import { isPermissionDeniedError, logFirestoreError, OperationType } from '../li
 import { saveOfficeSettings } from '../lib/firestoreOps';
 import { canEditOfficeBasic } from '../lib/permissions';
 import {
+  clampTr21Margin,
   cloneDefaultTr21Clauses,
   DEFAULT_INSTITUTIONAL_CODE,
   DEFAULT_IT_CODE,
@@ -37,10 +38,13 @@ import {
   DEFAULT_TR21_FONT_FAMILY,
   DEFAULT_TR21_FONT_SIZE,
   DEFAULT_TR21_FOOTER_TEXT,
+  DEFAULT_TR21_MARGINS,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
   resolveTr21FontFamily,
   resolveTr21FontSize,
+  resolveTr21Margins,
+  serializeTr21MarginsToLabel,
   TR21_FONT_OPTIONS,
   TR21_FONT_SIZE_OPTIONS,
 } from '../lib/tr21Defaults';
@@ -51,12 +55,23 @@ import type {
   BudgetDoc,
   CertificationClause,
   OfficeSettings,
+  Tr21Margins,
 } from '../types';
 
 const A4_WIDTH_PX = 794;
+const DEFAULT_MINISTRY_FALLBACK = 'প্রাথমিক ও গণশিক্ষা মন্ত্রণালয়';
+const DEFAULT_MOBILE_FALLBACK = '০১৯৬৭৫০০১০৫';
 
 type ClauseFilter = 'all' | 'page1' | 'page2';
 type MobilePane = 'setup' | 'preview';
+type AccordionStep = 1 | 2 | 3;
+
+interface MarginInputStrings {
+  top: string;
+  bottom: string;
+  left: string;
+  right: string;
+}
 
 interface ClauseModalState {
   mode: 'create' | 'edit';
@@ -66,6 +81,95 @@ interface ClauseModalState {
   page: 1 | 2;
   enabled: boolean;
   text: string;
+}
+
+function marginsToStrings(m: Tr21Margins): MarginInputStrings {
+  return {
+    top: String(m.top),
+    bottom: String(m.bottom),
+    left: String(m.left),
+    right: String(m.right),
+  };
+}
+
+interface AccordionCardProps {
+  step: AccordionStep;
+  title: string;
+  subtitle: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}
+
+function AccordionCard({
+  step,
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: AccordionCardProps) {
+  return (
+    <section className="card-surface overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full min-h-[68px] px-4 sm:px-5 py-3 flex items-center gap-3.5 text-left hover:bg-[var(--surface-subtle)]/60 transition-colors"
+      >
+        <span className="w-8 h-8 rounded-[9px] bg-[var(--accent-soft)] text-[var(--accent)] font-bold text-sm flex items-center justify-center shrink-0 tabular-nums">
+          {step}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block text-[15px] font-semibold text-[var(--text)] leading-snug">
+            {title}
+          </span>
+          <span className="block text-xs text-[var(--muted)] truncate mt-0.5">
+            {subtitle}
+          </span>
+        </span>
+        <ChevronDown
+          className={`w-5 h-5 text-[var(--muted)] shrink-0 transition-transform duration-200 ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {open && (
+        <div className="px-4 sm:px-5 pb-5 pt-4 border-t border-[var(--line)] space-y-3.5">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface ToggleSwitchProps {
+  checked: boolean;
+  disabled?: boolean;
+  ariaLabel: string;
+  onChange: (checked: boolean) => void;
+}
+
+function ToggleSwitch({ checked, disabled = false, ariaLabel, onChange }: ToggleSwitchProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-50 ${
+        checked ? 'bg-[var(--accent)]' : 'bg-[var(--line)] dark:bg-neutral-700'
+      }`}
+    >
+      <span
+        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-6' : 'translate-x-1'
+        }`}
+      />
+    </button>
+  );
 }
 
 function summarizeClauseNumbers(clauses: CertificationClause[]): string {
@@ -106,6 +210,15 @@ export function Tr21SetupPage() {
   const effectiveActor =
     actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
 
+  // Refs to preserve ministry/mobile values across Show switch toggles without adding disallowed Firestore keys
+  const savedMinistryRef = useRef(officeSettings.ministryName || DEFAULT_MINISTRY_FALLBACK);
+  const savedMobileRef = useRef(officeSettings.officeMobileNo || DEFAULT_MOBILE_FALLBACK);
+
+  const savedMarginsFromSettings = useMemo(
+    () => resolveTr21Margins(officeSettings.tr21Margins, officeSettings.tr21VoucherLabel),
+    [officeSettings.tr21Margins, officeSettings.tr21VoucherLabel]
+  );
+
   // Editable form state synced from officeSettings
   const [ministryName, setMinistryName] = useState(officeSettings.ministryName || '');
   const [officeName, setOfficeName] = useState(officeSettings.officeName);
@@ -114,35 +227,29 @@ export function Tr21SetupPage() {
   const [institutionalCode, setInstitutionalCode] = useState(
     officeSettings.institutionalCode || ''
   );
-  const [defaultPayeeText, setDefaultPayeeText] = useState(
-    officeSettings.defaultPayeeText || ''
-  );
-  const [placeName, setPlaceName] = useState(officeSettings.placeName || '');
-  const [defaultNetPayableCode, setDefaultNetPayableCode] = useState(
-    officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE
-  );
-  const [defaultItCode, setDefaultItCode] = useState(
-    officeSettings.defaultItCode || DEFAULT_IT_CODE
-  );
-  const [defaultVatCode, setDefaultVatCode] = useState(
-    officeSettings.defaultVatCode || DEFAULT_VAT_CODE
-  );
-  const [defaultSecurityCode, setDefaultSecurityCode] = useState(
-    officeSettings.defaultSecurityCode || DEFAULT_SECURITY_CODE
-  );
-  const [tr21FooterText, setTr21FooterText] = useState(
-    officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT
-  );
   const [tr21FontFamily, setTr21FontFamily] = useState(
     resolveTr21FontFamily(officeSettings.tr21FontFamily)
   );
   const [tr21FontSize, setTr21FontSize] = useState(
     resolveTr21FontSize(officeSettings.tr21FontSize)
   );
+  const [marginInputs, setMarginInputs] = useState<MarginInputStrings>(() =>
+    marginsToStrings(savedMarginsFromSettings)
+  );
+  const [tr21FooterText, setTr21FooterText] = useState(
+    officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT
+  );
   const [tr21Clauses, setTr21Clauses] = useState<CertificationClause[]>(() =>
     resolveTr21Clauses(officeSettings.tr21Clauses)
   );
   const [saving, setSaving] = useState(false);
+
+  // Accordion state (Step 1 open by default)
+  const [openSteps, setOpenSteps] = useState<Record<AccordionStep, boolean>>({
+    1: true,
+    2: false,
+    3: false,
+  });
 
   // UI & Preview controls
   const [clauseFilter, setClauseFilter] = useState<ClauseFilter>('all');
@@ -154,8 +261,8 @@ export function Tr21SetupPage() {
   const [mobilePane, setMobilePane] = useState<MobilePane>('setup');
   const [previewSourceId, setPreviewSourceId] = useState<'sample' | string>('sample');
   const [sampleAsDraft, setSampleAsDraft] = useState(false);
-  const [showSectionGuides, setShowSectionGuides] = useState(true);
-  const [fitToWidth, setFitToWidth] = useState(true);
+  const [showSectionGuides, setShowSectionGuides] = useState(false);
+  const [zoomMultiplier, setZoomMultiplier] = useState(1);
   const [busyAction, setBusyAction] = useState<'print' | 'pdf' | 'docx' | null>(null);
 
   // Live Firestore bills & budgets for real-bill previewing
@@ -173,22 +280,22 @@ export function Tr21SetupPage() {
   }, []);
 
   const resetFields = useCallback(() => {
-    setMinistryName(officeSettings.ministryName || '');
+    const nextMin = officeSettings.ministryName || '';
+    const nextMob = officeSettings.officeMobileNo || '';
+    if (nextMin.trim()) savedMinistryRef.current = nextMin;
+    if (nextMob.trim()) savedMobileRef.current = nextMob;
+
+    setMinistryName(nextMin);
     setOfficeName(officeSettings.officeName);
     setOfficeAddress(officeSettings.address || '');
-    setOfficeMobileNo(officeSettings.officeMobileNo || '');
+    setOfficeMobileNo(nextMob);
     setInstitutionalCode(officeSettings.institutionalCode || '');
-    setDefaultPayeeText(officeSettings.defaultPayeeText || '');
-    setPlaceName(officeSettings.placeName || '');
-    setDefaultNetPayableCode(officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE);
-    setDefaultItCode(officeSettings.defaultItCode || DEFAULT_IT_CODE);
-    setDefaultVatCode(officeSettings.defaultVatCode || DEFAULT_VAT_CODE);
-    setDefaultSecurityCode(officeSettings.defaultSecurityCode || DEFAULT_SECURITY_CODE);
-    setTr21FooterText(officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT);
     setTr21FontFamily(resolveTr21FontFamily(officeSettings.tr21FontFamily));
     setTr21FontSize(resolveTr21FontSize(officeSettings.tr21FontSize));
+    setMarginInputs(marginsToStrings(savedMarginsFromSettings));
+    setTr21FooterText(officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT);
     setTr21Clauses(resolveTr21Clauses(officeSettings.tr21Clauses));
-  }, [officeSettings]);
+  }, [officeSettings, savedMarginsFromSettings]);
 
   useEffect(() => {
     resetFields();
@@ -256,7 +363,14 @@ export function Tr21SetupPage() {
       unsubBills();
       unsubBudgets();
     };
-  }, [selectedFy, currentOfficeId, isAllOfficesMode, isLegacyPreMigration, clearPermissionError, reportPermissionError]);
+  }, [
+    selectedFy,
+    currentOfficeId,
+    isAllOfficesMode,
+    isLegacyPreMigration,
+    clearPermissionError,
+    reportPermissionError,
+  ]);
 
   useEffect(() => {
     const vp = viewportRef.current;
@@ -264,9 +378,11 @@ export function Tr21SetupPage() {
     if (!vp) return;
 
     const updateSizes = () => {
-      setViewportWidth(vp.clientWidth || A4_WIDTH_PX);
-      if (inner) {
-        setInnerHeight(inner.scrollHeight || 2260);
+      if (vp.clientWidth > 0) {
+        setViewportWidth(vp.clientWidth);
+      }
+      if (inner && inner.scrollHeight > 0) {
+        setInnerHeight(inner.scrollHeight);
       }
     };
     updateSizes();
@@ -277,37 +393,54 @@ export function Tr21SetupPage() {
     return () => ro.disconnect();
   }, [mobilePane, showSectionGuides, previewSourceId]);
 
+  const parsedMargins: Tr21Margins = useMemo(
+    () => ({
+      top: clampTr21Margin(
+        marginInputs.top === '' ? savedMarginsFromSettings.top : marginInputs.top,
+        savedMarginsFromSettings.top
+      ),
+      right: clampTr21Margin(
+        marginInputs.right === '' ? savedMarginsFromSettings.right : marginInputs.right,
+        savedMarginsFromSettings.right
+      ),
+      bottom: clampTr21Margin(
+        marginInputs.bottom === '' ? savedMarginsFromSettings.bottom : marginInputs.bottom,
+        savedMarginsFromSettings.bottom
+      ),
+      left: clampTr21Margin(
+        marginInputs.left === '' ? savedMarginsFromSettings.left : marginInputs.left,
+        savedMarginsFromSettings.left
+      ),
+    }),
+    [marginInputs, savedMarginsFromSettings]
+  );
+
   const isDirty = useMemo(() => {
     const savedMinistry = officeSettings.ministryName || '';
     const savedAddress = officeSettings.address || '';
     const savedMobile = officeSettings.officeMobileNo || '';
     const savedCode = officeSettings.institutionalCode || '';
-    const savedPayee = officeSettings.defaultPayeeText || '';
-    const savedPlace = officeSettings.placeName || '';
-    const savedNet = officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE;
-    const savedIt = officeSettings.defaultItCode || DEFAULT_IT_CODE;
-    const savedVat = officeSettings.defaultVatCode || DEFAULT_VAT_CODE;
-    const savedSecurity = officeSettings.defaultSecurityCode || DEFAULT_SECURITY_CODE;
     const savedFooter = officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT;
     const savedFontFamily = resolveTr21FontFamily(officeSettings.tr21FontFamily);
     const savedFontSize = resolveTr21FontSize(officeSettings.tr21FontSize);
     const savedClauses = JSON.stringify(resolveTr21Clauses(officeSettings.tr21Clauses));
     const currentClauses = JSON.stringify(tr21Clauses);
+    const marginsDirty =
+      parsedMargins.top !== savedMarginsFromSettings.top ||
+      parsedMargins.right !== savedMarginsFromSettings.right ||
+      parsedMargins.bottom !== savedMarginsFromSettings.bottom ||
+      parsedMargins.left !== savedMarginsFromSettings.left;
+
     return (
       ministryName.trim() !== savedMinistry.trim() ||
       (canEditOfficeName && officeName.trim() !== (officeSettings.officeName || '').trim()) ||
       officeAddress.trim() !== savedAddress.trim() ||
       officeMobileNo.trim() !== savedMobile.trim() ||
       institutionalCode !== savedCode ||
-      defaultPayeeText.trim() !== savedPayee.trim() ||
-      placeName.trim() !== savedPlace.trim() ||
-      defaultNetPayableCode !== savedNet ||
-      defaultItCode !== savedIt ||
-      defaultVatCode !== savedVat ||
-      defaultSecurityCode !== savedSecurity ||
       tr21FooterText.trim() !== savedFooter.trim() ||
       tr21FontFamily !== savedFontFamily ||
       tr21FontSize !== savedFontSize ||
+      marginsDirty ||
       currentClauses !== savedClauses
     );
   }, [
@@ -318,15 +451,11 @@ export function Tr21SetupPage() {
     officeAddress,
     officeMobileNo,
     institutionalCode,
-    defaultPayeeText,
-    placeName,
-    defaultNetPayableCode,
-    defaultItCode,
-    defaultVatCode,
-    defaultSecurityCode,
     tr21FooterText,
     tr21FontFamily,
     tr21FontSize,
+    parsedMargins,
+    savedMarginsFromSettings,
     tr21Clauses,
   ]);
 
@@ -338,15 +467,11 @@ export function Tr21SetupPage() {
       address: officeAddress.trim(),
       officeMobileNo: officeMobileNo.trim(),
       institutionalCode: institutionalCode.replace(/\D+/g, '').slice(0, 13),
-      defaultPayeeText: defaultPayeeText.trim(),
-      placeName: placeName.trim(),
-      defaultNetPayableCode: defaultNetPayableCode.trim() || DEFAULT_NET_PAYABLE_CODE,
-      defaultItCode: defaultItCode.trim() || DEFAULT_IT_CODE,
-      defaultVatCode: defaultVatCode.trim() || DEFAULT_VAT_CODE,
-      defaultSecurityCode: defaultSecurityCode.trim() || DEFAULT_SECURITY_CODE,
       tr21FooterText: tr21FooterText.trim() || DEFAULT_TR21_FOOTER_TEXT,
       tr21FontFamily,
       tr21FontSize,
+      tr21Margins: parsedMargins,
+      tr21VoucherLabel: serializeTr21MarginsToLabel(parsedMargins),
       tr21Clauses,
     }),
     [
@@ -356,15 +481,10 @@ export function Tr21SetupPage() {
       officeAddress,
       officeMobileNo,
       institutionalCode,
-      defaultPayeeText,
-      placeName,
-      defaultNetPayableCode,
-      defaultItCode,
-      defaultVatCode,
-      defaultSecurityCode,
       tr21FooterText,
       tr21FontFamily,
       tr21FontSize,
+      parsedMargins,
       tr21Clauses,
     ]
   );
@@ -372,10 +492,10 @@ export function Tr21SetupPage() {
   const sampleBill: BillDoc = useMemo(() => {
     const fyStartYear = parseInt(selectedFy.split('-')[0], 10) || 2025;
     const billYmd = `${fyStartYear}-09-21`;
-    const itCode = defaultItCode.trim() || DEFAULT_IT_CODE;
-    const vatCode = defaultVatCode.trim() || DEFAULT_VAT_CODE;
-    const secCode = defaultSecurityCode.trim() || DEFAULT_SECURITY_CODE;
-    const netCode = defaultNetPayableCode.trim() || DEFAULT_NET_PAYABLE_CODE;
+    const itCode = officeSettings.defaultItCode || DEFAULT_IT_CODE;
+    const vatCode = officeSettings.defaultVatCode || DEFAULT_VAT_CODE;
+    const secCode = officeSettings.defaultSecurityCode || DEFAULT_SECURITY_CODE;
+    const netCode = officeSettings.defaultNetPayableCode || DEFAULT_NET_PAYABLE_CODE;
     const gross = 700000; // 7,000 টাকা
     const itAmt = 35000; // 5% = 350 টাকা
     const vatAmt = 70000; // 10% = 700 টাকা
@@ -391,7 +511,7 @@ export function Tr21SetupPage() {
       billDate: billYmd,
       tokenNo: '',
       purposeText: 'অনুষ্ঠান / উৎসবাদি বাবদ ব্যয়ের বিল।',
-      payeeText: defaultPayeeText.trim() || 'ডি.ডি.ও',
+      payeeText: officeSettings.defaultPayeeText || 'ডি.ডি.ও',
       netPayableCode: netCode,
       supplier: null,
       deductions: [
@@ -474,11 +594,11 @@ export function Tr21SetupPage() {
     realOfficeId,
     selectedFy,
     sampleAsDraft,
-    defaultItCode,
-    defaultVatCode,
-    defaultSecurityCode,
-    defaultNetPayableCode,
-    defaultPayeeText,
+    officeSettings.defaultItCode,
+    officeSettings.defaultVatCode,
+    officeSettings.defaultSecurityCode,
+    officeSettings.defaultNetPayableCode,
+    officeSettings.defaultPayeeText,
   ]);
 
   const sampleBudget: BudgetDoc = useMemo(() => {
@@ -534,11 +654,15 @@ export function Tr21SetupPage() {
     });
   }, [selectedRealBill, draftOfficeSettings, fyBudgets, fyBills, getHead, sampleBill, sampleBudget]);
 
-  const scale = useMemo(() => {
-    if (!fitToWidth) return 1;
-    const available = Math.max(250, viewportWidth - 16);
-    return Math.min(1, available / A4_WIDTH_PX);
-  }, [fitToWidth, viewportWidth]);
+  const baseFitScale = useMemo(() => {
+    const available = Math.max(240, viewportWidth - 28);
+    return Math.min(1.25, Math.max(0.25, available / A4_WIDTH_PX));
+  }, [viewportWidth]);
+
+  const effectiveScale = useMemo(
+    () => Math.min(2, Math.max(0.2, baseFitScale * zoomMultiplier)),
+    [baseFitScale, zoomMultiplier]
+  );
 
   useEffect(() => {
     const maxPos = Math.max(1, tr21Clauses.length);
@@ -551,7 +675,6 @@ export function Tr21SetupPage() {
     const p2 = tr21Clauses.filter((c) => c.page === 2);
     const enabledCount = tr21Clauses.filter((c) => c.enabled).length;
 
-    // Detect if clauses form a clean contiguous Page 1 prefix followed by Page 2
     let firstPage2Idx = tr21Clauses.findIndex((c) => c.page === 2);
     if (firstPage2Idx === -1) firstPage2Idx = tr21Clauses.length;
     const isContiguousSplit = tr21Clauses.every((c, idx) =>
@@ -577,6 +700,10 @@ export function Tr21SetupPage() {
         return true;
       });
   }, [tr21Clauses, clauseFilter]);
+
+  const toggleAccordionStep = (step: AccordionStep) => {
+    setOpenSteps((prev) => ({ ...prev, [step]: !prev[step] }));
+  };
 
   const handleQuickPageSplit = (p1EndCount: number) => {
     if (!canEditTr21) return;
@@ -677,7 +804,7 @@ export function Tr21SetupPage() {
           text: cleanText,
         },
       ]);
-      pushToast('success', `ধারা ${cleanNum} যুক্ত হয়েছে। স্থায়ী করতে উপরে "সংরক্ষণ" চাপুন।`);
+      pushToast('success', `ধারা ${cleanNum} যুক্ত হয়েছে। স্থায়ী করতে Save চাপুন।`);
     } else if (clauseModal.index !== null) {
       const targetIdx = clauseModal.index;
       setTr21Clauses((prev) =>
@@ -716,13 +843,17 @@ export function Tr21SetupPage() {
     pushToast('info', `ধারা ${removedNum} তালিকা থেকে বাদ দেওয়া হয়েছে।`);
   };
 
-  const codeGroupsPreview = useMemo(() => {
-    const boxes = Array.from({ length: 13 }, (_, idx) => {
-      const ch = institutionalCode[idx];
-      return ch ? toBanglaDigits(ch) : '';
-    });
-    return [boxes.slice(0, 1), boxes.slice(1, 5), boxes.slice(5, 9), boxes.slice(9, 13)];
-  }, [institutionalCode]);
+  const cleanInstCode = useMemo(
+    () => institutionalCode.replace(/\D+/g, '').slice(0, 13),
+    [institutionalCode]
+  );
+
+  const codeSegmentPills = useMemo(() => {
+    const padded = cleanInstCode.padEnd(13, '·');
+    return [padded.slice(0, 1), padded.slice(1, 5), padded.slice(5, 9), padded.slice(9, 13)].map(
+      (grp) => toBanglaDigits(grp)
+    );
+  }, [cleanInstCode]);
 
   const handleSave = async () => {
     if (!userDoc || !canEditTr21 || !effectiveActor) return;
@@ -738,21 +869,17 @@ export function Tr21SetupPage() {
           ministryName: ministryName.trim(),
           address: officeAddress.trim(),
           officeMobileNo: officeMobileNo.trim(),
-          institutionalCode: institutionalCode.replace(/\D+/g, '').slice(0, 13),
-          defaultPayeeText: defaultPayeeText.trim(),
-          placeName: placeName.trim(),
-          defaultNetPayableCode: defaultNetPayableCode.trim() || DEFAULT_NET_PAYABLE_CODE,
-          defaultItCode: defaultItCode.trim() || DEFAULT_IT_CODE,
-          defaultVatCode: defaultVatCode.trim() || DEFAULT_VAT_CODE,
-          defaultSecurityCode: defaultSecurityCode.trim() || DEFAULT_SECURITY_CODE,
+          institutionalCode: cleanInstCode,
           tr21FooterText: tr21FooterText.trim() || DEFAULT_TR21_FOOTER_TEXT,
           tr21FontFamily: tr21FontFamily || DEFAULT_TR21_FONT_FAMILY,
           tr21FontSize: tr21FontSize || DEFAULT_TR21_FONT_SIZE,
+          tr21VoucherLabel: serializeTr21MarginsToLabel(parsedMargins),
           tr21Clauses,
         },
         effectiveActor,
         isLegacyPreMigration ? undefined : realOfficeId
       );
+      setMarginInputs(marginsToStrings(parsedMargins));
       pushToast('success', 'টি.আর. ফরম নং-২১ সেটআপ সংরক্ষিত হয়েছে।');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'সংরক্ষণ করা যায়নি।');
@@ -812,6 +939,28 @@ export function Tr21SetupPage() {
     }
   };
 
+  const showMinistry = Boolean(ministryName.trim());
+  const showMobile = Boolean(officeMobileNo.trim());
+  const activeFontLabel =
+    TR21_FONT_OPTIONS.find((opt) => opt.value === tr21FontFamily)?.label || tr21FontFamily;
+  const isDefaultTypographyAndMargins =
+    tr21FontFamily === DEFAULT_TR21_FONT_FAMILY &&
+    tr21FontSize === DEFAULT_TR21_FONT_SIZE &&
+    parsedMargins.top === DEFAULT_TR21_MARGINS.top &&
+    parsedMargins.right === DEFAULT_TR21_MARGINS.right &&
+    parsedMargins.bottom === DEFAULT_TR21_MARGINS.bottom &&
+    parsedMargins.left === DEFAULT_TR21_MARGINS.left;
+
+  const updateMarginInput = (side: keyof MarginInputStrings, value: string) => {
+    setMarginInputs((prev) => ({ ...prev, [side]: value }));
+  };
+
+  const normalizeMarginOnBlur = (side: keyof MarginInputStrings) => {
+    const fallback = DEFAULT_TR21_MARGINS[side];
+    const clamped = clampTr21Margin(marginInputs[side], fallback);
+    setMarginInputs((prev) => ({ ...prev, [side]: String(clamped) }));
+  };
+
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
       <Layout title={t('navTr21Setup')}>
@@ -839,18 +988,25 @@ export function Tr21SetupPage() {
       }}
     >
       <PageHeader title={t('navTr21Setup')} />
+
       {!canEditTr21 && (
-        <div className="mb-4 px-3.5 py-3 rounded-[14px] border border-[var(--line)] bg-[var(--card)] text-xs md:text-sm text-[var(--muted)]">
+        <div className="mb-4 px-4 py-3 rounded-[14px] border border-[var(--line)] bg-[var(--card)] text-xs md:text-sm text-[var(--muted)]">
           শুধুমাত্র সুপার অ্যাডমিন বা সংশ্লিষ্ট অফিসের DDO টি.আর. ফরম নং-২১ সেটআপ পরিবর্তন ও সংরক্ষণ করতে পারবেন। আপনি বর্তমান কনফিগারেশন ও লাইভ প্রিভিউ দেখতে এবং টেস্ট এক্সপোর্ট করতে পারেন।
         </div>
       )}
 
-      {/* Mobile / Tablet Pane Switcher */}
-      <div className="xl:hidden mb-3.5 inline-flex p-1 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+      {/* Mobile Segmented Tab Bar */}
+      <div
+        role="tablist"
+        aria-label="টি.আর. ফরম ২১ ভিউ"
+        className="md:hidden mb-3.5 grid grid-cols-2 gap-1 p-1 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]"
+      >
         <button
           type="button"
+          role="tab"
+          aria-selected={mobilePane === 'setup'}
           onClick={() => setMobilePane('setup')}
-          className={`min-h-[38px] px-3.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap ${
+          className={`min-h-[40px] px-3 rounded-[9px] text-xs font-semibold transition-all ${
             mobilePane === 'setup'
               ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
               : 'text-[var(--muted)] hover:text-[var(--text)]'
@@ -860,55 +1016,83 @@ export function Tr21SetupPage() {
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={mobilePane === 'preview'}
           onClick={() => setMobilePane('preview')}
-          className={`min-h-[38px] px-3.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap ${
+          className={`min-h-[40px] px-3 rounded-[9px] text-xs font-semibold transition-all ${
             mobilePane === 'preview'
               ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
               : 'text-[var(--muted)] hover:text-[var(--text)]'
           }`}
         >
-          লাইভ ফরম প্রিভিউ
+          লাইভ প্রিভিউ
         </button>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 md:gap-5 items-start">
-        {/* ================= LEFT COLUMN: FORM SETUP ================= */}
+      {/* Main 2-column grid on md+ with sticky live preview */}
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(300px,2fr)_minmax(0,3fr)] gap-4 lg:gap-5 items-start">
+        {/* ================= LEFT COLUMN: 3 ACCORDION CARDS ================= */}
         <div
-          className={`xl:col-span-5 space-y-4 ${
-            mobilePane === 'setup' ? 'block' : 'hidden xl:block'
+          className={`min-w-0 space-y-3.5 ${
+            mobilePane === 'setup' ? 'block' : 'hidden md:block'
           }`}
         >
-          {/* 1. Office Header & Institutional Code (P1-S1 & P1-S2) */}
-          <section className="card-surface p-4 md:p-5 space-y-3.5">
-            <div className="space-y-0.5">
-              <div className="text-xs text-[var(--muted)]">পাতা ১ · সেকশন P1-S1 ও P1-S2</div>
-              <h2 className="text-base font-semibold text-[var(--text)]">
-                শিরোনাম, দপ্তর ও কোড নং
-              </h2>
+          {/* 1. Header & office */}
+          <AccordionCard
+            step={1}
+            title="শিরোনাম, দপ্তর ও কোড নং"
+            subtitle={officeName || 'দপ্তরের নাম লিখুন'}
+            open={openSteps[1]}
+            onToggle={() => toggleAccordionStep(1)}
+          >
+            {/* Ministry + Show switch */}
+            <div className="flex items-end gap-3">
+              <div className="flex-1 min-w-0">
+                <label
+                  htmlFor="tr21-ministry-name"
+                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
+                >
+                  মন্ত্রণালয় / ঊর্ধ্বতন দপ্তর
+                </label>
+                <input
+                  id="tr21-ministry-name"
+                  type="text"
+                  disabled={!canEditTr21}
+                  value={ministryName}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val.trim()) savedMinistryRef.current = val;
+                    setMinistryName(val);
+                  }}
+                  placeholder={DEFAULT_MINISTRY_FALLBACK}
+                  className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                />
+              </div>
+              <div className="flex flex-col items-center shrink-0 pb-1.5">
+                <span className="text-[11px] font-semibold text-[var(--muted)] mb-1">
+                  দেখাবে
+                </span>
+                <ToggleSwitch
+                  checked={showMinistry}
+                  disabled={!canEditTr21}
+                  ariaLabel="ফরমে মন্ত্রণালয়ের নাম দেখান"
+                  onChange={(next) => {
+                    if (next) {
+                      setMinistryName(savedMinistryRef.current || DEFAULT_MINISTRY_FALLBACK);
+                    } else {
+                      if (ministryName.trim()) savedMinistryRef.current = ministryName;
+                      setMinistryName('');
+                    }
+                  }}
+                />
+              </div>
             </div>
 
-            <div>
-              <label
-                htmlFor="tr21-ministry-name"
-                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-              >
-                মন্ত্রণালয় / ঊর্ধ্বতন দপ্তর
-              </label>
-              <input
-                id="tr21-ministry-name"
-                type="text"
-                disabled={!canEditTr21}
-                value={ministryName}
-                onChange={(e) => setMinistryName(e.target.value)}
-                placeholder="প্রাথমিক ও গণশিক্ষা মন্ত্রণালয়"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-              />
-            </div>
-
+            {/* Office name */}
             <div>
               <label
                 htmlFor="tr21-office-name"
-                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
               >
                 দপ্তরের নাম
               </label>
@@ -919,7 +1103,7 @@ export function Tr21SetupPage() {
                 value={officeName}
                 onChange={(e) => setOfficeName(e.target.value)}
                 placeholder="উপজেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
               />
               {!canEditOfficeName && canEditTr21 && (
                 <p className="text-[11px] text-[var(--muted)] mt-1">
@@ -928,57 +1112,83 @@ export function Tr21SetupPage() {
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="tr21-office-address"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                >
-                  দপ্তরের ঠিকানা
-                </label>
-                <input
-                  id="tr21-office-address"
-                  type="text"
-                  disabled={!canEditTr21}
-                  value={officeAddress}
-                  onChange={(e) => setOfficeAddress(e.target.value)}
-                  placeholder="তারাকান্দা, ময়মনসিংহ"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                />
-              </div>
+            {/* Address */}
+            <div>
+              <label
+                htmlFor="tr21-office-address"
+                className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
+              >
+                দপ্তরের ঠিকানা
+              </label>
+              <input
+                id="tr21-office-address"
+                type="text"
+                disabled={!canEditTr21}
+                value={officeAddress}
+                onChange={(e) => setOfficeAddress(e.target.value)}
+                placeholder="তারাকান্দা, ময়মনসিংহ"
+                className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+              />
+            </div>
 
-              <div>
+            {/* Mobile + Show switch */}
+            <div className="flex items-end gap-3">
+              <div className="flex-1 min-w-0">
                 <label
                   htmlFor="tr21-mobile-no"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
                 >
                   মোবাইল নং (ডান শীর্ষে)
                 </label>
                 <input
                   id="tr21-mobile-no"
                   type="text"
+                  inputMode="tel"
                   disabled={!canEditTr21}
                   value={officeMobileNo}
-                  onChange={(e) => setOfficeMobileNo(e.target.value)}
-                  placeholder="০১৯৬৭৫০০১০৫"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val.trim()) savedMobileRef.current = val;
+                    setOfficeMobileNo(val);
+                  }}
+                  placeholder={DEFAULT_MOBILE_FALLBACK}
+                  className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                />
+              </div>
+              <div className="flex flex-col items-center shrink-0 pb-1.5">
+                <span className="text-[11px] font-semibold text-[var(--muted)] mb-1">
+                  দেখাবে
+                </span>
+                <ToggleSwitch
+                  checked={showMobile}
+                  disabled={!canEditTr21}
+                  ariaLabel="ফরমে মোবাইল নম্বর দেখান"
+                  onChange={(next) => {
+                    if (next) {
+                      setOfficeMobileNo(savedMobileRef.current || DEFAULT_MOBILE_FALLBACK);
+                    } else {
+                      if (officeMobileNo.trim()) savedMobileRef.current = officeMobileNo;
+                      setOfficeMobileNo('');
+                    }
+                  }}
                 />
               </div>
             </div>
 
+            {/* Institutional Code 13-digit + segmented pills preview */}
             <div>
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <label
                   htmlFor="tr21-inst-code"
-                  className="block text-xs font-medium text-[var(--muted)]"
+                  className="block text-xs font-semibold text-[var(--muted)]"
                 >
-                  কোড নং (১৩ ডিজিট · ১-৪-৪-৪ বিন্যাস)
+                  কোড নং · ১৩ ডিজিট, ১-৪-৪-৪ বিন্যাস
                 </label>
                 {canEditTr21 && institutionalCode !== DEFAULT_INSTITUTIONAL_CODE && (
                   <button
                     type="button"
                     onClick={() => setInstitutionalCode(DEFAULT_INSTITUTIONAL_CODE)}
-                    className="text-xs font-medium text-[var(--accent)] hover:underline whitespace-nowrap"
+                    className="text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap"
                   >
                     নমুনা কোড
                   </button>
@@ -995,327 +1205,217 @@ export function Tr21SetupPage() {
                   setInstitutionalCode(e.target.value.replace(/\D+/g, '').slice(0, 13))
                 }
                 placeholder="1240303000000"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
               />
               <div
-                className="flex flex-wrap items-center gap-1.5 mt-2"
+                className="flex flex-wrap items-center gap-1.5 mt-2.5 font-bold text-[var(--accent)]"
                 aria-label="১-৪-৪-৪ কোড বক্স প্রিভিউ"
               >
-                {codeGroupsPreview.map((grp, gIdx) => (
-                  <div key={gIdx} className="inline-flex items-center gap-1">
-                    {gIdx > 0 && <span className="text-xs font-bold text-[var(--muted)]">-</span>}
-                    <div className="inline-flex">
-                      {grp.map((ch, dIdx) => (
-                        <span
-                          key={dIdx}
-                          className="w-6 h-6 inline-flex items-center justify-center border border-[var(--line)] text-xs font-semibold tabular-nums bg-[var(--surface-subtle)] text-[var(--text)]"
-                        >
-                          {ch}
-                        </span>
-                      ))}
+                {codeSegmentPills.map((seg, idx) => (
+                  <React.Fragment key={idx}>
+                    {idx > 0 && <span className="text-[var(--muted)]">–</span>}
+                    <span className="px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-xs sm:text-sm tracking-wider tabular-nums">
+                      {seg}
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <p
+                className={`text-xs mt-1.5 tabular-nums ${
+                  cleanInstCode.length === 13
+                    ? 'text-[var(--muted)]'
+                    : 'text-[var(--danger-text)] font-medium'
+                }`}
+              >
+                {cleanInstCode.length === 13
+                  ? '১৩ ডিজিট সম্পূর্ণ হয়েছে'
+                  : `আরও ${toBanglaDigits(13 - cleanInstCode.length)}টি ডিজিট প্রয়োজন`}
+              </p>
+            </div>
+          </AccordionCard>
+
+          {/* 2. Font, size, margin (inch) & footer */}
+          <AccordionCard
+            step={2}
+            title="ফন্ট, সাইজ, মার্জিন ও ফুটার"
+            subtitle={`${activeFontLabel} · ${toBanglaDigits(tr21FontSize)} px · মার্জিন ${parsedMargins.top}″/${parsedMargins.right}″/${parsedMargins.bottom}″/${parsedMargins.left}″`}
+            open={openSteps[2]}
+            onToggle={() => toggleAccordionStep(2)}
+          >
+            {/* Font & Size */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="tr21-font-family"
+                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
+                >
+                  ফর্মের ফন্ট
+                </label>
+                <select
+                  id="tr21-font-family"
+                  disabled={!canEditTr21}
+                  value={tr21FontFamily}
+                  onChange={(e) => setTr21FontFamily(e.target.value)}
+                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                >
+                  {TR21_FONT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="tr21-font-size"
+                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
+                >
+                  ফন্ট সাইজ
+                </label>
+                <select
+                  id="tr21-font-size"
+                  disabled={!canEditTr21}
+                  value={tr21FontSize}
+                  onChange={(e) => setTr21FontSize(resolveTr21FontSize(Number(e.target.value)))}
+                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                >
+                  {TR21_FONT_SIZE_OPTIONS.map((sz) => (
+                    <option key={sz} value={sz}>
+                      {toBanglaDigits(sz)} px{sz === DEFAULT_TR21_FONT_SIZE ? ' (ডিফল্ট)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Page Margins (inch) */}
+            <div className="pt-1 border-t border-[var(--line)]">
+              <div className="flex items-center justify-between gap-2 mb-2 pt-2">
+                <span className="text-xs font-semibold text-[var(--muted)]">
+                  পাতার মার্জিন (একক: ইঞ্চি / inch)
+                </span>
+                {canEditTr21 && !isDefaultTypographyAndMargins && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTr21FontFamily(DEFAULT_TR21_FONT_FAMILY);
+                      setTr21FontSize(DEFAULT_TR21_FONT_SIZE);
+                      setMarginInputs(marginsToStrings(DEFAULT_TR21_MARGINS));
+                    }}
+                    className="text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap"
+                  >
+                    ডিফল্ট রিসেট
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {(
+                  [
+                    { key: 'top', label: 'Top (উপরে)' },
+                    { key: 'bottom', label: 'Bottom (নিচে)' },
+                    { key: 'left', label: 'Left (বামে)' },
+                    { key: 'right', label: 'Right (ডানে)' },
+                  ] as const
+                ).map((item) => (
+                  <div key={item.key}>
+                    <label
+                      htmlFor={`tr21-margin-${item.key}`}
+                      className="block text-[11px] font-semibold text-[var(--muted)] mb-1"
+                    >
+                      {item.label}
+                    </label>
+                    <div className="relative flex items-center">
+                      <input
+                        id={`tr21-margin-${item.key}`}
+                        type="number"
+                        inputMode="decimal"
+                        step="0.05"
+                        min="0"
+                        max="2.5"
+                        disabled={!canEditTr21}
+                        value={marginInputs[item.key]}
+                        onChange={(e) => updateMarginInput(item.key, e.target.value)}
+                        onBlur={() => normalizeMarginOnBlur(item.key)}
+                        className="w-full min-h-[44px] pl-3 pr-10 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                      />
+                      <span className="absolute right-2.5 text-[11px] font-medium text-[var(--muted)] pointer-events-none">
+                        inch
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[var(--line)] space-y-3.5">
-              <div className="space-y-0.5">
-                <div className="text-xs text-[var(--muted)]">
-                  পাতা ১ ও ২ · সেকশন P1-S4, P2-S1, P2-S2
-                </div>
-                <h3 className="text-sm font-semibold text-[var(--text)]">
-                  ডিফল্ট প্রাপক, স্থান, হিসাব কোড ও ফুটার
-                </h3>
-              </div>
+            {/* Footer Text (moved here) */}
+            <div className="pt-1 border-t border-[var(--line)]">
+              <label
+                htmlFor="tr21-footer-text"
+                className="block text-xs font-semibold text-[var(--muted)] mb-1.5 pt-2"
+              >
+                ফুটার লেখা (Footer)
+              </label>
+              <input
+                id="tr21-footer-text"
+                type="text"
+                disabled={!canEditTr21}
+                value={tr21FooterText}
+                onChange={(e) => setTr21FooterText(e.target.value)}
+                placeholder="Print By: DPE Accounting Information System"
+                className="w-full min-h-[44px] px-3.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+              />
+            </div>
+          </AccordionCard>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* 3. Declaration clauses */}
+          <AccordionCard
+            step={3}
+            title="প্রত্যয়ন ও শর্তাবলি ধারা"
+            subtitle={`${toBanglaDigits(clauseStats.enabledCount)} / ${toBanglaDigits(
+              tr21Clauses.length
+            )}টি সক্রিয় · পাতা ১ (${clauseStats.page1Numbers}) · পাতা ২ (${clauseStats.page2Numbers})`}
+            open={openSteps[3]}
+            onToggle={() => toggleAccordionStep(3)}
+          >
+            {/* Quick prefix split */}
+            {canEditTr21 && tr21Clauses.length > 0 && (
+              <div className="space-y-2.5">
                 <div>
                   <label
-                    htmlFor="tr21-default-payee"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                    htmlFor="tr21-quick-split"
+                    className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
                   >
-                    যাহার নামে ইস্যু করা হইবে (৭ নং ধারা)
-                  </label>
-                  <input
-                    id="tr21-default-payee"
-                    type="text"
-                    disabled={!canEditTr21}
-                    value={defaultPayeeText}
-                    onChange={(e) => setDefaultPayeeText(e.target.value)}
-                    placeholder="ডি.ডি.ও"
-                    className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="tr21-place-name"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    স্থান (আয়ন ব্যয়ন কর্মকর্তার স্বাক্ষরে)
-                  </label>
-                  <input
-                    id="tr21-place-name"
-                    type="text"
-                    disabled={!canEditTr21}
-                    value={placeName}
-                    onChange={(e) => setPlaceName(e.target.value)}
-                    placeholder="তারাকান্দা, ময়মনসিংহ"
-                    className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div>
-                  <label
-                    htmlFor="tr21-net-code"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    প্রদেয় বিল (ক-খ)
-                  </label>
-                  <input
-                    id="tr21-net-code"
-                    type="text"
-                    inputMode="numeric"
-                    disabled={!canEditTr21}
-                    value={defaultNetPayableCode}
-                    onChange={(e) =>
-                      setDefaultNetPayableCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
-                    }
-                    placeholder={DEFAULT_NET_PAYABLE_CODE}
-                    className="w-full min-h-[42px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="tr21-it-code"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    আয়কর (IT)
-                  </label>
-                  <input
-                    id="tr21-it-code"
-                    type="text"
-                    inputMode="numeric"
-                    disabled={!canEditTr21}
-                    value={defaultItCode}
-                    onChange={(e) =>
-                      setDefaultItCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
-                    }
-                    placeholder={DEFAULT_IT_CODE}
-                    className="w-full min-h-[42px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="tr21-vat-code"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    মূসক (VAT)
-                  </label>
-                  <input
-                    id="tr21-vat-code"
-                    type="text"
-                    inputMode="numeric"
-                    disabled={!canEditTr21}
-                    value={defaultVatCode}
-                    onChange={(e) =>
-                      setDefaultVatCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
-                    }
-                    placeholder={DEFAULT_VAT_CODE}
-                    className="w-full min-h-[42px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="tr21-security-code"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    নিরাপত্তা জমা
-                  </label>
-                  <input
-                    id="tr21-security-code"
-                    type="text"
-                    inputMode="numeric"
-                    disabled={!canEditTr21}
-                    value={defaultSecurityCode}
-                    onChange={(e) =>
-                      setDefaultSecurityCode(e.target.value.replace(/\D+/g, '').slice(0, 10))
-                    }
-                    placeholder={DEFAULT_SECURITY_CODE}
-                    className="w-full min-h-[42px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="tr21-footer-text"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                >
-                  পাতার নিচের বাম লেখা (Footer)
-                </label>
-                <input
-                  id="tr21-footer-text"
-                  type="text"
-                  disabled={!canEditTr21}
-                  value={tr21FooterText}
-                  onChange={(e) => setTr21FooterText(e.target.value)}
-                  placeholder="Print By: DPE Accounting Information System"
-                  className="w-full min-h-[42px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                />
-              </div>
-
-              {/* Font Family & Font Size */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label
-                    htmlFor="tr21-font-family"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    ফর্মের ফন্ট (Font)
+                    পাতা ১-এ কত নম্বর ধারা পর্যন্ত থাকবে
                   </label>
                   <select
-                    id="tr21-font-family"
-                    disabled={!canEditTr21}
-                    value={tr21FontFamily}
-                    onChange={(e) => setTr21FontFamily(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                    id="tr21-quick-split"
+                    value={clauseStats.contiguousSplitEnd}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val >= 0) handleQuickPageSplit(val);
+                    }}
+                    className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                   >
-                    {TR21_FONT_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
+                    {clauseStats.contiguousSplitEnd === -1 && (
+                      <option value={-1}>কাস্টম বিন্যাস</option>
+                    )}
+                    <option value={0}>০টি (সবগুলো পাতা ২-এ)</option>
+                    {tr21Clauses.map((c, idx) => (
+                      <option key={c.id} value={idx + 1}>
+                        {toBanglaDigits(idx + 1)} নম্বর ধারা পর্যন্ত (বাকি পাতা ২-এ)
                       </option>
                     ))}
                   </select>
                 </div>
 
-                <div>
-                  <label
-                    htmlFor="tr21-font-size"
-                    className="block text-xs font-medium text-[var(--muted)] mb-1.5"
-                  >
-                    ফন্ট সাইজ (Font Size)
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      id="tr21-font-size"
-                      disabled={!canEditTr21}
-                      value={tr21FontSize}
-                      onChange={(e) => setTr21FontSize(resolveTr21FontSize(Number(e.target.value)))}
-                      className="flex-1 min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
-                    >
-                      {TR21_FONT_SIZE_OPTIONS.map((sz) => (
-                        <option key={sz} value={sz}>
-                          {toBanglaDigits(sz)} px{sz === DEFAULT_TR21_FONT_SIZE ? ' (ডিফল্ট)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {canEditTr21 &&
-                      (tr21FontFamily !== DEFAULT_TR21_FONT_FAMILY ||
-                        tr21FontSize !== DEFAULT_TR21_FONT_SIZE) && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTr21FontFamily(DEFAULT_TR21_FONT_FAMILY);
-                            setTr21FontSize(DEFAULT_TR21_FONT_SIZE);
-                          }}
-                          title="ডিফল্ট ফন্ট ও সাইজে ফিরুন"
-                          className="min-h-[42px] px-2.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-subtle)] shrink-0"
-                        >
-                          রিসেট
-                        </button>
-                      )}
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          </section>
-
-          {/* 2. Certification Clauses Editor (P1-S5 & P2-S1) */}
-          <section className="card-surface p-4 md:p-5 space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-2.5">
-              <div className="space-y-0.5">
-                <div className="text-xs text-[var(--muted)] tabular-nums">
-                  পাতা ১ ও ২ · সক্রিয় {toBanglaDigits(clauseStats.enabledCount)}/
-                  {toBanglaDigits(tr21Clauses.length)}টি
-                </div>
-                <h2 className="text-base font-semibold text-[var(--text)]">
-                  প্রত্যয়ন ও শর্তাবলি ধারা ({toBanglaDigits(tr21Clauses.length)}টি)
-                </h2>
-              </div>
-
-              {canEditTr21 && (
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={openCreateClauseModal}
-                    className="min-h-[38px] px-3 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
-                  >
-                    <Plus className="w-3.5 h-3.5 shrink-0" />
-                    <span>নতুন ধারা</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTr21Clauses(cloneDefaultTr21Clauses())}
-                    className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)] inline-flex items-center gap-1.5 whitespace-nowrap"
-                    title="ডিফল্ট ১–৭ ধারা পুনরুদ্ধার করুন"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-                    <span>ডিফল্ট</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Page Range Control: কত নম্বর থেকে কত নম্বর পর্যন্ত কোন page-এ যাবে */}
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--surface-subtle)] p-3 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
-                <span className="font-semibold text-[var(--text)]">
-                  পাতা বিন্যাস (কোন ধারা কোন পাতায় যাবে)
-                </span>
-                <span className="text-[var(--muted)] tabular-nums">
-                  পাতা ১: {clauseStats.page1Numbers} · পাতা ২: {clauseStats.page2Numbers}
-                </span>
-              </div>
-
-              {canEditTr21 && tr21Clauses.length > 0 && (
-                <div className="space-y-2 pt-1 border-t border-[var(--line)]">
-                  {/* Quick Prefix Split */}
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <label
-                      htmlFor="tr21-quick-split"
-                      className="text-[var(--muted)] whitespace-nowrap"
-                    >
-                      পাতা ১-এ প্রথম থেকে:
-                    </label>
-                    <select
-                      id="tr21-quick-split"
-                      value={clauseStats.contiguousSplitEnd}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        if (val >= 0) handleQuickPageSplit(val);
-                      }}
-                      className="min-h-[34px] px-2.5 rounded-md border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                    >
-                      {clauseStats.contiguousSplitEnd === -1 && (
-                        <option value={-1}>কাস্টম বিন্যাস</option>
-                      )}
-                      <option value={0}>০টি (সবগুলো পাতা ২-এ)</option>
-                      {tr21Clauses.map((c, idx) => (
-                        <option key={c.id} value={idx + 1}>
-                          {toBanglaDigits(idx + 1)} নম্বর ধারা পর্যন্ত (বাকি পাতা ২-এ)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Custom Range Assignment */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                    <span className="text-[var(--muted)]">রেঞ্জ:</span>
+                {/* Expandable Range assignment */}
+                <details className="rounded-[10px] border border-[var(--line)] bg-[var(--surface-subtle)] px-3 py-1">
+                  <summary className="min-h-[40px] flex items-center text-xs font-semibold text-[var(--muted)] cursor-pointer select-none">
+                    কাস্টম রেঞ্জ দিয়ে পাতা নির্ধারণ
+                  </summary>
+                  <div className="pb-2.5 pt-1 flex flex-wrap items-center gap-2 text-xs">
                     <select
                       aria-label="শুরু ধারা"
                       value={rangeFrom}
@@ -1324,7 +1424,7 @@ export function Tr21SetupPage() {
                         setRangeFrom(v);
                         if (v > rangeTo) setRangeTo(v);
                       }}
-                      className="min-h-[34px] px-2 rounded-md border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
+                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
                     >
                       {tr21Clauses.map((c, idx) => (
                         <option key={c.id} value={idx + 1}>
@@ -1341,7 +1441,7 @@ export function Tr21SetupPage() {
                         setRangeTo(v);
                         if (v < rangeFrom) setRangeFrom(v);
                       }}
-                      className="min-h-[34px] px-2 rounded-md border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
+                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
                     >
                       {tr21Clauses.map((c, idx) => (
                         <option key={c.id} value={idx + 1}>
@@ -1354,7 +1454,7 @@ export function Tr21SetupPage() {
                       aria-label="গন্তব্য পাতা"
                       value={rangePage}
                       onChange={(e) => setRangePage(Number(e.target.value) === 2 ? 2 : 1)}
-                      className="min-h-[34px] px-2 rounded-md border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
+                      className="min-h-[38px] px-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs text-[var(--text)]"
                     >
                       <option value={1}>পাতা ১ (P1-S5)</option>
                       <option value={2}>পাতা ২ (P2-S1)</option>
@@ -1362,41 +1462,29 @@ export function Tr21SetupPage() {
                     <button
                       type="button"
                       onClick={handleApplyRange}
-                      className="min-h-[34px] px-2.5 rounded-md border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold whitespace-nowrap"
+                      className="min-h-[38px] px-3 rounded-lg border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold whitespace-nowrap"
                     >
                       প্রয়োগ
                     </button>
                   </div>
-                </div>
-              )}
-            </div>
+                </details>
+              </div>
+            )}
 
-            {/* Segmented Filter */}
-            <div className="inline-flex p-1 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
-              {(
-                [
-                  { id: 'all', label: `সকল (${toBanglaDigits(tr21Clauses.length)})` },
-                  { id: 'page1', label: `পাতা ১ (${toBanglaDigits(clauseStats.page1Count)})` },
-                  { id: 'page2', label: `পাতা ২ (${toBanglaDigits(clauseStats.page2Count)})` },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setClauseFilter(tab.id)}
-                  className={`min-h-[34px] px-3 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                    clauseFilter === tab.id
-                      ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
-                      : 'text-[var(--muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+            {/* Page Filter Chips */}
+            <SegmentedChips
+              ariaLabel="ধারা ফিল্টার"
+              value={clauseFilter}
+              onChange={setClauseFilter}
+              options={[
+                { value: 'all', label: 'সকল', count: tr21Clauses.length },
+                { value: 'page1', label: 'পাতা ১', count: clauseStats.page1Count },
+                { value: 'page2', label: 'পাতা ২', count: clauseStats.page2Count },
+              ]}
+            />
 
-            {/* Compact Clause List — Content hidden by default; Edit opens Modal */}
-            <div className="divide-y divide-[var(--line)] max-h-[480px] overflow-y-auto pr-1">
+            {/* Compact Clause Rows */}
+            <div className="divide-y divide-[var(--line)] border-t border-[var(--line)]">
               {filteredClauses.length === 0 ? (
                 <div className="py-6 text-center text-xs text-[var(--muted)]">
                   এই পাতায় কোনো ধারা নেই।
@@ -1405,104 +1493,129 @@ export function Tr21SetupPage() {
                 filteredClauses.map(({ clause, index }) => (
                   <div
                     key={clause.id}
-                    className={`py-2.5 first:pt-1 last:pb-1 flex items-center justify-between gap-2 transition-opacity ${
+                    className={`py-2.5 flex items-center gap-2.5 transition-opacity ${
                       clause.enabled ? 'opacity-100' : 'opacity-60'
                     }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    {/* Numbered badge: teal-soft for Page 1, warm amber for Page 2 */}
+                    <span
+                      className={`w-8 h-8 rounded-[9px] flex items-center justify-center font-bold text-xs shrink-0 bn tabular-nums ${
+                        clause.page === 2
+                          ? 'bg-[var(--warn-bg)] text-[var(--warn-text)]'
+                          : 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                      }`}
+                      title={`পাতা ${clause.page === 1 ? '১' : '২'}`}
+                    >
+                      {clause.numberBn}
+                    </span>
+
+                    {/* Clause summary text */}
+                    <button
+                      type="button"
+                      onClick={() => openEditClauseModal(clause, index)}
+                      className="flex-1 min-w-0 text-left group py-0.5"
+                    >
+                      <span className="block text-[13px] bn text-[var(--text)] line-clamp-2 group-hover:text-[var(--accent)] transition-colors">
+                        {clause.text}
+                      </span>
+                      <span className="block text-[11px] text-[var(--muted)] mt-0.5">
+                        পাতা {clause.page === 1 ? '১ · P1-S5' : '২ · P2-S1'}
+                        {!clause.enabled ? ' · পেজে লুকানো' : ''}
+                      </span>
+                    </button>
+
+                    {/* Reorder + Edit + Visibility Switch */}
+                    <div className="flex items-center gap-1 shrink-0">
                       {canEditTr21 && (
-                        <div className="flex flex-col shrink-0">
+                        <div className="flex flex-col">
                           <button
                             type="button"
                             disabled={index === 0}
                             onClick={() => handleMoveClause(index, -1)}
                             aria-label={`ধারা ${clause.numberBn} উপরে নিন`}
-                            className="p-0.5 text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-25"
+                            className="p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-25"
                           >
-                            <ArrowUp className="w-3 h-3" />
+                            <ArrowUp className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
                             disabled={index === tr21Clauses.length - 1}
                             onClick={() => handleMoveClause(index, 1)}
                             aria-label={`ধারা ${clause.numberBn} নিচে নিন`}
-                            className="p-0.5 text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-25"
+                            className="p-1 text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-25"
                           >
-                            <ArrowDown className="w-3 h-3" />
+                            <ArrowDown className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       )}
 
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="text-sm font-semibold text-[var(--text)] truncate">
-                          ধারা {clause.numberBn}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
-                          <span>পাতা {clause.page === 1 ? '১' : '২'}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>{clause.page === 1 ? 'P1-S5' : 'P2-S1'}</span>
-                          {!clause.enabled && (
-                            <>
-                              <span aria-hidden="true">·</span>
-                              <span>পেজে লুকানো</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 shrink-0">
-                      <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium select-none text-[var(--text)]">
-                        <input
-                          type="checkbox"
-                          disabled={!canEditTr21}
-                          checked={clause.enabled}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setTr21Clauses((prev) =>
-                              prev.map((c, cIdx) =>
-                                cIdx === index ? { ...c, enabled: checked } : c
-                              )
-                            );
-                          }}
-                          className="w-4 h-4 accent-[var(--accent)]"
-                        />
-                        <span>{clause.enabled ? 'দেখাবে' : 'লুকানো'}</span>
-                      </label>
-
                       <button
                         type="button"
                         onClick={() => openEditClauseModal(clause, index)}
-                        className="min-h-[34px] px-2.5 rounded-lg border border-[var(--line)] hover:bg-[var(--surface-subtle)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1 whitespace-nowrap"
+                        aria-label={
+                          canEditTr21
+                            ? `ধারা ${clause.numberBn} সম্পাদনা`
+                            : `ধারা ${clause.numberBn} দেখুন`
+                        }
+                        className="w-9 h-9 rounded-lg border border-[var(--line)] hover:bg-[var(--surface-subtle)] text-[var(--text)] inline-flex items-center justify-center shrink-0"
                       >
                         {canEditTr21 ? (
-                          <>
-                            <Pencil className="w-3.5 h-3.5 shrink-0" />
-                            <span>সম্পাদনা</span>
-                          </>
+                          <Pencil className="w-3.5 h-3.5" />
                         ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5 shrink-0" />
-                            <span>দেখুন</span>
-                          </>
+                          <Eye className="w-3.5 h-3.5" />
                         )}
                       </button>
+
+                      <ToggleSwitch
+                        checked={clause.enabled}
+                        disabled={!canEditTr21}
+                        ariaLabel={`ধারা ${clause.numberBn} দেখান`}
+                        onChange={(checked) => {
+                          setTr21Clauses((prev) =>
+                            prev.map((c, cIdx) =>
+                              cIdx === index ? { ...c, enabled: checked } : c
+                            )
+                          );
+                        }}
+                      />
                     </div>
                   </div>
                 ))
               )}
             </div>
-          </section>
 
-          {/* 3. Section Directory Reference */}
-          <section className="card-surface p-4 md:p-5 space-y-3">
-            <div className="space-y-0.5">
-              <div className="text-xs text-[var(--muted)]">রেফারেন্স সূচি</div>
-              <h2 className="text-base font-semibold text-[var(--text)]">
-                ফর্মের সেকশনসমূহ (P1-S1 থেকে P2-S5)
-              </h2>
-            </div>
-            <div className="divide-y divide-[var(--line)] text-xs">
+            {canEditTr21 && (
+              <div className="flex flex-wrap items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={openCreateClauseModal}
+                  className="min-h-[42px] px-4 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>নতুন ধারা</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTr21Clauses(cloneDefaultTr21Clauses())}
+                  className="min-h-[42px] px-4 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] inline-flex items-center gap-1.5"
+                  title="ডিফল্ট ১–৭ ধারা পুনরুদ্ধার করুন"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                  <span>ডিফল্ট পুনরুদ্ধার</span>
+                </button>
+              </div>
+            )}
+          </AccordionCard>
+
+          {/* Collapsible Section Directory Reference */}
+          <details className="card-surface px-4 sm:px-5 py-2">
+            <summary className="min-h-[48px] flex items-center justify-between gap-2 text-sm font-semibold text-[var(--text)] cursor-pointer select-none">
+              <span>ফর্মের সেকশন সূচি (P1-S1 থেকে P2-S5)</span>
+              <span className="text-xs font-normal text-[var(--muted)]">
+                {toBanglaDigits(TR21_FORM_SECTIONS.length)}টি সেকশন
+              </span>
+            </summary>
+            <div className="divide-y divide-[var(--line)] border-t border-[var(--line)] pt-1 pb-2 text-xs">
               {TR21_FORM_SECTIONS.map((sec) => (
                 <div key={sec.id} className="py-2 flex items-start gap-2.5">
                   <span
@@ -1520,146 +1633,180 @@ export function Tr21SetupPage() {
                 </div>
               ))}
             </div>
-          </section>
+          </details>
         </div>
 
-        {/* ================= RIGHT COLUMN: LIVE PREVIEW & EXPORT TEST ================= */}
+        {/* ================= RIGHT COLUMN: STICKY PREVIEW & EXPORTS ================= */}
         <div
-          className={`xl:col-span-7 space-y-3 ${
-            mobilePane === 'preview' ? 'block' : 'hidden xl:block'
+          className={`min-w-0 space-y-3 md:sticky md:top-20 ${
+            mobilePane === 'preview' ? 'block' : 'hidden md:block'
           }`}
         >
-          <section className="card-surface p-3.5 md:p-4 space-y-3">
-            {/* Preview Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5">
-              <div className="flex flex-wrap items-center gap-2 min-w-0">
-                <label htmlFor="tr21-preview-source" className="sr-only">
-                  প্রিভিউ ডেটা সোর্স
-                </label>
-                <select
-                  id="tr21-preview-source"
-                  value={previewSourceId}
-                  onChange={(e) => setPreviewSourceId(e.target.value)}
-                  className="min-h-[40px] max-w-[230px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                >
-                  <option value="sample">নমুনা বিল (টেমপ্লেট টেস্ট)</option>
-                  {fyBills.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.billNo ? `বিল ${b.billNo}` : `খসড়া (${b.economicCode})`} · {b.date}
-                    </option>
-                  ))}
-                </select>
+          {/* Preview Controls + Export Actions Card */}
+          <section className="card-surface p-3.5 space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="tr21-preview-source" className="sr-only">
+                প্রিভিউ ডেটা সোর্স
+              </label>
+              <select
+                id="tr21-preview-source"
+                value={previewSourceId}
+                onChange={(e) => setPreviewSourceId(e.target.value)}
+                className="flex-1 min-w-[160px] min-h-[42px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-xs font-medium text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              >
+                <option value="sample">নমুনা বিল (টেমপ্লেট)</option>
+                {fyBills.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.billNo ? `বিল ${b.billNo}` : `খসড়া (${b.economicCode})`} · {b.date}
+                  </option>
+                ))}
+              </select>
 
-                {previewSourceId === 'sample' && (
-                  <div className="inline-flex p-0.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
-                    <button
-                      type="button"
-                      onClick={() => setSampleAsDraft(false)}
-                      className={`min-h-[34px] px-2.5 rounded-md text-xs font-medium whitespace-nowrap ${
-                        !sampleAsDraft
-                          ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
-                          : 'text-[var(--muted)]'
-                      }`}
-                    >
-                      চূড়ান্ত
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSampleAsDraft(true)}
-                      className={`min-h-[34px] px-2.5 rounded-md text-xs font-medium whitespace-nowrap ${
-                        sampleAsDraft
-                          ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
-                          : 'text-[var(--muted)]'
-                      }`}
-                    >
-                      খসড়া
-                    </button>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setShowSectionGuides((v) => !v)}
-                  className={`min-h-[40px] px-3 rounded-lg border text-xs font-medium inline-flex items-center gap-1.5 whitespace-nowrap ${
-                    showSectionGuides
-                      ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                      : 'border-[var(--line)] text-[var(--text)] hover:bg-[var(--surface-subtle)]'
-                  }`}
+              {previewSourceId === 'sample' && (
+                <div
+                  className="inline-flex p-1 rounded-[10px] bg-[var(--surface-subtle)] border border-[var(--line)] shrink-0"
+                  role="group"
+                  aria-label="নমুনা বিলের ধরন"
                 >
-                  <Layers className="w-3.5 h-3.5 shrink-0" />
-                  <span>{showSectionGuides ? 'সেকশন গাইড চালু' : 'সেকশন গাইড'}</span>
-                </button>
+                  <button
+                    type="button"
+                    aria-pressed={!sampleAsDraft}
+                    onClick={() => setSampleAsDraft(false)}
+                    className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold transition-all ${
+                      !sampleAsDraft
+                        ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
+                        : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    চূড়ান্ত
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={sampleAsDraft}
+                    onClick={() => setSampleAsDraft(true)}
+                    className={`min-h-[34px] px-3 rounded-lg text-xs font-semibold transition-all ${
+                      sampleAsDraft
+                        ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
+                        : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    খসড়া
+                  </button>
+                </div>
+              )}
 
-                <button
-                  type="button"
-                  onClick={() => setFitToWidth((v) => !v)}
-                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] inline-flex items-center gap-1.5 hover:bg-[var(--surface-subtle)] whitespace-nowrap"
-                >
-                  {fitToWidth ? (
-                    <Maximize2 className="w-3.5 h-3.5 shrink-0" />
-                  ) : (
-                    <Minimize2 className="w-3.5 h-3.5 shrink-0" />
-                  )}
-                  <span>{fitToWidth ? '১০০% জুম' : 'স্ক্রিন ফিট'}</span>
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={Boolean(busyAction)}
-                  onClick={handlePrint}
-                  className="min-h-[40px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] inline-flex items-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
-                >
-                  <Printer className="w-3.5 h-3.5 shrink-0" />
-                  <span>{busyAction === 'print' ? 'প্রিন্ট…' : 'Print'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyAction)}
-                  onClick={handleExportPdf}
-                  className="min-h-[40px] px-3 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
-                >
-                  <FileDown className="w-3.5 h-3.5 shrink-0" />
-                  <span>{busyAction === 'pdf' ? 'PDF হচ্ছে…' : 'PDF'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyAction)}
-                  onClick={handleExportDocx}
-                  className="min-h-[40px] px-3 rounded-lg border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent-soft)] text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
-                >
-                  <FileText className="w-3.5 h-3.5 shrink-0" />
-                  <span>{busyAction === 'docx' ? 'Word হচ্ছে…' : 'Word (.docx)'}</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                aria-pressed={showSectionGuides}
+                onClick={() => setShowSectionGuides((v) => !v)}
+                className={`min-h-[42px] px-3 rounded-[10px] border text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                  showSectionGuides
+                    ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                    : 'border-[var(--line)] text-[var(--text)] hover:bg-[var(--surface-subtle)]'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <span>গাইড</span>
+              </button>
             </div>
 
-            {/* Live Scaled A4 Preview Viewport */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                disabled={Boolean(busyAction)}
+                onClick={handlePrint}
+                className="min-h-[42px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] inline-flex items-center justify-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
+              >
+                <Printer className="w-4 h-4 shrink-0" />
+                <span>{busyAction === 'print' ? 'প্রিন্ট…' : 'Print'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={Boolean(busyAction)}
+                onClick={handleExportPdf}
+                className="min-h-[42px] px-3 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center justify-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
+              >
+                <FileDown className="w-4 h-4 shrink-0" />
+                <span>{busyAction === 'pdf' ? 'PDF হচ্ছে…' : 'PDF'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={Boolean(busyAction)}
+                onClick={handleExportDocx}
+                className="min-h-[42px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)] inline-flex items-center justify-center gap-1.5 disabled:opacity-60 whitespace-nowrap"
+              >
+                <FileText className="w-4 h-4 shrink-0" />
+                <span>{busyAction === 'docx' ? 'Word হচ্ছে…' : 'Word'}</span>
+              </button>
+            </div>
+          </section>
+
+          {/* A4 Preview Frame */}
+          <section className="card-surface overflow-hidden flex flex-col h-[70dvh] min-h-[420px] md:h-[calc(100dvh-250px)] md:min-h-[380px]">
+            {/* Frame Toolbar */}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--line)]">
+              <span className="text-xs font-bold text-[var(--text)]">A4 প্রিভিউ</span>
+              <span className="text-xs text-[var(--muted)]">২ পাতা</span>
+              <span className="flex-1" />
+              <button
+                type="button"
+                onClick={() =>
+                  setZoomMultiplier((z) => Math.max(0.5, Number((z / 1.2).toFixed(3))))
+                }
+                aria-label="জুম কমান"
+                className="w-9 h-9 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-base font-semibold text-[var(--text)] inline-flex items-center justify-center"
+              >
+                &minus;
+              </button>
+              <span className="min-w-[46px] text-center text-xs font-semibold tabular-nums text-[var(--text)]">
+                {Math.round(effectiveScale * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setZoomMultiplier((z) => Math.min(2.5, Number((z * 1.2).toFixed(3))))
+                }
+                aria-label="জুম বাড়ান"
+                className="w-9 h-9 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-base font-semibold text-[var(--text)] inline-flex items-center justify-center"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoomMultiplier(1)}
+                className="min-h-[36px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--card)] hover:bg-[var(--surface-subtle)] text-xs font-semibold text-[var(--text)]"
+              >
+                Fit
+              </button>
+            </div>
+
+            {/* Scrollable Preview Viewport */}
             <div
               ref={viewportRef}
-              className="w-full overflow-x-auto rounded-xl bg-neutral-200 dark:bg-neutral-900 p-2 sm:p-3.5 flex justify-center"
+              className="flex-1 min-h-0 overflow-auto bg-[var(--surface-subtle)] dark:bg-neutral-900 overscroll-contain touch-pan-x touch-pan-y"
             >
-              <div
-                style={{
-                  width: `${Math.round(A4_WIDTH_PX * scale)}px`,
-                  height: `${Math.round(innerHeight * scale)}px`,
-                  position: 'relative',
-                  flexShrink: 0,
-                }}
-              >
+              <div className="min-w-full w-max p-3 flex justify-center">
                 <div
-                  ref={innerRef}
                   style={{
-                    width: `${A4_WIDTH_PX}px`,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left',
+                    width: `${Math.round(A4_WIDTH_PX * effectiveScale)}px`,
+                    height: `${Math.round(innerHeight * effectiveScale)}px`,
+                    position: 'relative',
+                    flexShrink: 0,
                   }}
-                  className="tr21-preview-sheet"
                 >
-                  <BillForm data={previewFormData} showSectionGuides={showSectionGuides} />
+                  <div
+                    ref={innerRef}
+                    style={{
+                      width: `${A4_WIDTH_PX}px`,
+                      transform: `scale(${effectiveScale})`,
+                      transformOrigin: 'top left',
+                    }}
+                    className="tr21-preview-sheet"
+                  >
+                    <BillForm data={previewFormData} showSectionGuides={showSectionGuides} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1690,10 +1837,10 @@ export function Tr21SetupPage() {
                   <button
                     type="button"
                     onClick={handleDeleteClauseFromModal}
-                    className={`min-h-[40px] px-3 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                    className={`min-h-[42px] px-3.5 rounded-[10px] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
                       confirmDeleteClause
                         ? 'bg-red-600 text-white hover:bg-red-700'
-                        : 'border border-[var(--line)] text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30'
+                        : 'border border-[var(--line)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)]'
                     }`}
                   >
                     <Trash2 className="w-3.5 h-3.5 shrink-0" />
@@ -1705,7 +1852,7 @@ export function Tr21SetupPage() {
                 <button
                   type="button"
                   onClick={closeClauseModal}
-                  className="min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)]"
+                  className="min-h-[42px] px-4 rounded-[10px] border border-[var(--line)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)]"
                 >
                   {canEditTr21 ? 'বাতিল' : 'বন্ধ করুন'}
                 </button>
@@ -1713,7 +1860,7 @@ export function Tr21SetupPage() {
                   <button
                     type="button"
                     onClick={handleSaveClauseModal}
-                    className="min-h-[40px] px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5"
+                    className="min-h-[42px] px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-xs font-semibold inline-flex items-center gap-1.5"
                   >
                     <Check className="w-3.5 h-3.5 shrink-0" />
                     <span>{clauseModal.mode === 'create' ? 'যোগ করুন' : 'প্রয়োগ করুন'}</span>
@@ -1730,7 +1877,7 @@ export function Tr21SetupPage() {
               <div>
                 <label
                   htmlFor="clause-modal-number"
-                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                  className="block text-xs font-semibold text-[var(--muted)] mb-1.5"
                 >
                   ধারা নম্বর
                 </label>
@@ -1745,15 +1892,15 @@ export function Tr21SetupPage() {
                     )
                   }
                   placeholder="৮"
-                  className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                  className="w-full min-h-[44px] px-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
                 />
               </div>
 
               <div>
-                <span className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+                <span className="block text-xs font-semibold text-[var(--muted)] mb-1.5">
                   কোন পাতায় যাবে
                 </span>
-                <div className="inline-flex w-full p-1 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
+                <div className="inline-flex w-full p-1 rounded-[10px] bg-[var(--surface-subtle)] border border-[var(--line)]">
                   {([1, 2] as const).map((pg) => (
                     <button
                       key={pg}
@@ -1762,7 +1909,7 @@ export function Tr21SetupPage() {
                       onClick={() =>
                         setClauseModal((prev) => (prev ? { ...prev, page: pg } : prev))
                       }
-                      className={`flex-1 min-h-[34px] px-2 rounded-md text-xs font-medium transition-colors ${
+                      className={`flex-1 min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-all ${
                         clauseModal.page === pg
                           ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
                           : 'text-[var(--muted)] hover:text-[var(--text)]'
@@ -1775,26 +1922,27 @@ export function Tr21SetupPage() {
               </div>
             </div>
 
-            <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-medium select-none text-[var(--text)]">
-              <input
-                type="checkbox"
-                disabled={!canEditTr21}
+            <div className="flex items-center justify-between gap-3 py-1">
+              <span className="text-xs font-semibold text-[var(--text)]">
+                টি.আর. ফরম নং-২১ পাতায় দেখাবে
+              </span>
+              <ToggleSwitch
                 checked={clauseModal.enabled}
-                onChange={(e) =>
+                disabled={!canEditTr21}
+                ariaLabel="টি.আর. ফরম নং-২১ পাতায় দেখাবে"
+                onChange={(checked) =>
                   setClauseModal((prev) =>
-                    prev ? { ...prev, enabled: e.target.checked } : prev
+                    prev ? { ...prev, enabled: checked } : prev
                   )
                 }
-                className="w-4 h-4 accent-[var(--accent)]"
               />
-              <span>টি.আর. ফরম নং-২১ পাতায় দেখাবে</span>
-            </label>
+            </div>
 
             <div>
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <label
                   htmlFor="clause-modal-text"
-                  className="block text-xs font-medium text-[var(--muted)]"
+                  className="block text-xs font-semibold text-[var(--muted)]"
                 >
                   ধারার বিবরণ
                 </label>
@@ -1810,7 +1958,7 @@ export function Tr21SetupPage() {
                             : prev
                         )
                       }
-                      className="text-xs font-medium text-[var(--accent)] hover:underline whitespace-nowrap"
+                      className="text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap"
                     >
                       + {'{{payeeText}}'}
                     </button>
@@ -1825,7 +1973,7 @@ export function Tr21SetupPage() {
                   setClauseModal((prev) => (prev ? { ...prev, text: e.target.value } : prev))
                 }
                 placeholder="ধারার পূর্ণ বিবরণ লিখুন। প্রয়োজনে নতুন লাইনে (ক), (খ) উপ-ধারা লিখতে পারেন।"
-                className="w-full p-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+                className="w-full p-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] text-base md:text-sm bn text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
               />
               <p className="mt-1.5 text-xs text-[var(--muted)] leading-relaxed">
                 নতুন লাইনে <code className="font-mono text-[var(--text)]">(ক)</code>,{' '}

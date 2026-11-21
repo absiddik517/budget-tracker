@@ -194,26 +194,28 @@ export const BillFormPreviewModal: React.FC<BillFormPreviewModalProps> = ({
     >
       <div
         ref={viewportRef}
-        className="w-full overflow-x-auto rounded-xl bg-neutral-200 dark:bg-neutral-900 p-2.5 sm:p-4 flex justify-center"
+        className="w-full overflow-x-auto rounded-xl bg-neutral-200 dark:bg-neutral-900 touch-pan-x touch-pan-y"
       >
-        <div
-          style={{
-            width: `${Math.round(A4_WIDTH_PX * scale)}px`,
-            height: `${Math.round(innerHeight * scale)}px`,
-            position: 'relative',
-            flexShrink: 0,
-          }}
-        >
+        <div className="min-w-full w-max p-2.5 sm:p-4 flex justify-center">
           <div
-            ref={innerRef}
             style={{
-              width: `${A4_WIDTH_PX}px`,
-              transform: `scale(${scale})`,
-              transformOrigin: 'top left',
+              width: `${Math.round(A4_WIDTH_PX * scale)}px`,
+              height: `${Math.round(innerHeight * scale)}px`,
+              position: 'relative',
+              flexShrink: 0,
             }}
-            className="tr21-preview-sheet"
           >
-            <BillForm data={formData} showSectionGuides={showSectionGuides} />
+            <div
+              ref={innerRef}
+              style={{
+                width: `${A4_WIDTH_PX}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: 'top left',
+              }}
+              className="tr21-preview-sheet"
+            >
+              <BillForm data={formData} showSectionGuides={showSectionGuides} />
+            </div>
           </div>
         </div>
       </div>

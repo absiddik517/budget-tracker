@@ -12,12 +12,14 @@ import {
   DEFAULT_TR21_FONT_FAMILY,
   DEFAULT_TR21_FONT_SIZE,
   DEFAULT_TR21_FOOTER_TEXT,
+  DEFAULT_TR21_MARGINS,
   DEFAULT_TR21_P1S3_MODE,
   DEFAULT_TR21_VOUCHER_LABEL,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
   resolveTr21FontFamily,
   resolveTr21FontSize,
+  resolveTr21Margins,
   resolveTr21P1S3Mode,
   resolveTr21VoucherLabel,
 } from '../lib/tr21Defaults';
@@ -108,6 +110,7 @@ const defaultOfficeSettings: OfficeSettings = {
   tr21FontSize: DEFAULT_TR21_FONT_SIZE,
   tr21P1S3Mode: DEFAULT_TR21_P1S3_MODE,
   tr21VoucherLabel: DEFAULT_TR21_VOUCHER_LABEL,
+  tr21Margins: DEFAULT_TR21_MARGINS,
   tr21Clauses: resolveTr21Clauses(null),
 };
 
@@ -141,6 +144,7 @@ function officeDocToSettings(office: OfficeDoc | null, fallback: OfficeSettings)
     tr21FontSize: resolveTr21FontSize(office.tr21FontSize),
     tr21P1S3Mode: resolveTr21P1S3Mode(office.tr21P1S3Mode),
     tr21VoucherLabel: resolveTr21VoucherLabel(office.tr21VoucherLabel),
+    tr21Margins: resolveTr21Margins(office.tr21Margins, office.tr21VoucherLabel),
     tr21Clauses: resolveTr21Clauses(office.tr21Clauses),
   };
 }
@@ -295,6 +299,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             tr21FontSize: resolveTr21FontSize(data.tr21FontSize),
             tr21P1S3Mode: resolveTr21P1S3Mode(data.tr21P1S3Mode),
             tr21VoucherLabel: resolveTr21VoucherLabel(data.tr21VoucherLabel),
+            tr21Margins: resolveTr21Margins(data.tr21Margins, data.tr21VoucherLabel),
             tr21Clauses: resolveTr21Clauses(data.tr21Clauses),
           });
           if (!fyInitializedFromServer) {

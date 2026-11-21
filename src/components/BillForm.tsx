@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Tr21FormData } from '../lib/billFormData';
+import { DEFAULT_TR21_MARGINS } from '../lib/tr21Defaults';
 
 export interface Tr21SectionMeta {
   id: string;
@@ -205,18 +206,21 @@ function SmallCheckSquare() {
   );
 }
 
+const SUB_CLAUSE_PREFIX_RE = /^\(\s*[ক-হড়ঢ়য়০-৯]+\s*\)/;
+
 function renderClauseLines(text: string): React.ReactNode {
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   if (lines.length <= 1) return text;
   return lines.map((line, i) => {
     const trimmed = line.trim();
-    const isSubClause = /^\([ক-ঙ]\)/.test(trimmed);
+    const isSubClause = SUB_CLAUSE_PREFIX_RE.test(trimmed);
     return (
       <div
         key={i}
         style={{
-          paddingLeft: isSubClause ? '34px' : '0px',
+          paddingLeft: isSubClause ? '32px' : '0px',
           marginTop: i === 0 ? '0px' : '2px',
+          textAlign: 'justify',
         }}
       >
         {line}
@@ -924,7 +928,7 @@ function renderCertificationClauseItem(
     );
   }
 
-  const lines = clause.text.split('\n');
+  const lines = clause.text.split(/\r?\n/);
   if (lines.length <= 1) {
     return (
       <div key={clause.id} style={{ marginBottom: '5px', textAlign: 'justify' }}>
@@ -935,11 +939,7 @@ function renderCertificationClauseItem(
 
   return (
     <div key={clause.id} style={{ marginBottom: '5px', textAlign: 'justify' }}>
-      {lines.map((line, i) => (
-        <React.Fragment key={i}>
-          {renderClauseLines(i === 0 ? `${clause.numberBn}। ${line}` : line)}
-        </React.Fragment>
-      ))}
+      {renderClauseLines(`${clause.numberBn}। ${clause.text}`)}
     </div>
   );
 }
@@ -1292,6 +1292,14 @@ export const BillForm: React.FC<BillFormProps> = ({
   if (data.supplier?.tinBin?.trim()) supplierParts.push(`টিআইএন/বিআইএন: ${data.supplier.tinBin.trim()}`);
   const supplierLine = supplierParts.join(' · ');
 
+  const margins = data.margins || DEFAULT_TR21_MARGINS;
+  const pagePaddingStyle: React.CSSProperties = {
+    paddingTop: `${margins.top}in`,
+    paddingRight: `${margins.right}in`,
+    paddingBottom: `${margins.bottom}in`,
+    paddingLeft: `${margins.left}in`,
+  };
+
   return (
     <div
       className={`tr21-document ${className}`}
@@ -1299,7 +1307,7 @@ export const BillForm: React.FC<BillFormProps> = ({
       data-testid="tr21-bill-form"
     >
       {/* ======================== PAGE 1 ======================== */}
-      <section className="tr21-page tr21-page-1">
+      <section className="tr21-page tr21-page-1" style={pagePaddingStyle}>
         {data.isDraft && <DraftWatermark fontFamilyCss={data.fontFamilyCss} />}
 
         <div
@@ -1331,7 +1339,7 @@ export const BillForm: React.FC<BillFormProps> = ({
       </div>
 
       {/* ======================== PAGE 2 ======================== */}
-      <section className="tr21-page tr21-page-2">
+      <section className="tr21-page tr21-page-2" style={pagePaddingStyle}>
         {data.isDraft && <DraftWatermark fontFamilyCss={data.fontFamilyCss} />}
 
         <div

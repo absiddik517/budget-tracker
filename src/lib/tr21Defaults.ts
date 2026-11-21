@@ -1,5 +1,5 @@
 import { toBanglaDigits } from './banglaFormat';
-import type { CertificationClause, Tr21P1S3Mode } from '../types';
+import type { CertificationClause, Tr21Margins, Tr21P1S3Mode } from '../types';
 
 export const DEFAULT_INSTITUTIONAL_CODE = '1240303000000';
 export const DEFAULT_NET_PAYABLE_CODE = '8172108';
@@ -11,6 +11,61 @@ export const DEFAULT_TR21_FONT_FAMILY = 'NikoshBAN';
 export const DEFAULT_TR21_FONT_SIZE = 11;
 export const DEFAULT_TR21_P1S3_MODE: Tr21P1S3Mode = 'items';
 export const DEFAULT_TR21_VOUCHER_LABEL = '';
+export const DEFAULT_TR21_MARGINS: Tr21Margins = {
+  top: 0.35,
+  right: 0.4,
+  bottom: 0.3,
+  left: 0.4,
+};
+
+const TR21_MARGINS_LABEL_PREFIX = '__margins__:';
+
+export function clampTr21Margin(value: unknown, fallback: number): number {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(2.5, Math.max(0, Number(num.toFixed(2))));
+}
+
+export function serializeTr21MarginsToLabel(margins: Tr21Margins): string {
+  const top = clampTr21Margin(margins.top, DEFAULT_TR21_MARGINS.top);
+  const right = clampTr21Margin(margins.right, DEFAULT_TR21_MARGINS.right);
+  const bottom = clampTr21Margin(margins.bottom, DEFAULT_TR21_MARGINS.bottom);
+  const left = clampTr21Margin(margins.left, DEFAULT_TR21_MARGINS.left);
+  return `${TR21_MARGINS_LABEL_PREFIX}${top},${right},${bottom},${left}`;
+}
+
+export function resolveTr21Margins(
+  margins?: Partial<Tr21Margins> | null,
+  encodedLabel?: string | null
+): Tr21Margins {
+  if (
+    margins &&
+    (margins.top !== undefined ||
+      margins.right !== undefined ||
+      margins.bottom !== undefined ||
+      margins.left !== undefined)
+  ) {
+    return {
+      top: clampTr21Margin(margins.top, DEFAULT_TR21_MARGINS.top),
+      right: clampTr21Margin(margins.right, DEFAULT_TR21_MARGINS.right),
+      bottom: clampTr21Margin(margins.bottom, DEFAULT_TR21_MARGINS.bottom),
+      left: clampTr21Margin(margins.left, DEFAULT_TR21_MARGINS.left),
+    };
+  }
+  const raw = (encodedLabel || '').trim();
+  if (raw.startsWith(TR21_MARGINS_LABEL_PREFIX)) {
+    const parts = raw.slice(TR21_MARGINS_LABEL_PREFIX.length).split(',');
+    if (parts.length === 4) {
+      return {
+        top: clampTr21Margin(parts[0], DEFAULT_TR21_MARGINS.top),
+        right: clampTr21Margin(parts[1], DEFAULT_TR21_MARGINS.right),
+        bottom: clampTr21Margin(parts[2], DEFAULT_TR21_MARGINS.bottom),
+        left: clampTr21Margin(parts[3], DEFAULT_TR21_MARGINS.left),
+      };
+    }
+  }
+  return { ...DEFAULT_TR21_MARGINS };
+}
 
 export function resolveTr21P1S3Mode(_value?: string | null): Tr21P1S3Mode {
   return 'items';

@@ -16,6 +16,7 @@ import {
   resolveTr21FontCss,
   resolveTr21FontFamily,
   resolveTr21FontSize,
+  resolveTr21Margins,
 } from './tr21Defaults';
 import type {
   BillDeductionLine,
@@ -24,6 +25,7 @@ import type {
   BudgetDoc,
   CertificationClause,
   OfficeSettings,
+  Tr21Margins,
   Tr21P1S3Mode,
 } from '../types';
 
@@ -100,6 +102,7 @@ export interface Tr21FormData {
   fontFamily: string;
   fontFamilyCss: string;
   fontSize: number;
+  margins: Tr21Margins;
   allocationSummary: {
     lastBillAmount: Tr21AmountCell;
     additionalAllocation: Tr21AmountCell;
@@ -148,10 +151,15 @@ function formatDeductionLabel(d: BillDeductionLine): string {
 export function formatOfficePossessiveBn(officeName: string): string {
   const clean = officeName.trim();
   if (!clean) return 'দপ্তরের';
-  if (clean.endsWith("'র") || clean.endsWith('’র') || clean.endsWith('-এর')) {
+  if (
+    clean.endsWith(' এর') ||
+    clean.endsWith('-এর') ||
+    clean.endsWith("'র") ||
+    clean.endsWith('’র')
+  ) {
     return clean;
   }
-  return `${clean}'র`;
+  return `${clean} এর`;
 }
 
 export function buildTr21IntroText(params: {
@@ -168,11 +176,11 @@ export function buildTr21IntroText(params: {
 
   let memoPart = 'বরাদ্দকৃত অর্থ থেকে ';
   if (memoDateBn && memoNoBn) {
-    memoPart = `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+    memoPart = `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
   } else if (memoNoBn) {
-    memoPart = `${memoNoBn} নং স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+    memoPart = `${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
   } else if (memoDateBn) {
-    memoPart = `${memoDateBn} তারিখের স্মারকের বরাদ্দকৃত অর্থ থেকে `;
+    memoPart = `${memoDateBn} তারিখের স্মারকে বরাদ্দকৃত অর্থ থেকে `;
   }
 
   const cleanPurpose = params.purposeText.trim();
@@ -508,6 +516,7 @@ export function buildTr21FormData(params: {
     fontFamily: resolveTr21FontFamily(officeSettings.tr21FontFamily),
     fontFamilyCss: resolveTr21FontCss(officeSettings.tr21FontFamily),
     fontSize: resolveTr21FontSize(officeSettings.tr21FontSize),
+    margins: resolveTr21Margins(officeSettings.tr21Margins, officeSettings.tr21VoucherLabel),
     allocationSummary: {
       lastBillAmount: latestPriorBill
         ? cellFromPaisa(latestPriorBill.grossAmount)

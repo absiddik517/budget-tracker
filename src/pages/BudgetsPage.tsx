@@ -1,17 +1,20 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ChevronDown, Plus, Search, Trash2, Wallet } from 'lucide-react';
+import { ActivityList } from '../components/ActivityList';
+import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { EmptyState } from '../components/EmptyState';
 import { Layout } from '../components/Layout';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { Pagination } from '../components/Pagination';
-import { StatusChip } from '../components/StatusChip';
-import { ActivityList } from '../components/ActivityList';
-import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { SegmentedChips } from '../components/SegmentedChips';
+import { StatusChip, type ChipVariant } from '../components/StatusChip';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
-import { useFyData } from '../hooks/useFyData';
-import { useEconomicCodes } from '../hooks/useEconomicCodes';
 import { useDocAuditLogs } from '../hooks/useAuditLogs';
+import { useEconomicCodes } from '../hooks/useEconomicCodes';
+import { useFyData } from '../hooks/useFyData';
 import { formatActorBrief } from '../lib/actor';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import {
@@ -28,7 +31,13 @@ import {
   canEditDeleteBudgets,
   canMarkBudgetExecuted,
 } from '../lib/permissions';
-import type { BudgetDoc, BudgetEntryType, DeductionRates, EconomicCodeDoc } from '../types';
+import type {
+  BillStatus,
+  BudgetDoc,
+  BudgetEntryType,
+  DeductionRates,
+  EconomicCodeDoc,
+} from '../types';
 
 const DEFAULT_DEDUCTION_RATES: DeductionRates = {
   basis: 'gross',
@@ -55,6 +64,32 @@ function makeEmptyAllocationRow(): BudgetAllocationRowDraft {
     amountStr: '',
     codeError: '',
   };
+}
+
+function computeBarShares(allocated: number, approved: number, pending: number) {
+  if (allocated <= 0) {
+    return { approvedPct: 0, pendingPct: 0, usedPct: 0 };
+  }
+  const approvedPct = Math.min(100, Math.max(0, (approved / allocated) * 100));
+  const rawPendingPct = Math.max(0, (pending / allocated) * 100);
+  const pendingPct = Math.min(Math.max(0, 100 - approvedPct), rawPendingPct);
+  const usedPct = Math.min(100, Math.max(0, Math.round(((approved + pending) / allocated) * 100)));
+  return { approvedPct, pendingPct, usedPct };
+}
+
+function billStatusVariant(status: BillStatus): ChipVariant {
+  switch (status) {
+    case 'approved':
+      return 'approved';
+    case 'draft':
+      return 'draft';
+    case 'submitted':
+      return 'submitted';
+    case 'rejected':
+      return 'rejected';
+    case 'cancelled':
+      return 'cancelled';
+  }
 }
 
 export function BudgetsPage() {
@@ -104,7 +139,7 @@ export function BudgetsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [selectedBudgetId, setSelectedBudgetId] = useState<string | null>(null);
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   // Form Modal (Create or Super Admin Edit)
   const [formOpen, setFormOpen] = useState(false);
@@ -129,6 +164,37 @@ export function BudgetsPage() {
   const [deletingBudget, setDeletingBudget] = useState<BudgetDoc | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deletingSaving, setDeletingSaving] = useState(false);
+
+  const fySummary = useMemo(() => {
+    let allocated = 0;
+    let spent = 0;
+    let pending = 0;
+    let remaining = 0;
+    let activeCount = 0;
+    let executedCount = 0;
+
+    for (const b of budgets) {
+      allocated += b.allocated;
+      spent += b.spent;
+      pending += b.pendingAmount || 0;
+      remaining += b.remaining;
+      if (b.status === 'active') activeCount += 1;
+      else executedCount += 1;
+    }
+    const { approvedPct, pendingPct, usedPct } = computeBarShares(allocated, spent, pending);
+    return {
+      allocated,
+      spent,
+      pending,
+      remaining,
+      approvedPct,
+      pendingPct,
+      usedPct,
+      totalHeads: budgets.length,
+      activeCount,
+      executedCount,
+    };
+  }, [budgets]);
 
   const sameMemoBudgets = useMemo(() => {
     const trimmed = memoNo.trim();
@@ -158,16 +224,44 @@ export function BudgetsPage() {
     return filteredBudgets.slice(start, start + 50);
   }, [filteredBudgets, page]);
 
-  const selectedBudget = useMemo(() => {
-    if (selectedBudgetId) {
-      return budgets.find((b) => b.id === selectedBudgetId) || budgets[0] || null;
+  const groupedBudgets = useMemo(() => {
+    const groups: Array<{
+      key: string;
+      memoNo: string;
+      memoDate: string;
+      totalAllocated: number;
+      items: BudgetDoc[];
+    }> = [];
+    const byKey = new Map<string, number>();
+
+    for (const b of pagedBudgets) {
+      const k = `${b.memoNo}|${b.memoDate}`;
+      const existingIdx = byKey.get(k);
+      if (existingIdx === undefined) {
+        byKey.set(k, groups.length);
+        groups.push({
+          key: k,
+          memoNo: b.memoNo,
+          memoDate: b.memoDate,
+          totalAllocated: b.allocated,
+          items: [b],
+        });
+      } else {
+        groups[existingIdx].items.push(b);
+        groups[existingIdx].totalAllocated += b.allocated;
+      }
     }
-    return budgets[0] || null;
+    return groups;
+  }, [pagedBudgets]);
+
+  const selectedBudget = useMemo(() => {
+    if (!selectedBudgetId) return null;
+    return budgets.find((b) => b.id === selectedBudgetId) || null;
   }, [budgets, selectedBudgetId]);
 
   const { logs: selectedBudgetLogs, loading: logsLoading } = useDocAuditLogs(
     'budgets',
-    selectedBudget?.id || null
+    detailOpen && selectedBudget ? selectedBudget.id : null
   );
 
   const revisionChain = useMemo(() => {
@@ -259,7 +353,7 @@ export function BudgetsPage() {
     setRevisionOf(b.revisionOf || '');
     setDeductionRates(JSON.parse(JSON.stringify(b.deductionRates)) as DeductionRates);
     setCorrectionReason('');
-    setMobileDetailOpen(false);
+    setDetailOpen(false);
     setFormOpen(true);
   };
 
@@ -472,6 +566,7 @@ export function BudgetsPage() {
 
   const openDeleteBudgetModal = (b: BudgetDoc) => {
     if (!canEditDelete) return;
+    setDetailOpen(false);
     setDeletingBudget(b);
     setDeleteReason('');
   };
@@ -488,7 +583,7 @@ export function BudgetsPage() {
       if (selectedBudgetId === deletingBudget.id) setSelectedBudgetId(null);
       setDeletingBudget(null);
       setDeleteReason('');
-      setMobileDetailOpen(false);
+      setDetailOpen(false);
       pushToast('success', 'Budget deleted.');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Failed to delete budget.');
@@ -497,201 +592,21 @@ export function BudgetsPage() {
     }
   };
 
-  const handleSelectBudgetRow = (id: string) => {
+  const handleOpenDetail = (id: string) => {
     setSelectedBudgetId(id);
-    if (typeof window !== 'undefined' && window.innerWidth < 1280) {
-      setMobileDetailOpen(true);
-    }
+    setDetailOpen(true);
   };
 
   const actions = canCreate ? (
     <button
       type="button"
       onClick={openNewBudgetModal}
-      className="min-h-[44px] md:min-h-[40px] px-3.5 md:px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold whitespace-nowrap"
+      className="min-h-[44px] md:min-h-[40px] w-full sm:w-auto px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
     >
-      {t('newBudget')}
+      <Plus className="w-4 h-4 shrink-0" />
+      <span>{t('newBudget')}</span>
     </button>
   ) : null;
-
-  const budgetDetailContent = selectedBudget ? (
-    <>
-      {/* Deduction Rates Card */}
-      <div className="card-surface p-4 md:p-5 space-y-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-[var(--text)]">
-              Deduction rates
-            </h2>
-            <p className="text-xs text-[var(--muted)] mt-0.5 tabular-nums break-words bn">
-              {selectedBudget.economicCode} ·{' '}
-              {
-                getHead(selectedBudget.economicCode, {
-                  headName: selectedBudget.headName,
-                  headNameBn: selectedBudget.headNameBn,
-                }).displayName
-              }
-            </p>
-          </div>
-          <StatusChip
-            variant={selectedBudget.status === 'active' ? 'active' : 'executed'}
-          >
-            {selectedBudget.status === 'active' ? t('active') : t('executed')}
-          </StatusChip>
-        </div>
-
-        <dl className="space-y-2 text-sm pt-1">
-          <div className="flex justify-between gap-2">
-            <dt className="text-[var(--muted)]">Income Tax</dt>
-            <dd className="font-medium tabular-nums">
-              {selectedBudget.deductionRates.incomeTax}%
-            </dd>
-          </div>
-          {selectedBudget.deductionRates.vat.map((v) => (
-            <div key={v.key} className="flex justify-between gap-2">
-              <dt className="text-[var(--muted)]">
-                VAT {selectedBudget.deductionRates.vat.length > 1 ? `(${v.label})` : ''}
-              </dt>
-              <dd className="font-medium tabular-nums">{v.rate}%</dd>
-            </div>
-          ))}
-          {selectedBudget.deductionRates.serviceCharge > 0 && (
-            <div className="flex justify-between gap-2">
-              <dt className="text-[var(--muted)]">Service Charge</dt>
-              <dd className="font-medium tabular-nums">
-                {selectedBudget.deductionRates.serviceCharge}%
-              </dd>
-            </div>
-          )}
-        </dl>
-
-        <p className="text-xs text-[var(--muted)] pt-1">
-          Rates are saved with this budget, so later rate changes will not alter it.
-        </p>
-
-        <div className="text-xs text-[var(--muted)] bn pt-1 border-t border-[var(--line)]/60">
-          প্রস্তুতকারী: <span className="font-medium text-[var(--text)]">{formatActorBrief(selectedBudget.createdBy, officesById)}</span>
-        </div>
-
-        <div className="flex flex-wrap gap-2 pt-2">
-          {canEditDelete && (
-            <button
-              type="button"
-              onClick={() => openEditBudgetModal(selectedBudget)}
-              className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
-            >
-              Edit rates / budget
-            </button>
-          )}
-          {canExecute && (
-            <button
-              type="button"
-              onClick={() => handleMarkExecuted(selectedBudget)}
-              className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-subtle)]"
-            >
-              {selectedBudget.status === 'active' ? t('markExecuted') : 'Reopen Active'}
-            </button>
-          )}
-          {canEditDelete && (
-            <button
-              type="button"
-              onClick={() => openDeleteBudgetModal(selectedBudget)}
-              className="min-h-[44px] md:min-h-[40px] px-3.5 rounded-lg border border-[var(--line)] text-xs font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40"
-            >
-              {t('delete')}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Revision Chain & Limits & Linked Spendings & Activity */}
-      <div className="card-surface p-4 md:p-5 space-y-4">
-        <div>
-          <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">
-            Revision chain ({revisionChain.length})
-          </h3>
-          <ul className="space-y-1.5 text-xs">
-            {revisionChain.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center justify-between gap-2 py-1"
-              >
-                <button
-                  type="button"
-                  onClick={() => setSelectedBudgetId(item.id)}
-                  className={`min-h-[36px] text-left hover:underline min-w-0 break-words ${
-                    item.id === selectedBudget.id
-                      ? 'font-semibold text-[var(--accent)]'
-                      : 'text-[var(--text)]'
-                  }`}
-                >
-                  {item.memoNo} ({item.entryType})
-                </button>
-                <span className="tabular-nums font-medium shrink-0">
-                  {formatTaka(item.allocated)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="border-t border-[var(--line)] pt-3">
-          <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">
-            Applicable spending limits ({applicableLimits.length})
-          </h3>
-          {applicableLimits.length === 0 ? (
-            <p className="text-xs text-[var(--muted)]">No active caps on this head.</p>
-          ) : (
-            <ul className="space-y-1.5 text-xs">
-              {applicableLimits.map((l) => (
-                <li key={l.id} className="flex flex-wrap justify-between gap-x-2 gap-y-0.5">
-                  <span>
-                    {l.type === 'code' ? 'On code' : 'On budget'} · Ref {l.refNo}
-                  </span>
-                  <span className="font-semibold tabular-nums">
-                    {l.rate}% (eff. {formatDateDisplay(l.effectiveDate)})
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="border-t border-[var(--line)] pt-3">
-          <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2">
-            Linked bills ({linkedBills.length})
-          </h3>
-          {linkedBills.length === 0 ? (
-            <p className="text-xs text-[var(--muted)]">No bills recorded yet.</p>
-          ) : (
-            <ul className="space-y-1.5 text-xs">
-              {linkedBills.slice(0, 6).map((bill) => (
-                <li key={bill.id} className="flex justify-between gap-2">
-                  <span className="truncate min-w-0">
-                    {bill.billNo || 'Draft'} · {formatDateDisplay(bill.date)} ({bill.items.length}টি)
-                  </span>
-                  <span className="tabular-nums font-medium shrink-0">
-                    {formatTaka(bill.grossAmount)} ({bill.status})
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="border-t border-[var(--line)] pt-3">
-          <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1">
-            {t('activity')}
-          </h3>
-          <ActivityList logs={selectedBudgetLogs} loading={logsLoading} />
-        </div>
-      </div>
-    </>
-  ) : (
-    <div className="card-surface p-5 text-sm text-[var(--muted)]">
-      Select a budget row to inspect deduction rates, revision chain, and activity.
-    </div>
-  );
 
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
@@ -709,253 +624,544 @@ export function BudgetsPage() {
     );
   }
 
+  const selectedHead = selectedBudget
+    ? getHead(selectedBudget.economicCode, {
+        headName: selectedBudget.headName,
+        headNameBn: selectedBudget.headNameBn,
+      })
+    : null;
+  const selectedShares = selectedBudget
+    ? computeBarShares(
+        selectedBudget.allocated,
+        selectedBudget.spent,
+        selectedBudget.pendingAmount || 0
+      )
+    : { approvedPct: 0, pendingPct: 0, usedPct: 0 };
+
   return (
     <Layout title={t('navBudgets')}>
       <PageHeader title={t('navBudgets')} actions={actions} />
-      <div className="space-y-3.5 md:space-y-4">
+
+      <div className="space-y-3.5">
         {isLegacyPreMigration && (
-          <div className="card-surface px-4 py-3 border-l-4 border-[var(--warn)] text-xs text-[var(--text)]">
+          <div className="rounded-[14px] border border-[var(--warn-text)]/25 bg-[var(--warn-bg)] px-4 py-3 text-xs text-[var(--warn-text)]">
             মাল্টি-অফিস মাইগ্রেশন সম্পন্ন করার আগে নতুন বাজেট এন্ট্রি তৈরি করা যাবে না। Settings থেকে মাইগ্রেশন সম্পন্ন করুন।
           </div>
         )}
-        {/* Filter chips and search */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            {(['all', 'active', 'executed'] as const).map((f) => {
-              const active = statusFilter === f;
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => {
-                    setStatusFilter(f);
-                    setPage(1);
-                  }}
-                  className={`min-h-[44px] md:min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                      : 'bg-[var(--card)] border border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  {t(f)}
-                </button>
-              );
-            })}
+
+        {/* Hero Summary Card */}
+        <section className="card-surface p-4 md:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">
+                {t('remainingAllocation')} · FY {selectedFy}
+              </div>
+              <div className="text-[28px] md:text-[30px] font-bold tracking-tight leading-tight text-[var(--text)] tabular-nums mt-0.5">
+                {formatTaka(fySummary.remaining)}
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--surface-subtle)] text-[var(--muted)] tabular-nums whitespace-nowrap shrink-0">
+              {fySummary.usedPct}% used
+            </span>
           </div>
 
-          <div className="relative w-full md:w-64">
-            <Search className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="স্মারক, কোড বা ব্যয়ের খাত খুঁজুন…"
-              aria-label="Search budgets"
-              className="w-full min-h-[44px] md:min-h-[40px] pl-9 pr-3 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-xs text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            />
+          <div
+            className="h-2 rounded-full bg-[var(--surface-subtle)] border border-[var(--line)]/50 overflow-hidden flex my-3"
+            role="img"
+            aria-label="Approved and pending share of allocation"
+          >
+            {fySummary.approvedPct > 0 && (
+              <span
+                className="h-full bg-[var(--accent)] transition-all"
+                style={{ width: `${fySummary.approvedPct}%` }}
+              />
+            )}
+            {fySummary.pendingPct > 0 && (
+              <span
+                className="h-full bg-amber-500 transition-all"
+                style={{ width: `${fySummary.pendingPct}%` }}
+              />
+            )}
           </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--muted)] tabular-nums">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden="true" />
+              <span>{t('approved')}</span>
+              <strong className="text-[var(--text)] font-semibold">
+                {formatNumberIN(fySummary.spent)}
+              </strong>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500" aria-hidden="true" />
+              <span>{t('pendingAmount')}</span>
+              <strong className="text-[var(--text)] font-semibold">
+                {formatNumberIN(fySummary.pending)}
+              </strong>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[var(--line)]" aria-hidden="true" />
+              <span>{t('allocated')}</span>
+              <strong className="text-[var(--text)] font-semibold">
+                {formatNumberIN(fySummary.allocated)}
+              </strong>
+            </span>
+            <span>
+              {fySummary.totalHeads} {fySummary.totalHeads === 1 ? 'head' : 'heads'}
+            </span>
+          </div>
+        </section>
+
+        {/* Status Chips */}
+        <SegmentedChips
+          ariaLabel="Filter budgets by status"
+          value={statusFilter}
+          onChange={(next) => {
+            setStatusFilter(next);
+            setPage(1);
+          }}
+          options={[
+            { value: 'all', label: t('all'), count: fySummary.totalHeads },
+            { value: 'active', label: t('active'), count: fySummary.activeCount },
+            { value: 'executed', label: t('executed'), count: fySummary.executedCount },
+          ]}
+        />
+
+        {/* Full-width Search Bar */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-[var(--muted)] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            placeholder="স্মারক, কোড বা ব্যয়ের খাত খুঁজুন…"
+            aria-label="Search budgets"
+            className="w-full min-h-[44px] pl-10 pr-3.5 rounded-[12px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          />
         </div>
 
-        {/* Main 2-column grid */}
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-          {/* Budgets Table / Mobile Cards */}
-          <div className="xl:col-span-8 card-surface overflow-hidden">
-            {/* Mobile Card List */}
-            <div className="md:hidden divide-y divide-[var(--line)]">
-              {loading ? (
-                <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                  Loading budgets…
+        {/* Memo-Grouped Budget List */}
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 2 }).map((_, idx) => (
+              <div key={idx} className="card-surface overflow-hidden animate-pulse" aria-hidden="true">
+                <div className="px-4 py-3.5 bg-[var(--surface-subtle)] border-b border-[var(--line)] space-y-2">
+                  <div className="h-3 w-16 rounded bg-[var(--line)]" />
+                  <div className="h-4 w-56 rounded bg-[var(--line)]" />
+                  <div className="h-3 w-40 rounded bg-[var(--line)]" />
                 </div>
-              ) : pagedBudgets.length === 0 ? (
-                <div className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                  {t('noDataFound')}
+                <div className="p-4 space-y-3">
+                  <div className="h-4 w-3/4 rounded bg-[var(--surface-subtle)]" />
+                  <div className="h-1.5 w-full rounded bg-[var(--surface-subtle)]" />
+                  <div className="h-3 w-1/2 rounded bg-[var(--surface-subtle)]" />
                 </div>
-              ) : (
-                pagedBudgets.map((b) => {
-                  const head = getHead(b.economicCode, {
-                    headName: b.headName,
-                    headNameBn: b.headNameBn,
-                  });
-                  return (
-                    <button
-                      key={b.id}
-                      type="button"
-                      onClick={() => handleSelectBudgetRow(b.id)}
-                      className="w-full text-left p-3.5 space-y-2 hover:bg-[var(--surface-subtle)] active:bg-[var(--surface-subtle)] transition-colors"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--muted)]">
-                            <span className="font-semibold text-[var(--text)]">{b.memoNo}</span>
-                            {b.entryType === 'revision' && <span>· Revision</span>}
-                            <span className="tabular-nums">· {formatDateDisplay(b.memoDate)}</span>
-                          </div>
-                          <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
-                            <span className="tabular-nums font-semibold">{b.economicCode}</span>{' '}
-                            <span className="bn">{head.displayName}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <StatusChip variant={b.status === 'active' ? 'active' : 'executed'}>
-                            {b.status === 'active' ? t('active') : t('executed')}
-                          </StatusChip>
-                          <ChevronRight className="w-4 h-4 text-[var(--muted)]" />
-                        </div>
-                      </div>
+              </div>
+            ))}
+          </div>
+        ) : pagedBudgets.length === 0 ? (
+          <EmptyState
+            icon={<Wallet className="w-5 h-5" />}
+            title={t('noDataFound')}
+            description={
+              search || statusFilter !== 'all'
+                ? 'অন্য স্মারক, কোড বা স্ট্যাটাস দিয়ে খুঁজে দেখুন।'
+                : `FY ${selectedFy}-এ এখনো কোনো বাজেট বরাদ্দ যুক্ত করা হয়নি।`
+            }
+            action={
+              canCreate && !search && statusFilter === 'all' ? (
+                <button
+                  type="button"
+                  onClick={openNewBudgetModal}
+                  className="min-h-[44px] px-4 rounded-[10px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{t('newBudget')}</span>
+                </button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <>
+            <div className="space-y-3.5">
+              {groupedBudgets.map((grp) => (
+                <section key={grp.key} className="card-surface overflow-hidden">
+                  <div className="px-4 py-3.5 bg-[var(--surface-subtle)] border-b border-[var(--line)]">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--muted)]">
+                      {t('memoNo')}
+                    </div>
+                    <div className="text-[15px] font-bold text-[var(--text)] break-words mt-0.5">
+                      {grp.memoNo}
+                    </div>
+                    <div className="text-xs text-[var(--muted)] tabular-nums mt-0.5">
+                      {formatDateDisplay(grp.memoDate)} · {grp.items.length}{' '}
+                      {grp.items.length === 1 ? 'head' : 'heads'} ·{' '}
+                      {formatTaka(grp.totalAllocated)} allocated
+                    </div>
+                  </div>
 
-                      <div className="grid grid-cols-4 gap-2 pt-1 text-xs border-t border-[var(--line)]/60">
-                        <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">{t('allocated')}</div>
-                          <div className="font-medium tabular-nums truncate">
-                            {formatNumberIN(b.allocated)}
-                          </div>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">{t('approvedSpent')}</div>
-                          <div className="font-medium tabular-nums truncate">
-                            {formatNumberIN(b.spent)}
-                          </div>
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] text-[var(--muted)]">{t('pendingAmount')}</div>
-                          <div className="font-medium text-[var(--warn-text)] tabular-nums truncate">
-                            {formatNumberIN(b.pendingAmount || 0)}
-                          </div>
-                        </div>
-                        <div className="min-w-0 text-right">
-                          <div className="text-[11px] text-[var(--muted)]">{t('available')}</div>
-                          <div className="font-semibold text-[var(--accent)] tabular-nums truncate">
-                            {formatNumberIN(b.remaining)}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Desktop Table */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--line)] text-xs text-[var(--muted)]">
-                    <th className="sticky left-0 z-10 bg-[var(--card)] py-3 px-4 font-medium whitespace-nowrap">{t('memoNo')}</th>
-                    <th className="py-3 px-4 font-medium whitespace-nowrap">{t('date')}</th>
-                    <th className="py-3 px-4 font-medium">{t('head')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('allocated')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('approvedSpent')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('pendingAmount')}</th>
-                    <th className="py-3 px-4 font-medium text-right whitespace-nowrap">{t('available')}</th>
-                    <th className="py-3 px-4 font-medium whitespace-nowrap">{t('status')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--line)]">
-                  {loading ? (
-                    <tr>
-                      <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                        Loading budgets…
-                      </td>
-                    </tr>
-                  ) : pagedBudgets.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="py-8 px-4 text-center text-sm text-[var(--muted)]">
-                        {t('noDataFound')}
-                      </td>
-                    </tr>
-                  ) : (
-                    pagedBudgets.map((b) => {
-                      const isSelected = selectedBudget?.id === b.id;
+                  <div className="divide-y divide-[var(--line)]">
+                    {grp.items.map((b) => {
                       const head = getHead(b.economicCode, {
                         headName: b.headName,
                         headNameBn: b.headNameBn,
                       });
+                      const rowShares = computeBarShares(
+                        b.allocated,
+                        b.spent,
+                        b.pendingAmount || 0
+                      );
+
                       return (
-                        <tr
+                        <button
                           key={b.id}
-                          onClick={() => handleSelectBudgetRow(b.id)}
-                          className={`group cursor-pointer transition-colors ${
-                            isSelected
-                              ? 'bg-[var(--accent-soft)]/50'
-                              : 'hover:bg-[var(--surface-subtle)]'
-                          }`}
+                          type="button"
+                          onClick={() => handleOpenDetail(b.id)}
+                          className="w-full text-left px-4 py-3.5 hover:bg-[var(--surface-subtle)]/70 active:bg-[var(--surface-subtle)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]"
                         >
-                          <td
-                            className={`sticky left-0 z-10 py-3 px-4 whitespace-nowrap transition-colors ${
-                              isSelected
-                                ? 'bg-[var(--accent-soft)]'
-                                : 'bg-[var(--card)] group-hover:bg-[var(--surface-subtle)]'
-                            }`}
-                          >
-                            <div className="font-medium text-[var(--text)]">{b.memoNo}</div>
-                            {b.entryType === 'revision' && (
-                              <div className="text-[11px] text-[var(--muted)]">Revision</div>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                            {formatDateDisplay(b.memoDate)}
-                          </td>
-                          <td className="py-3 px-4 min-w-[190px]">
-                            <div className="font-medium text-[var(--text)]">
-                              <span className="tabular-nums">{b.economicCode}</span>{' '}
-                              <span className="bn">{head.displayName}</span>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-[15px] font-bold tabular-nums text-[var(--text)] mr-2">
+                                {b.economicCode}
+                              </span>
+                              <span className="text-[15px] font-medium text-[var(--text)] bn">
+                                {head.displayName}
+                              </span>
+                              {b.entryType === 'revision' && (
+                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--warn-bg)] text-[var(--warn-text)]">
+                                  Revision
+                                </span>
+                              )}
                             </div>
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(b.allocated)}
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
-                            {formatNumberIN(b.spent)}
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-[var(--warn-text)]">
-                            {formatNumberIN(b.pendingAmount || 0)}
-                          </td>
-                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-[var(--accent)]">
-                            {formatNumberIN(b.remaining)}
-                          </td>
-                          <td className="py-3 px-4 whitespace-nowrap">
+
+                            <div className="text-right shrink-0">
+                              <div className="text-base font-bold tabular-nums text-[var(--accent)] leading-tight">
+                                {formatNumberIN(b.remaining)}
+                              </div>
+                              <div className="text-[11px] text-[var(--muted)]">
+                                {t('available')}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div
+                            className="h-1.5 rounded-full bg-[var(--surface-subtle)] border border-[var(--line)]/40 overflow-hidden flex my-2.5"
+                            aria-hidden="true"
+                          >
+                            {rowShares.approvedPct > 0 && (
+                              <span
+                                className="h-full bg-[var(--accent)]"
+                                style={{ width: `${rowShares.approvedPct}%` }}
+                              />
+                            )}
+                            {rowShares.pendingPct > 0 && (
+                              <span
+                                className="h-full bg-amber-500"
+                                style={{ width: `${rowShares.pendingPct}%` }}
+                              />
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--muted)] tabular-nums">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className="w-2 h-2 rounded-full bg-[var(--accent)]"
+                                aria-hidden="true"
+                              />
+                              <span>{t('approved')}</span>
+                              <strong className="text-[var(--text)] font-semibold">
+                                {formatNumberIN(b.spent)}
+                              </strong>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className="w-2 h-2 rounded-full bg-amber-500"
+                                aria-hidden="true"
+                              />
+                              <span>{t('pendingAmount')}</span>
+                              <strong className="text-[var(--text)] font-semibold">
+                                {formatNumberIN(b.pendingAmount || 0)}
+                              </strong>
+                            </span>
+                            <span className="ml-auto">of {formatNumberIN(b.allocated)}</span>
                             <StatusChip variant={b.status === 'active' ? 'active' : 'executed'}>
                               {b.status === 'active' ? t('active') : t('executed')}
                             </StatusChip>
-                          </td>
-                        </tr>
+                          </div>
+                        </button>
                       );
-                    })
-                  )}
-                </tbody>
-              </table>
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
-            <Pagination
-              page={page}
-              totalItems={filteredBudgets.length}
-              onPageChange={setPage}
-            />
-          </div>
 
-          {/* Right Detail Panel (Desktop xl+) */}
-          <div className="hidden xl:block xl:col-span-4 space-y-4">
-            {budgetDetailContent}
-          </div>
-        </div>
+            {filteredBudgets.length > 50 && (
+              <div className="card-surface overflow-hidden">
+                <Pagination page={page} totalItems={filteredBudgets.length} onPageChange={setPage} />
+              </div>
+            )}
+          </>
+        )}
       </div>
 
-      {/* Mobile / Tablet Budget Detail Sheet */}
+      {/* Budget Detail Sheet / Modal */}
       <Modal
-        open={mobileDetailOpen && Boolean(selectedBudget)}
-        onClose={() => setMobileDetailOpen(false)}
-        title={selectedBudget ? `Memo ${selectedBudget.memoNo}` : ''}
-        subtitle={
-          selectedBudget
-            ? `${selectedBudget.economicCode} · ${formatDateDisplay(selectedBudget.memoDate)}`
+        open={detailOpen && Boolean(selectedBudget)}
+        onClose={() => setDetailOpen(false)}
+        title={
+          selectedBudget && selectedHead
+            ? `${selectedBudget.economicCode} ${selectedHead.displayName}`
             : ''
         }
-        fullScreenOnMobile
+        subtitle={
+          selectedBudget
+            ? `Memo ${selectedBudget.memoNo} · ${formatDateDisplay(selectedBudget.memoDate)}`
+            : ''
+        }
         maxWidthClass="md:max-w-xl"
+        footer={
+          selectedBudget && (canEditDelete || canExecute) ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {canEditDelete && (
+                <button
+                  type="button"
+                  onClick={() => openEditBudgetModal(selectedBudget)}
+                  className="min-h-[44px] flex-1 px-3.5 rounded-[10px] border border-[var(--line)] text-sm font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors whitespace-nowrap"
+                >
+                  {t('edit')}
+                </button>
+              )}
+              {canExecute && (
+                <button
+                  type="button"
+                  onClick={() => handleMarkExecuted(selectedBudget)}
+                  className="min-h-[44px] flex-1 px-3.5 rounded-[10px] border border-[var(--line)] text-sm font-semibold text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors whitespace-nowrap"
+                >
+                  {selectedBudget.status === 'active' ? t('markExecuted') : 'Reopen'}
+                </button>
+              )}
+              {canEditDelete && (
+                <button
+                  type="button"
+                  onClick={() => openDeleteBudgetModal(selectedBudget)}
+                  className="min-h-[44px] flex-1 px-3.5 rounded-[10px] border border-[var(--danger-text)]/40 text-sm font-semibold text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 transition-colors whitespace-nowrap"
+                >
+                  {t('delete')}
+                </button>
+              )}
+            </div>
+          ) : undefined
+        }
       >
-        <div className="space-y-4">{budgetDetailContent}</div>
+        {selectedBudget && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs text-[var(--muted)] bn">
+                প্রস্তুতকারী:{' '}
+                <span className="font-medium text-[var(--text)]">
+                  {formatActorBrief(selectedBudget.createdBy, officesById)}
+                </span>
+              </div>
+              <StatusChip variant={selectedBudget.status === 'active' ? 'active' : 'executed'}>
+                {selectedBudget.status === 'active' ? t('active') : t('executed')}
+              </StatusChip>
+            </div>
+
+            <div
+              className="h-2 rounded-full bg-[var(--surface-subtle)] border border-[var(--line)]/50 overflow-hidden flex"
+              aria-hidden="true"
+            >
+              {selectedShares.approvedPct > 0 && (
+                <span
+                  className="h-full bg-[var(--accent)]"
+                  style={{ width: `${selectedShares.approvedPct}%` }}
+                />
+              )}
+              {selectedShares.pendingPct > 0 && (
+                <span
+                  className="h-full bg-amber-500"
+                  style={{ width: `${selectedShares.pendingPct}%` }}
+                />
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm tabular-nums">
+              <div>
+                <div className="text-[11px] font-medium text-[var(--muted)]">{t('allocated')}</div>
+                <div className="font-semibold text-[var(--text)]">
+                  {formatNumberIN(selectedBudget.allocated)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-[var(--muted)]">{t('approved')}</div>
+                <div className="font-semibold text-[var(--text)]">
+                  {formatNumberIN(selectedBudget.spent)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-[var(--muted)]">
+                  {t('pendingAmount')}
+                </div>
+                <div className="font-semibold text-[var(--warn-text)]">
+                  {formatNumberIN(selectedBudget.pendingAmount || 0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-medium text-[var(--muted)]">{t('available')}</div>
+                <div className="font-bold text-[var(--accent)]">
+                  {formatNumberIN(selectedBudget.remaining)}
+                </div>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[var(--line)] border-t border-[var(--line)]">
+              <details open className="group py-1">
+                <summary className="min-h-[48px] flex items-center justify-between gap-2 cursor-pointer text-sm font-semibold text-[var(--text)] list-none">
+                  <span>Deduction rates</span>
+                  <ChevronDown className="w-4 h-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-3 space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] px-3.5 py-2.5">
+                      <div className="text-[11px] text-[var(--muted)]">Income Tax</div>
+                      <div className="text-base font-bold tabular-nums text-[var(--text)]">
+                        {selectedBudget.deductionRates.incomeTax}%
+                      </div>
+                    </div>
+                    {selectedBudget.deductionRates.vat.map((v) => (
+                      <div
+                        key={v.key}
+                        className="rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] px-3.5 py-2.5"
+                      >
+                        <div className="text-[11px] text-[var(--muted)] truncate">
+                          VAT {selectedBudget.deductionRates.vat.length > 1 ? `(${v.label})` : ''}
+                        </div>
+                        <div className="text-base font-bold tabular-nums text-[var(--text)]">
+                          {v.rate}%
+                        </div>
+                      </div>
+                    ))}
+                    {selectedBudget.deductionRates.serviceCharge > 0 && (
+                      <div className="rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] px-3.5 py-2.5">
+                        <div className="text-[11px] text-[var(--muted)]">Service Charge</div>
+                        <div className="text-base font-bold tabular-nums text-[var(--text)]">
+                          {selectedBudget.deductionRates.serviceCharge}%
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--muted)]">
+                    Saved with this budget, so later rate changes do not alter it.
+                  </p>
+                </div>
+              </details>
+
+              <details className="group py-1">
+                <summary className="min-h-[48px] flex items-center justify-between gap-2 cursor-pointer text-sm font-semibold text-[var(--text)] list-none">
+                  <span>Revision chain ({revisionChain.length})</span>
+                  <ChevronDown className="w-4 h-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-3">
+                  <ul className="space-y-1.5 text-xs">
+                    {revisionChain.map((item) => (
+                      <li key={item.id} className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBudgetId(item.id)}
+                          className={`min-h-[36px] text-left hover:underline min-w-0 break-words ${
+                            item.id === selectedBudget.id
+                              ? 'font-semibold text-[var(--accent)]'
+                              : 'text-[var(--text)]'
+                          }`}
+                        >
+                          {item.memoNo} ({item.entryType})
+                        </button>
+                        <span className="tabular-nums font-medium shrink-0">
+                          {formatTaka(item.allocated)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </details>
+
+              <details className="group py-1">
+                <summary className="min-h-[48px] flex items-center justify-between gap-2 cursor-pointer text-sm font-semibold text-[var(--text)] list-none">
+                  <span>Applicable spending limits ({applicableLimits.length})</span>
+                  <ChevronDown className="w-4 h-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-3">
+                  {applicableLimits.length === 0 ? (
+                    <p className="text-xs text-[var(--muted)]">No active caps on this head.</p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs">
+                      {applicableLimits.map((l) => (
+                        <li key={l.id} className="flex flex-wrap justify-between gap-x-2 gap-y-0.5">
+                          <span>
+                            {l.type === 'code' ? 'On code' : 'On budget'} · Ref {l.refNo}
+                          </span>
+                          <span className="font-semibold tabular-nums">
+                            {l.rate}% (eff. {formatDateDisplay(l.effectiveDate)})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </details>
+
+              <details className="group py-1">
+                <summary className="min-h-[48px] flex items-center justify-between gap-2 cursor-pointer text-sm font-semibold text-[var(--text)] list-none">
+                  <span>Linked bills ({linkedBills.length})</span>
+                  <ChevronDown className="w-4 h-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-3">
+                  {linkedBills.length === 0 ? (
+                    <p className="text-xs text-[var(--muted)]">No bills recorded yet.</p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs">
+                      {linkedBills.slice(0, 8).map((bill) => (
+                        <li key={bill.id}>
+                          <Link
+                            to={`/bills/${bill.id}`}
+                            onClick={() => setDetailOpen(false)}
+                            className="min-h-[38px] px-2.5 py-1.5 rounded-lg hover:bg-[var(--surface-subtle)] flex items-center justify-between gap-2 transition-colors"
+                          >
+                            <span className="truncate min-w-0 text-[var(--text)] font-medium">
+                              {bill.billNo || t('draft')} · {formatDateDisplay(bill.date)} (
+                              {bill.items.length}টি)
+                            </span>
+                            <span className="inline-flex items-center gap-2 shrink-0">
+                              <span className="tabular-nums font-semibold text-[var(--text)]">
+                                {formatTaka(bill.grossAmount)}
+                              </span>
+                              <StatusChip variant={billStatusVariant(bill.status)}>
+                                {t(bill.status)}
+                              </StatusChip>
+                            </span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </details>
+
+              <details className="group py-1">
+                <summary className="min-h-[48px] flex items-center justify-between gap-2 cursor-pointer text-sm font-semibold text-[var(--text)] list-none">
+                  <span>{t('activity')}</span>
+                  <ChevronDown className="w-4 h-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="pb-2">
+                  <ActivityList logs={selectedBudgetLogs} loading={logsLoading} />
+                </div>
+              </details>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Create / Edit Budget Modal */}
@@ -990,7 +1196,7 @@ export function BudgetsPage() {
                 type="submit"
                 form="budget-form"
                 disabled={saving}
-                className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
+                className="min-h-[44px] px-5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-[var(--on-accent)] text-sm font-semibold disabled:opacity-60"
               >
                 {saving
                   ? 'Saving…'
@@ -1006,17 +1212,17 @@ export function BudgetsPage() {
           {!editingBudget && (
             <div>
               <div className="text-xs font-medium text-[var(--muted)] mb-1.5">Entry type</div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
                 <button
                   type="button"
                   onClick={() => {
                     setEntryType('original');
                     setRevisionOf('');
                   }}
-                  className={`min-h-[42px] rounded-lg text-xs font-semibold transition-colors ${
+                  className={`min-h-[40px] rounded-lg text-xs font-semibold transition-colors ${
                     entryType === 'original'
-                      ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                      : 'border border-[var(--line)] text-[var(--text)]'
+                      ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
+                      : 'text-[var(--muted)] hover:text-[var(--text)]'
                   }`}
                 >
                   Original allocation
@@ -1024,10 +1230,10 @@ export function BudgetsPage() {
                 <button
                   type="button"
                   onClick={() => setEntryType('revision')}
-                  className={`min-h-[42px] rounded-lg text-xs font-semibold transition-colors ${
+                  className={`min-h-[40px] rounded-lg text-xs font-semibold transition-colors ${
                     entryType === 'revision'
-                      ? 'bg-[var(--accent)] text-[var(--on-accent)]'
-                      : 'border border-[var(--line)] text-[var(--text)]'
+                      ? 'bg-[var(--card)] text-[var(--text)] shadow-sm'
+                      : 'text-[var(--muted)] hover:text-[var(--text)]'
                   }`}
                 >
                   Revision
@@ -1038,7 +1244,10 @@ export function BudgetsPage() {
 
           {!editingBudget && entryType === 'revision' && (
             <div>
-              <label htmlFor="budget-rev-of" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+              <label
+                htmlFor="budget-rev-of"
+                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+              >
                 Revision of budget entry
               </label>
               <select
@@ -1046,7 +1255,7 @@ export function BudgetsPage() {
                 required
                 value={revisionOf}
                 onChange={(e) => handleRevisionTargetChange(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
               >
                 <option value="">Select original budget…</option>
                 {budgets
@@ -1068,7 +1277,10 @@ export function BudgetsPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label htmlFor="budget-memo-no" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+              <label
+                htmlFor="budget-memo-no"
+                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+              >
                 Memo No
               </label>
               <input
@@ -1077,12 +1289,13 @@ export function BudgetsPage() {
                 required
                 value={memoNo}
                 onChange={(e) => setMemoNo(e.target.value)}
-                placeholder="Memo 01/26"
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm"
+                placeholder="30.00.0000.302.02.222.25-343"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
               {sameMemoBudgets.length > 0 ? (
                 <p className="text-[11px] text-[var(--accent)] mt-1 bn">
-                  এই স্মারকে আরও {sameMemoBudgets.length}টি কোড আছে ({sameMemoBudgets.map((b) => b.economicCode).join(', ')}) — ভিন্ন কোডে যুক্ত করা যাবে।
+                  এই স্মারকে আরও {sameMemoBudgets.length}টি কোড আছে (
+                  {sameMemoBudgets.map((b) => b.economicCode).join(', ')}) — ভিন্ন কোডে যুক্ত করা যাবে।
                 </p>
               ) : !editingBudget ? (
                 <p className="text-[11px] text-[var(--muted)] mt-1 bn">
@@ -1091,7 +1304,10 @@ export function BudgetsPage() {
               ) : null}
             </div>
             <div>
-              <label htmlFor="budget-memo-date" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+              <label
+                htmlFor="budget-memo-date"
+                className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+              >
                 Memo Date (inside FY {selectedFy})
               </label>
               <input
@@ -1100,7 +1316,7 @@ export function BudgetsPage() {
                 required
                 value={memoDate}
                 onChange={(e) => setMemoDate(e.target.value)}
-                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
             </div>
           </div>
@@ -1122,7 +1338,7 @@ export function BudgetsPage() {
                 return (
                   <div
                     key={row.key}
-                    className="p-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)]/60 space-y-3"
+                    className="p-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)]/70 space-y-3"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-bold text-[var(--accent)]">
@@ -1195,7 +1411,7 @@ export function BudgetsPage() {
                         value={row.amountStr}
                         onChange={(e) => updateAllocationRow(idx, { amountStr: e.target.value })}
                         placeholder="300000"
-                        className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                        className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                       />
                     </div>
                   </div>
@@ -1231,9 +1447,7 @@ export function BudgetsPage() {
 
               {economicCode && (
                 <div className="px-3.5 py-2.5 rounded-lg bg-[var(--surface-subtle)] border border-[var(--line)]">
-                  <div className="text-[11px] font-medium text-[var(--muted)]">
-                    ব্যয়ের খাত
-                  </div>
+                  <div className="text-[11px] font-medium text-[var(--muted)]">ব্যয়ের খাত</div>
                   <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
                     {getHead(economicCode, { headName, headNameBn }).displayName}
                   </div>
@@ -1241,7 +1455,10 @@ export function BudgetsPage() {
               )}
 
               <div>
-                <label htmlFor="budget-amount" className="block text-xs font-medium text-[var(--muted)] mb-1.5">
+                <label
+                  htmlFor="budget-amount"
+                  className="block text-xs font-medium text-[var(--muted)] mb-1.5"
+                >
                   Amount (৳){entryType === 'revision' ? ' · negative allowed for reduction' : ''}
                 </label>
                 <input
@@ -1252,11 +1469,10 @@ export function BudgetsPage() {
                   value={amountStr}
                   onChange={(e) => setAmountStr(e.target.value)}
                   placeholder="300000"
-                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums"
+                  className="w-full min-h-[44px] px-3.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 />
               </div>
 
-              {/* Editable Deduction Rates shown only when editing an existing budget */}
               {Boolean(editingBudget) && (
                 <div className="p-3.5 rounded-xl bg-[var(--surface-subtle)] space-y-3">
                   <div className="text-xs font-semibold text-[var(--text)]">
@@ -1300,7 +1516,7 @@ export function BudgetsPage() {
                       />
                     </div>
                   </div>
-                    <div className="space-y-2">
+                  <div className="space-y-2">
                     <div className="text-[11px] text-[var(--muted)]">VAT rates (%)</div>
                     {deductionRates.vat.map((v, idx) => (
                       <div key={v.key} className="flex items-center gap-2">
@@ -1344,7 +1560,7 @@ export function BudgetsPage() {
                       value={correctionReason}
                       onChange={(e) => setCorrectionReason(e.target.value)}
                       placeholder="সংশোধনের স্পষ্ট কারণ লিখুন…"
-                      className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+                      className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
                     />
                   </div>
                 </div>
@@ -1387,7 +1603,10 @@ export function BudgetsPage() {
             অনুমোদিত/সক্রিয় বাজেট রেকর্ড মুছার জন্য সুস্পষ্ট কারণ প্রদান করতে হবে, যা অডিট লগে সংরক্ষিত থাকবে।
           </p>
           <div>
-            <label htmlFor="budget-delete-reason" className="block text-xs font-medium text-[var(--muted)] mb-1">
+            <label
+              htmlFor="budget-delete-reason"
+              className="block text-xs font-medium text-[var(--muted)] mb-1"
+            >
               কারণ (আবশ্যক)
             </label>
             <textarea
@@ -1396,7 +1615,7 @@ export function BudgetsPage() {
               value={deleteReason}
               onChange={(e) => setDeleteReason(e.target.value)}
               placeholder="কেন এই বাজেটটি মুছা হচ্ছে…"
-              className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-sm bn"
+              className="w-full px-3 py-2 rounded-lg border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn"
             />
           </div>
         </div>

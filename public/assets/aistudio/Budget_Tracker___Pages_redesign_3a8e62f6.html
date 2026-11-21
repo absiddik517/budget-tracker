@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Budget Tracker — Pages redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#F5F7F6;--sf:#fff;--bd:#E4E9E7;--tx:#0F1B18;--mu:#5B6B66;--pr:#0F766E;--prx:#0B5F58;--prt:#E7F4F1;--in:#CDD6D3;--bar:#fff;--sh:rgba(15,27,24,.2);--trk:#E8EDEB;--sub:#F1F5F3;--am:#B45309;--amt:#FFF3E0;--bl:#1D4ED8;--blt:#E7EEFF;--dg:#B42318;--dgt:#FDECEA;--e1:0 1px 2px rgba(15,27,24,.05),0 1px 1px rgba(15,27,24,.03)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0C1311;--sf:#141E1B;--bd:#26332F;--tx:#E9F1EE;--mu:#9AAEA7;--prx:#7DE3D4;--prt:#12302C;--in:#3A4B46;--bar:#141E1B;--sh:rgba(0,0,0,.6);--trk:#22302C;--sub:#1A2622;--am:#F5C27A;--amt:#3A2A12;--bl:#9DB8FF;--blt:#1A2547;--dg:#FF9A8C;--dgt:#3F1A16;--e1:none}}
+:root[data-theme="dark"]{--bg:#0C1311;--sf:#141E1B;--bd:#26332F;--tx:#E9F1EE;--mu:#9AAEA7;--prx:#7DE3D4;--prt:#12302C;--in:#3A4B46;--bar:#141E1B;--sh:rgba(0,0,0,.6);--trk:#22302C;--sub:#1A2622;--am:#F5C27A;--amt:#3A2A12;--bl:#9DB8FF;--blt:#1A2547;--dg:#FF9A8C;--dgt:#3F1A16;--e1:none}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*:before,*:after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--tx);font:400 14px/1.5 Inter,"Noto Sans Bengali",system-ui,sans-serif;letter-spacing:-.005em;font-variant-numeric:tabular-nums;padding-bottom:84px;-webkit-text-size-adjust:100%}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bar);z-index:30}
+button,input,select{font:inherit;color:inherit;letter-spacing:inherit}.bn{font-family:"Noto Sans Bengali",Nikosh,sans-serif}
+.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bar);border-bottom:1px solid var(--bd)}
+h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.02em;flex:1;min-width:0}
+.ib{width:44px;height:44px;border-radius:12px;border:1px solid var(--bd);background:var(--sf);color:var(--tx);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}.ib:hover{background:var(--sub)}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--in);background:var(--sf);font-weight:600;cursor:pointer;white-space:nowrap;box-shadow:var(--e1)}.b:hover{background:var(--sub)}
+.p{background:var(--pr);border-color:var(--pr);color:#fff}.p:hover{background:var(--prx)}.dg{color:var(--dg);border-color:var(--dg)}
+:is(button,a,input,select,summary):focus-visible{outline:3px solid #2DB5A5;outline-offset:2px}
+.pv{display:flex;gap:10px;overflow-x:auto;padding:12px 14px 0;max-width:1100px;margin:0 auto;align-items:center}.pv small{color:var(--mu);font-weight:600;flex:none;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}.chips button{flex:none;min-height:40px;padding:0 16px;border-radius:99px;border:1px solid var(--bd);background:var(--sf);font-weight:600;font-size:13px;color:var(--mu);cursor:pointer}.chips button[aria-pressed=true]{background:var(--tx);border-color:var(--tx);color:var(--bg)}
+main{padding:14px;max-width:1100px;margin:0 auto}.s{display:none}.s.on{display:block}.narrow{max-width:720px;margin:0 auto}
+.act{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:18px;margin-bottom:14px;box-shadow:var(--e1)}
+.hero .top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hero .k,.k{font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mu)}.hero .n{font-size:30px;font-weight:700;letter-spacing:-.025em;line-height:1.15;margin-top:2px}
+.pct{font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--sub);color:var(--mu);white-space:nowrap}
+.bar{display:flex;height:8px;border-radius:99px;overflow:hidden;background:var(--trk);margin:12px 0}.bar i{display:block;height:100%;background:var(--pr)}.bar i+i{background:#F59E0B}
+.lg{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px;color:var(--mu)}.lg b{color:var(--tx);font-weight:600}.dt{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--pr)}.dt.am{background:#F59E0B}.dt.tk{background:var(--in)}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:14px;font-weight:600}.g4 small{display:block;font-size:11px;font-weight:500;color:var(--mu);margin-bottom:1px}
+.srch{position:relative;margin-bottom:12px}.srch input{padding-left:42px}.srch .i{position:absolute;left:14px;top:12px;color:var(--mu)}
+.in{width:100%;min-height:44px;padding:0 14px;border:1px solid var(--in);border-radius:10px;background:var(--sf);font-size:16px}.in:hover{border-color:var(--mu)}
+.f{display:block;margin-bottom:14px}.l{display:block;font-size:12px;font-weight:600;color:var(--mu);margin-bottom:6px}.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cards{display:grid;gap:12px}.cc{display:flex;align-items:center;gap:12px;background:var(--sf);border:1px solid var(--bd);border-radius:14px;padding:12px 6px 12px 16px;box-shadow:var(--e1)}.cc:hover{border-color:var(--in)}.cc .m{flex:1;min-width:0;cursor:pointer}.cc b{font-size:15px;letter-spacing:.01em}.cc .nm{font-size:15px;margin-top:2px}
+.r1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.r1 .badge{margin-left:auto}.mu{color:var(--mu);font-size:12.5px}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--prt);color:var(--prx)}.badge:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.ex{background:var(--blt);color:var(--bl)}.off{background:var(--trk);color:var(--mu)}
+.grp{background:var(--sf);border:1px solid var(--bd);border-radius:14px;overflow:hidden;box-shadow:var(--e1)}.gh{padding:14px 16px;background:var(--sub);border-bottom:1px solid var(--bd)}.mm{font-weight:700;word-break:break-all;font-size:15px;margin:1px 0 2px}
+.br{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--bd);padding:14px 16px;cursor:pointer}.gh+.br{border-top:0}.br:hover{background:var(--sub)}.br .bar{margin:10px 0 8px;height:6px}
+.rt{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.rl{min-width:0}.cd{font-weight:700;font-size:15px;margin-right:8px;letter-spacing:.01em}.hd{font-size:15px}.av{text-align:right;flex:none}.av b{display:block;font-size:16px;font-weight:700;color:var(--prx);line-height:1.3}.av small{font-size:11px;color:var(--mu)}
+.rb{display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--mu)}.rb b{color:var(--tx);font-weight:600}.ml{margin-left:auto}
+.row{display:flex;align-items:center;gap:14px;width:100%;min-height:60px;padding:6px 0;border:0;border-top:1px solid var(--bd);background:none;text-align:left;cursor:pointer}.row:first-child{border:0}.row span{flex:1;font-weight:500}.row small{display:block;color:var(--mu);font-weight:400}
+.h{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:16px;font-weight:650;letter-spacing:-.01em}.hp{margin:0 0 14px;color:var(--mu);font-size:12.5px}
+.opt{display:flex;align-items:center;gap:12px;min-height:52px;width:100%;padding:0 16px;border:1px solid var(--bd);border-radius:12px;background:var(--sf);margin-bottom:8px;text-align:left;cursor:pointer;font-weight:500}.opt[aria-checked=true]{border-color:var(--pr);background:var(--prt);color:var(--prx);font-weight:650}.opt span{flex:1}.opt .i{visibility:hidden}.opt[aria-checked=true] .i{visibility:visible}
+.seg{display:flex;gap:4px;padding:4px;background:var(--trk);border-radius:12px}.seg button{flex:1;min-height:40px;border:0;border-radius:9px;background:transparent;font-weight:600;color:var(--mu);cursor:pointer}.seg button[aria-pressed=true],.seg button[aria-selected=true]{background:var(--sf);color:var(--tx);box-shadow:0 1px 3px var(--sh)}
+.sw{position:relative;display:inline-flex;align-items:center;min-height:44px}.sw input{position:absolute;opacity:0;inset:0;margin:0;width:100%;height:100%;cursor:pointer}.sw s{width:46px;height:28px;border-radius:99px;background:#9AABA5;position:relative;transition:background .15s}.sw s:before{content:"";position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}.sw input:checked+s{background:var(--pr)}.sw input:checked+s:before{left:21px}.sw input:focus-visible+s{outline:3px solid #2DB5A5}
+.ac{padding:0;overflow:hidden}.ah{display:flex;align-items:center;gap:14px;width:100%;min-height:68px;padding:12px 18px;background:none;border:0;text-align:left;cursor:pointer}.ah .n{width:30px;height:30px;border-radius:9px;background:var(--prt);color:var(--prx);font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}.ah .at{flex:1;min-width:0}.ah b{display:block;font-weight:650}.ah small{display:block;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ah .i{transition:transform .2s;color:var(--mu)}.ac.open .ah .i{transform:rotate(180deg)}.ab{display:none;padding:4px 18px 18px;border-top:1px solid var(--bd);padding-top:16px}.ac.open .ab{display:block}
+.boxes{display:flex;gap:6px;align-items:center;margin-top:10px;font-weight:700;color:var(--prx)}.boxes span{padding:5px 10px;background:var(--prt);border-radius:8px;letter-spacing:.08em}.hint{font-size:12px;color:var(--mu);margin-top:6px}.bad{color:var(--dg)}
+.cl{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--bd)}.cl b{width:30px;height:30px;border-radius:9px;background:var(--prt);color:var(--prx);display:flex;align-items:center;justify-content:center;flex:none;font-size:13px}.cl.p2 b{background:var(--amt);color:var(--am)}.cl p{margin:0;flex:1;font-size:13px;min-width:0}
+.tr{display:block}.stage{background:var(--trk);border-radius:14px;padding:14px;overflow-x:auto}.pw{margin:0 auto;background:#fff;box-shadow:0 4px 16px var(--sh);overflow:hidden}.pg{width:794px;height:1123px;transform-origin:0 0;padding:44px 52px;background:#fff;color:#111;font-size:15px;line-height:1.45;font-family:"Noto Sans Bengali",sans-serif}.pg table{width:100%;border-collapse:collapse}.pg td{border:1px solid #333;padding:5px 7px}
+.sq{background:var(--sub);border:1px solid var(--bd);border-radius:12px;padding:10px 14px}.sq small{display:block;color:var(--mu);font-size:11.5px}.sq b{font-size:17px}
+details{border-top:1px solid var(--bd);padding:2px 0}summary{min-height:50px;display:flex;align-items:center;font-weight:600;cursor:pointer}
+nav{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--bar);border-top:1px solid var(--bd);padding:6px 4px calc(8px + env(safe-area-inset-bottom,0px))}nav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:48px;background:none;border:0;font-size:11px;font-weight:500;color:var(--mu);cursor:pointer}nav button[aria-current]{color:var(--prx);font-weight:650}
+#sv{position:fixed;left:14px;right:14px;bottom:calc(76px + env(safe-area-inset-bottom,0px));z-index:19;display:flex;align-items:center;gap:8px;background:var(--tx);color:var(--bg);padding:10px 10px 10px 18px;border-radius:14px;box-shadow:0 10px 28px var(--sh);max-width:692px;margin:0 auto;transform:translateY(140%);opacity:0;visibility:hidden;transition:transform .28s ease,opacity .2s,visibility 0s .28s}#sv.on{transform:none;opacity:1;visibility:visible;transition:transform .28s ease,opacity .2s}#sv span{flex:1;font-weight:600}#sv .b{min-height:40px;border:0}
+.sheet{position:fixed;inset:0;z-index:40;display:flex;align-items:flex-end;background:rgba(8,14,12,0);visibility:hidden;transition:background .25s,visibility 0s .3s}.sheet.on{background:rgba(8,14,12,.5);visibility:visible;transition:background .25s,visibility 0s}
+.sheet>div{background:var(--sf);width:100%;max-width:720px;margin:0 auto;border-radius:20px 20px 0 0;max-height:92dvh;display:flex;flex-direction:column;transform:translateY(100%);transition:transform .32s cubic-bezier(.2,.8,.2,1)}.sheet.on>div{transform:none}
+.sh{display:flex;align-items:flex-start;gap:8px;padding:16px 12px 12px 18px;border-bottom:1px solid var(--bd)}.sh div{flex:1;min-width:0}.sh h3{margin:0;font-size:17px;font-weight:700;letter-spacing:-.015em}.sh p{margin:2px 0 0;color:var(--mu);font-size:12.5px;word-break:break-all}.sb{overflow-y:auto;padding:16px 18px;flex:1}.sf{display:flex;gap:8px;padding:12px 18px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--bd)}.sf .b{flex:1}
+#toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s;z-index:50}#toast.on{opacity:1}
+#bl{grid-template-columns:1fr!important}
+@media(min-width:760px){.cards{grid-template-columns:1fr 1fr}}
+@media(min-width:900px){body{padding-bottom:0}nav{display:none}#sv{bottom:20px}.sheet{align-items:stretch;justify-content:flex-end}.sheet>div{max-width:480px;margin:0;height:100dvh;max-height:none;border-radius:20px 0 0 20px;transform:translateX(100%)}.sheet.on>div{transform:none}#toast{bottom:24px}}
+
+@media(prefers-reduced-motion:reduce){.sheet,.sheet>div,#sv{transition:none}}
+.fyb{display:flex;align-items:center;gap:12px;width:100%;min-height:64px;padding:8px 16px;border:1px solid var(--in);border-radius:12px;background:var(--sf);text-align:left;cursor:pointer}.fyb:hover{border-color:var(--pr)}.fyb span{flex:1}.fyb small{display:block;font-size:11.5px;color:var(--mu)}.fyb b{font-size:17px}
+.fw{display:flex;gap:12px;align-items:flex-end}.fw .f{flex:1;min-width:0}.fw .sx{margin-bottom:14px;display:flex;flex-direction:column;align-items:center}.fw .sx .l{margin:0 0 -4px}
+.frame{background:var(--sf);border:1px solid var(--bd);border-radius:14px;overflow:hidden;box-shadow:var(--e1);display:flex;flex-direction:column;height:72dvh;min-height:420px}.ftb{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd)}.ftb .grow{flex:1}.ib.sm{width:40px;height:40px;font-size:20px;font-weight:600}.zl{min-width:48px;text-align:center;font-weight:600}.b.sm{min-height:40px;padding:0 14px}
+.vp{flex:1;min-height:0;overflow:auto;background:var(--trk);padding:14px;overscroll-behavior:contain}#pgs{display:flex;flex-direction:column;align-items:center;gap:16px;width:max-content;min-width:100%}.cap{font-size:12px;color:var(--mu);font-weight:600;margin-bottom:6px;text-align:center}
+.pg{position:relative}.pg table{font-size:14px}.pg .c{text-align:center}.pg .r{text-align:right}.pg .cls{font-size:13px;margin:6px 0;text-align:justify}.pg .sig{display:flex;gap:40px;margin:26px 0}.pg .sig div{flex:1;border-top:1px solid #333;padding-top:6px}.pg .ft{position:absolute;left:52px;right:52px;bottom:28px;display:flex;justify-content:space-between;font-size:12px;color:#555;border-top:1px solid #999;padding-top:4px}.pg.draft:after{content:"খসড়া";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:180px;font-weight:700;color:rgba(0,0,0,.07);transform:rotate(-28deg);pointer-events:none}
+@media(min-width:768px){.tr{display:grid;grid-template-columns:minmax(300px,2fr) minmax(0,3fr);gap:20px;align-items:start}.tr .tabs{display:none}.tr [data-p]{display:block!important}#prv{position:sticky;top:calc(72px + env(safe-area-inset-top,0px))}.frame{height:calc(100dvh - 270px);min-height:360px}}
+@media(min-width:900px){.sheet.dlg{align-items:center;justify-content:center}.sheet.dlg>div{max-width:440px;height:auto;max-height:72dvh;border-radius:20px;transform:scale(.96);opacity:0;transition:transform .2s,opacity .2s}.sheet.dlg.on>div{transform:none;opacity:1}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="ly" viewBox="0 0 24 24"><path d="M12 2l9 5-9 5-9-5zM3 12l9 5 9-5M3 16.5l9 5 9-5"/></symbol><symbol id="mo" viewBox="0 0 24 24"><path d="M20 14A8 8 0 1110 4a6 6 0 0010 10z"/></symbol><symbol id="cv" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol><symbol id="ck" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></symbol><symbol id="pl" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol><symbol id="x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol><symbol id="sr" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol><symbol id="dt" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol><symbol id="up" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></symbol><symbol id="ch" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol><symbol id="pr" viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z"/></symbol>
+<symbol id="n1" viewBox="0 0 24 24"><path d="M4 7h15a1 1 0 011 1v11H5a1 1 0 01-1-1zM4 7l12-3v3"/></symbol><symbol id="n2" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7"/></symbol><symbol id="n3" viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol><symbol id="n4" viewBox="0 0 24 24"><path d="M7 3h10v18l-3-2-2 2-2-2-3 2zM10 8h4M10 12h4"/></symbol><symbol id="n5" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+</defs></svg>
+
+<header><h1 id="ttl">Allocated Budgets</h1><button class="ib" aria-label="Switch office"><svg class="i"><use href="#ly"/></svg></button><button class="ib" id="theme" aria-label="Toggle dark mode"><svg class="i"><use href="#mo"/></svg></button></header>
+<div class="pv" id="pv0"><small>Preview page:</small><div class="chips" id="pick"><button data-go="budgets">Budgets</button><button data-go="codes">Economic codes</button><button data-go="settings">Settings</button><button data-go="tr21">T.R. Form 21</button></div></div>
+
+<main>
+<!-- BUDGETS -->
+<section class="s" id="budgets">
+<div class="act"><button class="b p" data-act="newb"><svg class="i"><use href="#pl"/></svg>New Budget</button></div>
+<div class="card hero" id="bsum"></div>
+<div class="chips" id="bf" style="margin-bottom:10px"><button data-f="all" aria-pressed="true">All</button><button data-f="active" aria-pressed="false">Active</button><button data-f="executed" aria-pressed="false">Executed</button></div>
+<div class="srch"><svg class="i"><use href="#sr"/></svg><input class="in" id="bq" type="search" placeholder="স্মারক, কোড বা ব্যয়ের খাত খুঁজুন…" aria-label="Search budgets"></div>
+<div class="cards" id="bl"></div>
+</section>
+
+<!-- ECONOMIC CODES -->
+<section class="s" id="codes">
+<div class="act"><button class="b" data-act="imp"><svg class="i"><use href="#up"/></svg>Import CSV</button><button class="b p" data-act="newc"><svg class="i"><use href="#pl"/></svg>New code</button></div>
+<div class="chips" id="cf" style="margin-bottom:10px"></div>
+<div class="srch"><svg class="i"><use href="#sr"/></svg><input class="in" id="cq" type="search" placeholder="কোড বা ব্যয়ের খাত খুঁজুন…" aria-label="Search economic codes"></div>
+<div class="cards" id="cl"></div>
+<p class="mu" style="text-align:center;margin-top:12px">Global list, shared by all offices. Only Super Admin can add or edit.</p>
+</section>
+
+<!-- SETTINGS -->
+<section class="s" id="settings"><div class="narrow">
+<div class="chips" style="margin-bottom:12px" id="sj"><button data-j="s-fy" aria-pressed="false">Fiscal year</button><button data-j="s-off" aria-pressed="false">Office</button><button data-j="s-app" aria-pressed="false">Appearance</button><button data-j="s-dat" aria-pressed="false">Data</button><button data-j="s-adv" aria-pressed="false">Advanced</button></div>
+<div class="card" id="s-fy"><h2 class="h">Viewing fiscal year</h2><p class="hp">Dashboard, Budgets, Expenses and Bills show this year. Changes apply instantly.</p><button class="fyb" id="fybtn" aria-haspopup="dialog"><span><small>Current</small><b id="fycur">FY 2026-27</b></span><svg class="i"><use href="#cv"/></svg></button></div>
+<div class="card" id="s-off"><h2 class="h">Office</h2><p class="hp">Shown on forms and reports.</p>
+<label class="f"><span class="l">Office name</span><input class="in bn" value="জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো"></label>
+<label class="f"><span class="l">Address</span><input class="in bn" value="কালেক্টরেট ভবন, ময়মনসিংহ"></label>
+<div class="g2"><label class="f" style="margin:0"><span class="l">Default fiscal year</span><select class="in"><option>2026-27</option><option>2025-26</option></select></label><button class="b" style="align-self:end">Add fiscal year</button></div></div>
+<div class="card" id="s-app"><h2 class="h">Appearance</h2><p class="hp">Theme for this device.</p><div class="seg" id="th"><button data-t="system" aria-pressed="true">System</button><button data-t="light" aria-pressed="false">Light</button><button data-t="dark" aria-pressed="false">Dark</button></div></div>
+<div class="card" id="s-dat" style="padding:8px 16px"><button class="row" data-toast="Backup downloading…"><svg class="i"><use href="#up"/></svg><span>Download JSON backup<small>Budgets, expense items and bills</small></span><svg class="i"><use href="#ch"/></svg></button><button class="row" data-toast="Opens sample data tools"><svg class="i"><use href="#n3"/></svg><span>Sample data &amp; global codes<small>Super Admin only</small></span><svg class="i"><use href="#ch"/></svg></button><button class="row" data-toast="Opens the global activity log"><svg class="i"><use href="#n4"/></svg><span>Global activity<small>Audit trail across all records</small></span><svg class="i"><use href="#ch"/></svg></button></div>
+<div class="card" id="s-adv"><h2 class="h">Advanced</h2><p class="hp">Super Admin tools. Back up before running anything here.</p>
+<details><summary>Multi-office migration</summary><p class="hp">Moves single-office data (<code>settings/office</code>) into the multi-office structure.</p><button class="b" data-toast="Dry run first, then confirm">Run migration</button></details>
+<details><summary>Legacy data migration (Spendings → Bills)</summary><p class="hp">Safe and repeatable; converts old spendings to approved bills and expense items.</p><button class="b" data-toast="Dry run first, then confirm">Run migration</button></details>
+<details><summary style="color:var(--dg)">Danger zone</summary><p class="hp">Delete all data of selected tables. This cannot be undone.</p><button class="b dg" data-toast="Asks for typed confirmation">Delete database tables…</button></details></div>
+</div></section>
+
+<!-- TR21 -->
+<section class="s" id="tr21"><div class="tr" id="trw">
+<div style="min-width:0">
+<div class="seg tabs" style="margin-bottom:14px" role="tablist"><button role="tab" data-tab="setup" aria-selected="true">Setup</button><button role="tab" data-tab="preview" aria-selected="false">Live preview</button></div>
+<div data-p="setup">
+<div class="card ac open"><button class="ah" data-acc aria-expanded="true"><span class="n">1</span><span class="at"><b>Header &amp; office</b><small id="a1">জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো</small></span><svg class="i"><use href="#cv"/></svg></button><div class="ab">
+<div class="fw"><label class="f"><span class="l">Ministry</span><input class="in bn" id="t-min" value="প্রাথমিক ও গণশিক্ষা মন্ত্রণালয়"></label><div class="sx"><span class="l">Show</span><label class="sw"><input type="checkbox" id="sw-min" checked aria-label="Show ministry on form"><s></s></label></div></div>
+<label class="f"><span class="l">Office name</span><input class="in bn" id="t-off" value="জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো"></label>
+<label class="f"><span class="l">Address</span><input class="in bn" id="t-addr" value="কালেক্টরেট ভবন, ময়মনসিংহ"></label>
+<div class="fw"><label class="f"><span class="l">Mobile (top right)</span><input class="in" id="t-mob" inputmode="tel" value="০১৯১০১১৭০০৬"></label><div class="sx"><span class="l">Show</span><label class="sw"><input type="checkbox" id="sw-mob" checked aria-label="Show mobile number on form"><s></s></label></div></div>
+<label class="l" for="t-code">Code number · 13 digits, format 1-4-4-4</label><input class="in" id="t-code" inputmode="numeric" maxlength="13" value="1240302000000"><div class="boxes" id="bx"></div><div class="hint" id="chn"></div></div></div>
+<div class="card ac"><button class="ah" data-acc aria-expanded="false"><span class="n">2</span><span class="at"><b>Defaults</b><small>Cheque payee and footer</small></span><svg class="i"><use href="#cv"/></svg></button><div class="ab">
+<label class="f"><span class="l">Cheque payee (clause 7)</span><input class="in bn" id="t-payee" value="সহকারী পরিচালক, জেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো, ময়মনসিংহ"></label>
+<label class="f" style="margin:0"><span class="l">Footer text</span><input class="in" id="t-foot" value="Print By: Budget Tracker"></label></div></div>
+<div class="card ac"><button class="ah" data-acc aria-expanded="false"><span class="n">3</span><span class="at"><b>Font &amp; size</b><small>Nikosh · 15 px</small></span><svg class="i"><use href="#cv"/></svg></button><div class="ab"><div class="g2"><label><span class="l">Font</span><select class="in"><option>Nikosh</option><option>Noto Sans Bengali</option></select></label><label><span class="l">Size</span><select class="in"><option>13 px</option><option selected>15 px</option><option>17 px</option></select></label></div></div></div>
+<div class="card ac"><button class="ah" data-acc aria-expanded="false"><span class="n">4</span><span class="at"><b>Declaration clauses</b><small id="a5">7 of 7 shown</small></span><svg class="i"><use href="#cv"/></svg></button><div class="ab"><div class="g2" style="margin-bottom:8px"><label><span class="l">Page 1 up to clause</span><select class="in"><option>5</option></select></label><button class="b" style="align-self:end">Apply</button></div><div id="cls"></div><div class="act" style="margin:12px 0 0;justify-content:flex-start"><button class="b" data-toast="Opens the clause editor"><svg class="i"><use href="#pl"/></svg>Add clause</button><button class="b" data-toast="Restores clauses 1–7">Restore defaults</button></div></div></div>
+</div></div>
+<div id="prv" data-p="preview" style="display:none;min-width:0">
+<div class="card ctl" style="padding:12px"><div class="seg" style="margin-bottom:10px"><button aria-pressed="true">Final</button><button aria-pressed="false">Draft</button></div><div class="act" style="margin:0"><button class="b" style="flex:1" data-toast="Opens the print dialog"><svg class="i"><use href="#pr"/></svg>Print</button><button class="b p" style="flex:1" data-toast="PDF is shared via the share sheet">PDF</button><button class="b" style="flex:1" data-toast="Word file is shared via the share sheet">Word</button></div></div>
+<div class="frame"><div class="ftb"><b>A4 preview</b><span class="mu">2 pages</span><span class="grow"></span><button class="ib sm" data-z="out" aria-label="Zoom out">&minus;</button><span class="zl" id="zl">45%</span><button class="ib sm" data-z="in" aria-label="Zoom in">+</button><button class="b sm" data-z="fit">Fit</button></div><div class="vp" id="vp"><div id="pgs"></div></div></div>
+</div></div></section>
+</main>
+
+<nav aria-label="Main"><button><svg class="i"><use href="#n1"/></svg>Budgets</button><button><svg class="i"><use href="#n2"/></svg>Bills</button><button><svg class="i"><use href="#n3"/></svg>Dashboard</button><button><svg class="i"><use href="#n4"/></svg>Expenses</button><button><svg class="i"><use href="#n5"/></svg>More</button></nav>
+<div id="sv" role="region" aria-label="Unsaved changes"><span>Unsaved changes</span><button class="b" id="dis">Discard</button><button class="b p" id="save"><svg class="i"><use href="#ck"/></svg>Save</button></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sht"><div><div class="sh"><div><h3 id="sht"></h3><p id="shs"></p></div><button class="ib" data-close aria-label="Close"><svg class="i"><use href="#x"/></svg></button></div><div class="sb" id="sbd"></div><div class="sf" id="sft"></div></div></div>
+<div id="toast" role="status"></div>
+
+<script>
+(function(){
+var $=function(s,r){return(r||document).querySelector(s)},$$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+var bn=function(s){return String(s).replace(/\d/g,function(d){return'০১২৩৪৫৬৭৮৯'[d]})},f=function(n){return'৳ '+n.toLocaleString('en-IN')},fn=function(n){return n.toLocaleString('en-IN')};
+var P={budgets:'Allocated Budgets',codes:'Economic codes',settings:'Settings',tr21:'T.R. Form 21'};
+var M="30.00.0000.302.02.222.25-343",MD="12/08/2026";var B=[[M,MD,"3211106","আপ্যায়ন ব্যয়","active",3000,0,0],[M,MD,"3257301","অনুষ্ঠান / উৎসবাদি","active",7000,7000,0],[M,MD,"3211102","পরিষ্কার পরিচ্ছন্নতা সামগ্রী","active",1000,0,0],[M,MD,"3211119","ডাক","active",1000,0,0]];
+var C=[["3211106","আপ্যায়ন ব্যয়",1,1],["3257301","অনুষ্ঠান / উৎসবাদি",1,1],["3211102","পরিষ্কার পরিচ্ছন্নতা সামগ্রী",1,1],["3211119","ডাক",1,1]];
+var S={bf:'all',cf:'all',fy:'2026-27',z:1,draft:false,cs:''};
+function tg(m){var t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tg.h);tg.h=setTimeout(function(){t.classList.remove('on')},2400)}
+/* budgets */
+function bsum(){var a=0,s=0,p=0;B.forEach(function(b){a+=b[5];s+=b[6];p+=b[7]});var r=a-s-p;$('#bsum').innerHTML='<div class="top"><div><div class="k">Available balance · FY '+S.fy+'</div><div class="n">'+f(r)+'</div></div><span class="pct">'+Math.round((s+p)/a*100)+'% used</span></div><div class="bar" role="img" aria-label="Approved and pending share of allocation"><i style="width:'+(s/a*100)+'%"></i><i style="width:'+(p/a*100)+'%"></i></div><div class="lg"><span><i class="dt"></i>Approved <b>'+fn(s)+'</b></span><span><i class="dt am"></i>Pending <b>'+fn(p)+'</b></span><span><i class="dt tk"></i>Allocated <b>'+fn(a)+'</b></span><span>'+B.length+' heads</span></div>'}
+function bl(){var q=$('#bq').value.toLowerCase(),G={},o=[];B.forEach(function(b,i){if(S.bf!='all'&&b[4]!=S.bf)return;if(q&&(b[0]+b[2]+b[3]).toLowerCase().indexOf(q)<0)return;var k=b[0]+'|'+b[1];if(!G[k]){G[k]={m:b[0],d:b[1],r:[],t:0};o.push(k)}G[k].r.push(i);G[k].t+=b[5]});
+var h=o.map(function(k){var g=G[k];return'<section class="grp"><div class="gh"><div class="k">Memo no</div><div class="mm">'+g.m+'</div><div class="mu">'+g.d+' · '+g.r.length+(g.r.length==1?' head':' heads')+' · '+f(g.t)+' allocated</div></div>'+g.r.map(function(i){var b=B[i],r=b[5]-b[6]-b[7];return'<button class="br" data-b="'+i+'"><div class="rt"><div class="rl"><span class="cd">'+b[2]+'</span><span class="bn hd">'+b[3]+'</span></div><div class="av"><b>'+fn(r)+'</b><small>Available</small></div></div><div class="bar"><i style="width:'+(b[6]/b[5]*100)+'%"></i><i style="width:'+(b[7]/b[5]*100)+'%"></i></div><div class="rb"><span><i class="dt"></i>Approved <b>'+fn(b[6])+'</b></span><span><i class="dt am"></i>Pending <b>'+fn(b[7])+'</b></span><span class="ml">of '+fn(b[5])+'</span><span class="badge '+(b[4]=='active'?'':'ex')+'">'+(b[4]=='active'?'Active':'Executed')+'</span></div></button>'}).join('')+'</section>'}).join('');
+$('#bl').innerHTML=h||'<p class="mu" style="text-align:center;padding:24px">No budgets match.</p>'}
+/* codes */
+function cf(){var n=C.length,a=C.filter(function(c){return c[2]}).length,L=[['all','All',n],['active','Active',a],['inactive','Inactive',n-a]];$('#cf').innerHTML=L.map(function(x){return'<button data-f="'+x[0]+'" aria-pressed="'+(S.cf==x[0])+'">'+x[1]+' · '+x[2]+'</button>'}).join('')}
+function cl(){var q=$('#cq').value.toLowerCase(),h='';C.forEach(function(c,i){if(S.cf=='active'&&!c[2]||S.cf=='inactive'&&c[2])return;if(q&&(c[0]+c[1]).toLowerCase().indexOf(q)<0)return;
+h+='<div class="cc"><div class="m" data-c="'+i+'"><div class="r1"><b>'+c[0]+'</b><span class="badge '+(c[2]?'':'off')+'">'+(c[2]?'Active':'Inactive')+'</span></div><div class="nm bn">'+c[1]+'</div><div class="mu">Used in '+c[3]+(c[3]==1?' budget':' budgets')+'</div></div><button class="ib" data-cm="'+i+'" aria-label="Actions for '+c[0]+'"><svg class="i"><use href="#dt"/></svg></button></div>'});
+$('#cl').innerHTML=h||'<p class="mu" style="text-align:center;padding:24px">No codes match.</p>'}
+/* sheet */
+function open(t,s,b,ft,dlg){$('#sht').textContent=t;$('#shs').textContent=s||'';$('#sbd').innerHTML=b;$('#sft').innerHTML=ft||'';$('#sft').style.display=ft?'flex':'none';$('#sheet').classList.toggle('dlg',!!dlg);$('#sheet').classList.add('on')}
+function close(){$('#sheet').classList.remove('on')}
+function detail(i){var b=B[i],r=b[5]-b[6]-b[7];open(b[2]+' '+b[3],'Memo '+b[0]+' · '+b[1],
+'<div class="bar"><i style="width:'+(b[6]/b[5]*100)+'%"></i><i style="width:'+(b[7]/b[5]*100)+'%"></i></div><div class="g4" style="margin-bottom:14px"><div><small>Allocated</small>'+fn(b[5])+'</div><div><small>Approved</small>'+fn(b[6])+'</div><div><small>Pending</small>'+fn(b[7])+'</div><div><small>Available</small>'+fn(r)+'</div></div>'+
+'<details open><summary>Deduction rates</summary><div class="g2"><div class="sq"><small>Income tax</small><b>5%</b></div><div class="sq"><small>VAT</small><b>15%</b></div></div><p class="hp" style="margin-top:8px">Saved with this budget, later rate changes do not alter it.</p></details>'+
+'<details><summary>Revision chain (1)</summary><p class="hp" style="word-break:break-all">'+b[0]+' (original) · '+f(b[5])+'</p></details>'+
+'<details><summary>Applicable spending limits (0)</summary><p class="hp">No active caps on this head.</p></details>'+
+'<details><summary>Linked bills</summary><p class="hp">'+(b[6]?'Approved bills total '+f(b[6])+'.':'No bills recorded yet.')+'</p></details>'+
+'<details><summary>Activity</summary><p class="hp">Activity log loads here.</p></details>',
+'<button class="b" data-toast="Opens edit form">Edit</button><button class="b" data-toast="Marked executed">'+(b[4]=='active'?'Mark executed':'Reopen')+'</button><button class="b dg" data-toast="Asks for a reason">Delete</button>')}
+function newb(){open('New budget','FY 2026-27','<label class="f"><span class="l">Memo no</span><input class="in" placeholder="30.00.0000.302.02.222.25-343"></label><label class="f"><span class="l">Memo date</span><input class="in" type="date"></label><div id="rw"></div><button class="b" data-addrow style="width:100%"><svg class="i"><use href="#pl"/></svg>Add another code</button><datalist id="dl">'+C.map(function(c){return'<option value="'+c[0]+'">'+c[1]+'</option>'}).join('')+'</datalist>','<button class="b" data-close>Cancel</button><button class="b p" data-toast="Budgets saved">Save</button>');row();row()}
+function row(){var d=document.createElement('div');d.className='sq';d.style.cssText='margin-bottom:10px';d.innerHTML='<div class="g2"><label><span class="l">Economic code</span><input class="in" list="dl" inputmode="numeric" placeholder="3211106"></label><label><span class="l">Amount (৳)</span><input class="in" inputmode="numeric" placeholder="300000"></label></div>';$('#rw').appendChild(d)}
+function code(i){var c=i==null?['','',1]:C[i];open(i==null?'New economic code':'Edit code · '+c[0],'Master entry, shared by all offices','<label class="f"><span class="l">Code (7 digits)</span><input class="in" id="ec" inputmode="numeric" maxlength="7" value="'+c[0]+'" '+(i==null?'':'disabled')+'><span class="hint" id="eh"></span></label><label class="f"><span class="l">ব্যয়ের খাত</span><input class="in bn" value="'+c[1]+'" placeholder="আপ্যায়ন ব্যয়"></label><div style="display:flex;align-items:center;gap:12px"><div style="flex:1"><b>Active</b><div class="hp" style="margin:0">Inactive codes are hidden from selects; existing records keep their name.</div></div><label class="sw"><input type="checkbox" '+(c[2]?'checked':'')+' aria-label="Active"><s></s></label></div>','<button class="b" data-close>Cancel</button><button class="b p" data-toast="Code saved">Save</button>')}
+function menu(i){var c=C[i];open(c[0],c[1],'<button class="row" data-ed="'+i+'"><span>Edit</span></button><button class="row" data-toast="'+(c[2]?'Deactivated':'Activated')+'"><span>'+(c[2]?'Deactivate':'Activate')+'</span></button>'+(c[3]?'':'<button class="row dg" style="color:var(--dg)" data-toast="Deleted"><span>Delete</span></button>'))}
+/* tr21 */
+var FY=[];for(var y=2031;y>=2010;y--)FY.push((y-1)+'-'+String(y).slice(2));
+function fyl(q){q=q.toLowerCase();var h=FY.filter(function(y){return('fy '+y).indexOf(q)>=0}).map(function(y){return'<button class="opt" role="radio" aria-checked="'+(y==S.fy)+'" data-fy="'+y+'"><span>FY '+y+'</span>'+(y==S.fy?'<small class="mu">Current</small>':'')+'<svg class="i"><use href="#ck"/></svg></button>'}).join('');$('#fyr').innerHTML=h||'<p class="mu" style="text-align:center;padding:20px">No fiscal year matches.</p>'}
+function fyo(){open('Fiscal year','Choose the year to view','<div class="srch" style="margin-bottom:12px"><svg class="i"><use href="#sr"/></svg><input class="in" id="fyq" type="search" placeholder="Search fiscal year…" aria-label="Search fiscal year"></div><div id="fyr" role="radiogroup" aria-label="Fiscal years"></div>','',true);fyl('')}
+var KS=[];
+function V(id){return $('#'+id).value}
+function render(){var min=$('#sw-min').checked,mob=$('#sw-mob').checked,d=S.draft?' draft':'',cl=function(a,b){return K.map(function(t,i){return i>=a&&i<b&&KS[i]?'<div class="cls bn">'+bn(i+1)+'। প্রত্যয়ন করা যাচ্ছে যে, '+t+'</div>':''}).join('')},ft=function(n){return'<div class="ft"><span>'+V('t-foot')+'</span><span>Page '+n+' of 2</span></div>'},td='border:1px solid #333;padding:5px 7px';
+var p1='<div class="pg'+d+'"><div style="display:flex;justify-content:space-between;font-size:12px"><span>টি.আর ফরম নং ২১<br>(এস, আর ১৮৩ দ্রষ্টব্য)</span><span>'+(mob?'মোবাইল নং: '+V('t-mob'):'')+'</span></div><div class="c" style="font-weight:700;font-size:21px;margin-top:-6px">ক্রয়, সরবরাহ ও সেবা বাবদ ব্যয়ের বিল</div><div class="c bn">'+(min?V('t-min')+'<br>':'')+V('t-off')+'<br>'+V('t-addr')+'</div><div style="margin:10px 0 8px">কোড নং: <b>'+S.cs+'</b></div><table><tr class="c" style="font-weight:700"><td style="width:100px">অর্থনৈতিক কোড</td><td>বিবরণ</td><td style="width:110px">টাকা</td></tr><tr><td>৩২৫৭৩০১</td><td>১। ব্যানার ২। কেক ৩। মিষ্টি ৪। অন্যান্য আপ্যায়ন সামগ্রী</td><td class="r">৭,০০০/-</td></tr><tr style="font-weight:700"><td colspan="2" class="r">মোট টাকা (ক)</td><td class="r">৭,০০০/-</td></tr><tr><td>১১১১১০১</td><td>ব্যক্তি কর্তৃক দেয় আয়কর (৫%)</td><td class="r">৩৫০/-</td></tr><tr><td>১১৪১১০১</td><td>দেশজ পণ্য ও সেবার ওপর মূসক (১৫%)</td><td class="r">১,০৫০/-</td></tr><tr><td>৮১১৩৩০১</td><td>ঠিকাদারের নিরাপত্তা জমা</td><td class="r">০/-</td></tr><tr style="font-weight:700"><td>৮১৭২১০৮</td><td>প্রদেয় বিল (ক-খ)</td><td class="r">৫,৬০০/-</td></tr></table><div style="margin:8px 0 12px">টাকা (কথায়): পাঁচ হাজার ছয়শত টাকা মাত্র।</div>'+cl(0,5)+ft(1)+'</div>';
+var p2='<div class="pg'+d+'">'+cl(5,7)+'<div style="font-weight:700;margin:14px 0">যাহার নামে চেক ইস্যু হবে: <u class="bn">'+V('t-payee')+'</u></div><div class="sig"><div>নিয়ন্ত্রণকারী কর্মকর্তার স্বাক্ষর<br>নাম ........ পদবি ........</div><div>আয়ন ব্যয়ন কর্মকর্তার স্বাক্ষর<br>নাম ........ পদবি ........</div></div><div style="display:flex;gap:30px;margin-bottom:24px"><table><tr><td colspan="2"><b>বরাদ্দের হিসাব</b></td></tr><tr><td>নিট মোট</td><td class="r">৭,০০০/-</td></tr></table><table><tr><td colspan="2"><b>ব্যয়ের হিসাব</b></td></tr><tr><td>এই বিলের মোট (+)</td><td class="r">৭,০০০/-</td></tr></table></div><div class="c" style="font-weight:700;border-top:1px solid #333;padding-top:8px">হিসাবরক্ষণ অফিসের ব্যবহারের জন্য</div><div class="sig" style="margin-top:60px"><div>অডিটর (স্বাক্ষর)</div><div>সুপার (স্বাক্ষর)</div><div>হিসাবরক্ষণ অফিসার (স্বাক্ষর)</div></div>'+ft(2)+'</div>';
+$('#pgs').innerHTML='<div><div class="cap">Page 1 of 2</div><div class="pw">'+p1+'</div></div><div><div class="cap">Page 2 of 2</div><div class="pw">'+p2+'</div></div>';fit()}
+function cd(){var v=$('#t-code').value.replace(/\D/g,''),p=v.padEnd(13,'·'),a=[p.slice(0,1),p.slice(1,5),p.slice(5,9),p.slice(9)].map(bn);$('#bx').innerHTML=a.map(function(x){return'<span>'+x+'</span>'}).join('–');S.cs=a.join('-');$('#chn').className='hint'+(v.length==13?'':' bad');$('#chn').textContent=v.length==13?'13 digits, looks good':'Need '+(13-v.length)+' more digits'}
+var K=["জনস্বার্থে এই ব্যয় অপরিহার্য ছিল…","স্টোর অ্যাকাউন্টস… স্টক রেজিস্টারে অন্তর্ভুক্ত…","ক্রয়ের বিল… পরিমাণ সঠিক, গুণগতমান ভাল…","পরিবহণ ভাড়া প্রকৃত ও অপরিহার্য…","অধস্তন কর্মচারীর বেতন… সরকারি কাজে নিয়োজিত…","মনিহারি দ্রব্য বা স্ট্যাম্প ২০ টাকার অধিক…","যাহার নামে চেক ইস্যু হবে…"];
+K.forEach(function(){KS.push(true)});
+function cls(){$('#cls').innerHTML=K.map(function(t,i){return'<div class="cl'+(i>4?' p2':'')+'"><b>'+bn(i+1)+'</b><p class="bn">'+t+'</p><label class="sw"><input type="checkbox" data-k="'+i+'" '+(KS[i]?'checked':'')+' aria-label="Show clause '+(i+1)+'"><s></s></label></div>'}).join('');$('#a5').textContent=KS.filter(Boolean).length+' of '+K.length+' shown'}
+function fit(){var vp=$('#vp');if(!vp)return;var w=vp.clientWidth,base=w?Math.min(1.5,Math.max(.25,(w-28)/794)):.4,sc=base*S.z;$$('#pgs .pw').forEach(function(x){x.style.width=794*sc+'px';x.style.height=1123*sc+'px';x.firstElementChild.style.transform='scale('+sc+')'});$('#zl').textContent=Math.round(sc*100)+'%'}
+window.addEventListener('resize',fit);
+function dirty(){$('#sv').classList.add('on')}
+/* routing */
+function go(id){if(!P[id])id='budgets';$$('.s').forEach(function(s){s.classList.toggle('on',s.id==id)});$('#ttl').textContent=P[id];$$('#pick button').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.go==id)});$$('nav button').forEach(function(b,i){b.toggleAttribute('aria-current',i==(id=='budgets'?0:4))});$('#sv').classList.remove('on');window.scrollTo(0,0);setTimeout(fit,0)}
+document.addEventListener('click',function(e){var t=e.target,g;
+ if(t.closest('#fybtn')){fyo();return}
+ if(g=t.closest('[data-fy]')){S.fy=g.dataset.fy;$('#fycur').textContent='FY '+S.fy;bsum();close();tg('Switched to FY '+S.fy);return}
+ if(g=t.closest('[data-z]')){S.z=g.dataset.z=='fit'?1:Math.min(4,Math.max(.5,S.z*(g.dataset.z=='in'?1.2:1/1.2)));fit();return}
+ if(g=t.closest('[data-go]')){location.hash=g.dataset.go;return}
+ if(g=t.closest('[data-b]')){detail(+g.dataset.b);return}
+ if(g=t.closest('[data-cm]')){menu(+g.dataset.cm);return}
+ if(g=t.closest('[data-c]')){code(+g.dataset.c);return}
+ if(g=t.closest('[data-ed]')){code(+g.dataset.ed);return}
+ if(t.closest('[data-act=newb]')){newb();return}if(t.closest('[data-act=newc]')){code(null);return}if(t.closest('[data-act=imp]')){tg('Choose a CSV file to import');return}
+ if(t.closest('[data-addrow]')){row();return}
+ if(t.closest('[data-close]')||t==$('#sheet')){close();return}
+ if(g=t.closest('[data-toast]')){tg(g.dataset.toast);if(/saved|Saved|executed|Deactivated|Activated|Deleted/.test(g.dataset.toast))close();return}
+ if(g=t.closest('#bf button')){S.bf=g.dataset.f;$$('#bf button').forEach(function(x){x.setAttribute('aria-pressed',x==g)});bl();return}
+ if(g=t.closest('#cf button')){S.cf=g.dataset.f;cf();cl();return}
+ if(g=t.closest('[data-acc]')){var a=g.parentNode,o=a.classList.toggle('open');g.setAttribute('aria-expanded',o);return}
+ if(g=t.closest('[data-tab]')){if(g.getAttribute('role')=='tab'){$$('[role=tab]').forEach(function(x){x.setAttribute('aria-selected',x==g)});$$('#tr21 [data-p]').forEach(function(p){p.style.display=p.dataset.p==g.dataset.tab?'block':'none'});fit()}return}
+ if(g=t.closest('#fyl .opt')){$$('#fyl .opt').forEach(function(x){x.setAttribute('aria-checked',x==g)});tg('Switched to FY '+g.dataset.y);return}
+ if(g=t.closest('#th button')){$$('#th button').forEach(function(x){x.setAttribute('aria-pressed',x==g)});var r=document.documentElement;g.dataset.t=='system'?r.removeAttribute('data-theme'):r.dataset.theme=g.dataset.t;return}
+ if(g=t.closest('#sj button')){var el=$('#'+g.dataset.j);window.scrollTo({top:el.getBoundingClientRect().top+scrollY-130,behavior:'smooth'});return}
+ if(g=t.closest('#prv .seg button')){$$('#prv .seg button').forEach(function(x){x.setAttribute('aria-pressed',x==g)});S.draft=g.textContent=='Draft';render();return}
+});
+document.addEventListener('keydown',function(e){if(e.key=='Escape')close()});
+$('#bq').addEventListener('input',bl);$('#cq').addEventListener('input',cl);
+$('#settings').addEventListener('input',function(e){if(e.target.closest('#s-off'))dirty()});
+$('#save').onclick=function(){$('#sv').classList.remove('on');tg('Changes saved')};$('#dis').onclick=function(){$$('#settings input:not([type=checkbox]),#tr21 input:not([type=checkbox])').forEach(function(i){i.value=i.defaultValue;i.dispatchEvent(new Event('input',{bubbles:true}))});$('#sv').classList.remove('on')};
+$('#theme').onclick=function(){var r=document.documentElement,d=r.dataset.theme?r.dataset.theme=='dark':matchMedia('(prefers-color-scheme:dark)').matches;r.dataset.theme=d?'light':'dark'};
+$('#t-off').addEventListener('input',function(){$('#a1').textContent=this.value});
+$('#tr21').addEventListener('input',function(){cd();render();dirty()});
+$('#tr21').addEventListener('change',function(e){var k=e.target.dataset.k;if(k!==undefined){KS[+k]=e.target.checked;cls();}cd();render();dirty()});
+$('#sheet').addEventListener('input',function(e){if(e.target.id=='fyq')fyl(e.target.value.trim())});
+cd();cls();render();
+bsum();bl();cf();cl();window.addEventListener('hashchange',function(){go(location.hash.slice(1))});go(location.hash.slice(1));
+})();
+</script>
+</body>
+</html>

@@ -59,6 +59,7 @@ export interface OfficeDoc extends BaseAuditFields {
   tr21FontSize?: number;
   tr21P1S3Mode?: Tr21P1S3Mode;
   tr21VoucherLabel?: string;
+  tr21Margins?: Tr21Margins;
   tr21Clauses?: CertificationClause[];
 }
 
@@ -116,6 +117,13 @@ export interface InviteDoc extends BaseAuditFields {
 
 export type Tr21P1S3Mode = 'voucher' | 'items';
 
+export interface Tr21Margins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 export interface CertificationClause {
   id: string;
   numberBn: string;
@@ -147,6 +155,7 @@ export interface OfficeSettings extends BaseAuditFields {
   tr21FontSize?: number;
   tr21P1S3Mode?: Tr21P1S3Mode;
   tr21VoucherLabel?: string;
+  tr21Margins?: Tr21Margins;
   tr21Clauses?: CertificationClause[];
 }
 

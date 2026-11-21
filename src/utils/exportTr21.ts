@@ -26,6 +26,7 @@ import {
 } from 'docx';
 import { BillForm } from '../components/BillForm';
 import type { Tr21FormData } from '../lib/billFormData';
+import { DEFAULT_TR21_MARGINS } from '../lib/tr21Defaults';
 import { ensureBengaliFontsLoaded } from './exportPdf';
 import { saveAndShareFile, type SaveAndShareOutcome } from './saveFile';
 
@@ -197,6 +198,26 @@ export async function printTr21Form(
     document.body.appendChild(printHost);
   }
 
+  const margins = data.margins || DEFAULT_TR21_MARGINS;
+  let marginStyleEl = document.getElementById('tr21-dynamic-page-margin') as HTMLStyleElement | null;
+  if (!marginStyleEl) {
+    marginStyleEl = document.createElement('style');
+    marginStyleEl.id = 'tr21-dynamic-page-margin';
+    document.head.appendChild(marginStyleEl);
+  }
+  marginStyleEl.textContent = `
+    @page tr21-portrait {
+      size: A4 portrait;
+      margin: ${margins.top}in ${margins.right}in ${margins.bottom}in ${margins.left}in;
+    }
+    @media print {
+      body.tr21-printing .tr21-page {
+        min-height: calc(297mm - ${(margins.top + margins.bottom).toFixed(2)}in - 2mm) !important;
+        padding: 0 !important;
+      }
+    }
+  `;
+
   printHost.innerHTML = renderToStaticMarkup(React.createElement(BillForm, { data }));
   await waitAnimationFrames(2);
 
@@ -218,6 +239,10 @@ export async function printTr21Form(
     const el = document.getElementById('tr21-print-root');
     if (el) {
       el.innerHTML = '';
+    }
+    const styleNode = document.getElementById('tr21-dynamic-page-margin');
+    if (styleNode) {
+      styleNode.remove();
     }
   };
 
@@ -820,10 +845,10 @@ export async function exportTr21Docx(
           })
         );
       } else {
-        const lines = clause.text.split('\n');
+        const lines = clause.text.split(/\r?\n/);
         lines.forEach((line, idx) => {
           const prefix = idx === 0 ? `${clause.numberBn}। ` : '';
-          const isSub = /^\([ক-ঙ]\)/.test(line.trim());
+          const isSub = /^\(\s*[ক-হড়ঢ়য়০-৯]+\s*\)/.test(line.trim());
           docChildren.push(
             bnPara(`${prefix}${line}`, {
               align: AlignmentType.BOTH,
@@ -1238,10 +1263,10 @@ export async function exportTr21Docx(
               height: 16838, // A4 Portrait 297mm
             },
             margin: {
-              top: 520,
-              right: 540,
-              bottom: 500,
-              left: 560,
+              top: Math.round((data.margins?.top ?? DEFAULT_TR21_MARGINS.top) * 1440),
+              right: Math.round((data.margins?.right ?? DEFAULT_TR21_MARGINS.right) * 1440),
+              bottom: Math.round((data.margins?.bottom ?? DEFAULT_TR21_MARGINS.bottom) * 1440),
+              left: Math.round((data.margins?.left ?? DEFAULT_TR21_MARGINS.left) * 1440),
             },
           },
         },
