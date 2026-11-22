@@ -4,11 +4,15 @@ import { collection, getDocs, limit, query, where } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import {
   CheckSquare,
+  ChevronRight,
   ClipboardList,
+  Copy,
   Download,
   Edit2,
+  Eye,
   FileSpreadsheet,
   FileText,
+  Lock,
   Plus,
   ReceiptText,
   Send,
@@ -26,6 +30,7 @@ import {
   RepeatAddButton,
   RepeatCard,
   Section,
+  Textarea,
   TextInput,
   focusFirstInvalidField,
 } from '../components/form';
@@ -35,6 +40,7 @@ import { SegmentedChips } from '../components/SegmentedChips';
 import { FilterBar } from '../components/FilterBar';
 import { EmptyState } from '../components/EmptyState';
 import { EconomicCodeSelect } from '../components/EconomicCodeSelect';
+import { ProductsModal } from '../components/ProductsModal';
 import {
   ResponsibleEmployeeSelect,
   type MentionedEmployeeEntry,
@@ -52,6 +58,7 @@ import { computeCodeAvailable } from '../lib/computeAvailable';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import { isDateInFiscalYear } from '../lib/fy';
 import {
+  computeBillFinancialsFromItems,
   createDraftBillsFromItems,
   createExpenseItemsBatch,
   deleteExpenseItem,
@@ -60,11 +67,11 @@ import {
   type DraftBillGroupInput,
 } from '../lib/firestoreOps';
 import {
-  computeGrossedUpBill,
   formatNumberIN,
   formatPaisaInput,
   formatTaka,
   fromPaisa,
+  sumProducts,
   toPaisa,
 } from '../lib/money';
 import {
@@ -86,6 +93,7 @@ import type {
   BillDeductionLine,
   EconomicCodeDoc,
   ExpenseItemDoc,
+  ExpenseProduct,
   VatVariant,
 } from '../types';
 
@@ -96,7 +104,7 @@ interface EntryRowDraft {
   headNameBn: string;
   date: string;
   description: string;
-  amountStr: string;
+  products: ExpenseProduct[];
   employeeMode: 'user' | 'manual';
   userId: string;
   employeeName: string;
@@ -111,7 +119,7 @@ function makeEmptyRow(prev?: EntryRowDraft): EntryRowDraft {
     headNameBn: prev?.headNameBn || '',
     date: prev?.date || todayYmd(),
     description: '',
-    amountStr: '',
+    products: [],
     employeeMode: prev?.employeeMode || 'user',
     userId: prev?.userId || '',
     employeeName: prev?.employeeName || '',
@@ -226,12 +234,24 @@ export function ExpenseItemsPage() {
   const [entryModalOpen, setEntryModalOpen] = useState(false);
   const [rows, setRows] = useState<EntryRowDraft[]>([]);
   const [savingBatch, setSavingBatch] = useState(false);
+  const [entryValidationTried, setEntryValidationTried] = useState(false);
   const entryFormRef = useRef<HTMLFormElement | null>(null);
   const [entryFieldError, setEntryFieldError] = useState<{
     index: number;
-    field: 'code' | 'date' | 'amount' | 'description' | 'employee';
+    field: 'code' | 'date' | 'products' | 'description' | 'employee';
     message: string;
   } | null>(null);
+
+  // Products sub-modal (entry / edit / read-only list view)
+  const [productsModalState, setProductsModalState] = useState<
+    | { kind: 'entry'; rowIndex: number }
+    | { kind: 'edit' }
+    | { kind: 'view'; item: ExpenseItemDoc }
+    | null
+  >(null);
+  const sessionRateCacheRef = useRef<Map<string, { vatRate: number; itRate: number } | null>>(
+    new Map()
+  );
 
   // Historical employees mentioned in any FY for this office
   const [historicalOfficeEmployees, setHistoricalOfficeEmployees] = useState<
@@ -316,6 +336,7 @@ export function ExpenseItemsPage() {
   const [editDate, setEditDate] = useState(todayYmd());
   const [editDescription, setEditDescription] = useState('');
   const [editAmountStr, setEditAmountStr] = useState('');
+  const [editProducts, setEditProducts] = useState<ExpenseProduct[]>([]);
   const [editEmpMode, setEditEmpMode] = useState<'user' | 'manual'>('user');
   const [editUserId, setEditUserId] = useState('');
   const [editEmpName, setEditEmpName] = useState('');
@@ -323,7 +344,7 @@ export function ExpenseItemsPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const editFormRef = useRef<HTMLFormElement | null>(null);
   const [editFieldError, setEditFieldError] = useState<{
-    field: 'code' | 'date' | 'amount' | 'description' | 'employee';
+    field: 'code' | 'date' | 'amount' | 'products' | 'description' | 'employee';
     message: string;
   } | null>(null);
 
@@ -368,13 +389,17 @@ export function ExpenseItemsPage() {
         headName: item.headName,
         headNameBn: item.headNameBn,
       });
+      const matchesProduct = Boolean(
+        item.products?.some((p) => (p.name || '').toLowerCase().includes(q))
+      );
       return (
         item.economicCode.toLowerCase().includes(q) ||
         head.headName.toLowerCase().includes(q) ||
         head.headNameBn.toLowerCase().includes(q) ||
         item.description.toLowerCase().includes(q) ||
         item.responsibleEmployee.name.toLowerCase().includes(q) ||
-        item.responsibleEmployee.designation.toLowerCase().includes(q)
+        item.responsibleEmployee.designation.toLowerCase().includes(q) ||
+        matchesProduct
       );
     });
   }, [expenseItems, codeFilter, search, getHead]);
@@ -566,33 +591,52 @@ export function ExpenseItemsPage() {
         const chosenKey = selectedVariantByCode[economicCode];
         const variant: VatVariant =
           rates.vat.find((v) => v.key === chosenKey) || rates.vat[0];
-        const expenseTotal = items.reduce((sum, i) => sum + i.amount, 0);
+        const voucherCount = items.filter(
+          (i) => i.amountBasis === 'voucher' && Array.isArray(i.products) && i.products.length > 0
+        ).length;
+        const isVoucherOnly = voucherCount === items.length;
+        const isMixed = voucherCount > 0 && voucherCount < items.length;
+        const expenseTotal = items.reduce(
+          (sum, i) =>
+            sum +
+            (i.amountBasis === 'voucher' ? i.baseTotal ?? i.amount : i.amount),
+          0
+        );
+        const itemAmountSum = items.reduce((sum, i) => sum + i.amount, 0);
 
-        const defaultDeductions: BillDeductionLine[] = [
-          {
-            id: 'it',
-            code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
-            name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
-            rate: rates.incomeTax,
-            amount: 0,
-            kind: 'it',
-          },
-          {
-            id: 'vat',
-            code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
-            name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
-            rate: variant.rate,
-            amount: 0,
-            kind: 'vat',
-          },
-        ];
+        const defaultDeductions: BillDeductionLine[] = isVoucherOnly
+          ? computeBillFinancialsFromItems({
+              items,
+              vatRate: 0,
+              itRate: 0,
+              defaultItCode: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+              defaultVatCode: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+            }).deductions
+          : [
+              {
+                id: 'it',
+                code: officeSettings.defaultItCode || DEFAULT_IT_CODE,
+                name: 'ব্যক্তি কর্তৃক দেয় আয়কর',
+                rate: rates.incomeTax,
+                amount: 0,
+                kind: 'it',
+              },
+              {
+                id: 'vat',
+                code: officeSettings.defaultVatCode || DEFAULT_VAT_CODE,
+                name: 'দেশজ পণ্য ও সেবার ওপর মূসক',
+                rate: variant.rate,
+                amount: 0,
+                kind: 'vat',
+              },
+            ];
 
         const customList = deductionsByCode[economicCode];
         const inputDeductions =
           Array.isArray(customList) && customList.length > 0 ? customList : defaultDeductions;
 
         let rateError = '';
-        let grossAmount = expenseTotal;
+        let grossAmount = itemAmountSum;
         let deductions = inputDeductions;
         let vatAmount = 0;
         let itAmount = 0;
@@ -603,8 +647,8 @@ export function ExpenseItemsPage() {
         let totalPercentRate = 0;
 
         try {
-          const calc = computeGrossedUpBill({
-            expenseTotalPaisa: expenseTotal,
+          const calc = computeBillFinancialsFromItems({
+            items,
             vatRate: variant.rate,
             itRate: rates.incomeTax,
             customDeductions: inputDeductions,
@@ -619,7 +663,13 @@ export function ExpenseItemsPage() {
           netPayable = calc.netPayable;
           effectiveVatRate = calc.effectiveVatRate;
           effectiveItRate = calc.effectiveItRate;
-          totalPercentRate = calc.totalPercentRate;
+          if (!isVoucherOnly && !isMixed) {
+            for (const d of inputDeductions) {
+              if (typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate >= 0) {
+                totalPercentRate += d.rate;
+              }
+            }
+          }
         } catch (err) {
           rateError =
             err instanceof Error ? err.message : 'মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।';
@@ -648,6 +698,9 @@ export function ExpenseItemsPage() {
           headName: head.headName,
           headNameBn: head.headNameBn,
           items,
+          isVoucherOnly,
+          isMixed,
+          itemAmountSum,
           vatVariants: rates.vat,
           selectedVariant: variant,
           vatRate: effectiveVatRate,
@@ -693,6 +746,7 @@ export function ExpenseItemsPage() {
         employeeDesignation: defaultUser?.designation || userDoc?.designation || '',
       },
     ]);
+    setEntryValidationTried(false);
     setEntryFieldError(null);
     setEntryModalOpen(true);
   };
@@ -717,26 +771,31 @@ export function ExpenseItemsPage() {
   const isEntryDirty = useMemo(
     () =>
       rows.length > 1 ||
-      rows.some((r) => Boolean(r.amountStr.trim() || r.description.trim())),
+      rows.some((r) => Boolean(r.products.length > 0 || r.description.trim())),
     [rows]
   );
 
   const isEditDirty = useMemo(() => {
     if (!editingItem) return false;
-    return (
+    const isVoucherEdit = editingItem.amountBasis === 'voucher';
+    const baseDirty =
       editCode !== editingItem.economicCode ||
       editDate !== editingItem.date ||
       editDescription !== editingItem.description ||
-      editAmountStr !== formatPaisaInput(editingItem.amount) ||
       editEmpName !== editingItem.responsibleEmployee.name ||
-      editEmpDesig !== editingItem.responsibleEmployee.designation
-    );
+      editEmpDesig !== editingItem.responsibleEmployee.designation;
+    if (baseDirty) return true;
+    if (isVoucherEdit) {
+      return JSON.stringify(editProducts) !== JSON.stringify(editingItem.products || []);
+    }
+    return editAmountStr !== formatPaisaInput(editingItem.amount);
   }, [
     editingItem,
     editCode,
     editDate,
     editDescription,
     editAmountStr,
+    editProducts,
     editEmpName,
     editEmpDesig,
   ]);
@@ -757,8 +816,8 @@ export function ExpenseItemsPage() {
     let grandTotal = 0;
 
     for (const r of rows) {
-      const amt = toPaisa(r.amountStr);
-      const validAmt = Number.isFinite(amt) && amt > 0 ? amt : 0;
+      const rowTotals = sumProducts(r.products);
+      const validAmt = rowTotals.voucherTotal > 0 ? rowTotals.voucherTotal : 0;
       grandTotal += validAmt;
       const code = r.economicCode.trim();
       if (code) {
@@ -805,9 +864,9 @@ export function ExpenseItemsPage() {
     // Duplicate detection (non-blocking warning)
     const duplicateWarnings: string[] = [];
     rows.forEach((r, idx) => {
-      const amt = toPaisa(r.amountStr);
+      const amt = sumProducts(r.products).voucherTotal;
       const desc = normalizeDesc(r.description);
-      if (!r.economicCode || !r.date || !Number.isFinite(amt) || amt <= 0 || !desc) return;
+      if (!r.economicCode || !r.date || amt <= 0 || !desc) return;
 
       const matchesExisting = expenseItems.some(
         (ex) =>
@@ -821,7 +880,7 @@ export function ExpenseItemsPage() {
           oIdx !== idx &&
           other.economicCode === r.economicCode &&
           other.date === r.date &&
-          toPaisa(other.amountStr) === amt &&
+          sumProducts(other.products).voucherTotal === amt &&
           normalizeDesc(other.description) === desc
       );
       if (matchesExisting || matchesSibling) {
@@ -842,6 +901,7 @@ export function ExpenseItemsPage() {
   const handleSaveBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userDoc || !canCreate || !realOfficeId || !effectiveActor || savingBatch) return;
+    setEntryValidationTried(true);
 
     const prepared = [];
     for (let i = 0; i < rows.length; i++) {
@@ -861,14 +921,6 @@ export function ExpenseItemsPage() {
         window.requestAnimationFrame(() => focusFirstInvalidField(entryFormRef.current));
         return;
       }
-      const amt = toPaisa(r.amountStr);
-      if (!Number.isFinite(amt) || amt <= 0) {
-        const msg = `আইটেম #${i + 1}: ০ এর বেশি টাকার পরিমাণ দিন।`;
-        setEntryFieldError({ index: i, field: 'amount', message: msg });
-        pushToast('error', msg);
-        window.requestAnimationFrame(() => focusFirstInvalidField(entryFormRef.current));
-        return;
-      }
       if (!r.description.trim()) {
         const msg = `আইটেম #${i + 1}: খরচের বিবরণ লিখুন।`;
         setEntryFieldError({ index: i, field: 'description', message: msg });
@@ -883,6 +935,19 @@ export function ExpenseItemsPage() {
         window.requestAnimationFrame(() => focusFirstInvalidField(entryFormRef.current));
         return;
       }
+      if (r.products.length === 0) {
+        const msg = `আইটেম #${i + 1}: "ব্যয় সমূহ" বোতামে চাপ দিয়ে অন্তত ১টি পণ্য যোগ করুন।`;
+        setEntryFieldError({ index: i, field: 'products', message: msg });
+        pushToast('error', msg);
+        return;
+      }
+      const rowTotals = sumProducts(r.products);
+      if (rowTotals.baseTotal <= 0 || rowTotals.voucherTotal <= 0) {
+        const msg = `আইটেম #${i + 1}: ব্যয় সমূহের টাকার পরিমাণ ০ এর বেশি হতে হবে।`;
+        setEntryFieldError({ index: i, field: 'products', message: msg });
+        pushToast('error', msg);
+        return;
+      }
       prepared.push({
         officeId: realOfficeId,
         fiscalYear: selectedFy,
@@ -891,7 +956,13 @@ export function ExpenseItemsPage() {
         headNameBn: master.headNameBn,
         date: r.date,
         description: r.description.trim(),
-        amount: amt,
+        amount: rowTotals.voucherTotal,
+        amountBasis: 'voucher' as const,
+        products: r.products,
+        baseTotal: rowTotals.baseTotal,
+        vatTotal: rowTotals.vatTotal,
+        itTotal: rowTotals.itTotal,
+        deductionTotal: rowTotals.deductionTotal,
         responsibleEmployee: {
           userId: r.employeeMode === 'user' ? r.userId || null : null,
           name: r.employeeName.trim(),
@@ -928,6 +999,7 @@ export function ExpenseItemsPage() {
     setEditDate(item.date);
     setEditDescription(item.description);
     setEditAmountStr(formatPaisaInput(item.amount));
+    setEditProducts(item.products ? item.products.map((p) => ({ ...p })) : []);
     const hasLinkedUser = Boolean(
       item.responsibleEmployee.userId &&
         activeUsers.some((u) => u.id === item.responsibleEmployee.userId)
@@ -958,14 +1030,51 @@ export function ExpenseItemsPage() {
       window.requestAnimationFrame(() => focusFirstInvalidField(editFormRef.current));
       return;
     }
-    const amt = toPaisa(editAmountStr);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      const msg = 'সঠিক টাকার পরিমাণ দিন।';
-      setEditFieldError({ field: 'amount', message: msg });
-      pushToast('error', msg);
-      window.requestAnimationFrame(() => focusFirstInvalidField(editFormRef.current));
-      return;
+    const isVoucherEdit = editingItem.amountBasis === 'voucher';
+    let amt = 0;
+    let voucherPayload: {
+      amountBasis: 'voucher';
+      products: ExpenseProduct[];
+      baseTotal: number;
+      vatTotal: number;
+      itTotal: number;
+      deductionTotal: number;
+    } | null = null;
+
+    if (isVoucherEdit) {
+      if (editProducts.length === 0) {
+        const msg = 'কমপক্ষে ১টি পণ্য বা ব্যয় যোগ করুন।';
+        setEditFieldError({ field: 'products', message: msg });
+        pushToast('error', msg);
+        return;
+      }
+      const totals = sumProducts(editProducts);
+      if (totals.baseTotal <= 0 || totals.voucherTotal <= 0) {
+        const msg = 'ব্যয় সমূহের টাকার পরিমাণ ০ এর বেশি হতে হবে।';
+        setEditFieldError({ field: 'products', message: msg });
+        pushToast('error', msg);
+        return;
+      }
+      amt = totals.voucherTotal;
+      voucherPayload = {
+        amountBasis: 'voucher',
+        products: editProducts,
+        baseTotal: totals.baseTotal,
+        vatTotal: totals.vatTotal,
+        itTotal: totals.itTotal,
+        deductionTotal: totals.deductionTotal,
+      };
+    } else {
+      amt = toPaisa(editAmountStr);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        const msg = 'সঠিক টাকার পরিমাণ দিন।';
+        setEditFieldError({ field: 'amount', message: msg });
+        pushToast('error', msg);
+        window.requestAnimationFrame(() => focusFirstInvalidField(editFormRef.current));
+        return;
+      }
     }
+
     if (!editDescription.trim()) {
       const msg = 'বিবরণ লিখুন।';
       setEditFieldError({ field: 'description', message: msg });
@@ -994,6 +1103,7 @@ export function ExpenseItemsPage() {
           date: editDate,
           description: editDescription,
           amount: amt,
+          ...(voucherPayload || {}),
           responsibleEmployee: {
             userId: editEmpMode === 'user' ? editUserId || null : null,
             name: editEmpName,
@@ -1059,10 +1169,9 @@ export function ExpenseItemsPage() {
       const headBn = head.headNameBn || head.headName;
       initPurposes[code] = `${headBn} বাবদ ব্যয়ের বিল।`;
 
-      const expenseTotal = items.reduce((s, it) => s + it.amount, 0);
       try {
-        const calc = computeGrossedUpBill({
-          expenseTotalPaisa: expenseTotal,
+        const calc = computeBillFinancialsFromItems({
+          items,
           vatRate: firstVat.rate,
           itRate: r.incomeTax,
           defaultItCode: officeSettings.defaultItCode || DEFAULT_IT_CODE,
@@ -1252,6 +1361,7 @@ export function ExpenseItemsPage() {
           headName: item.headName,
           headNameBn: item.headNameBn,
         });
+        const isVoucher = item.amountBasis === 'voucher';
         return {
           Date: formatDateDisplay(item.date),
           'Economic Code': item.economicCode,
@@ -1260,7 +1370,15 @@ export function ExpenseItemsPage() {
           'Responsible Employee': item.responsibleEmployee.name,
           Designation: item.responsibleEmployee.designation,
           'Entered By': formatActorBrief(item.createdBy, officesById, item.createdByName),
+          'প্রকৃত খরচ (BDT)': isVoucher
+            ? fromPaisa(item.baseTotal ?? item.amount)
+            : fromPaisa(item.amount),
+          'কর্তন (BDT)': isVoucher ? fromPaisa(item.deductionTotal ?? 0) : 0,
           'Amount (BDT)': fromPaisa(item.amount),
+          'পণ্য সমূহ':
+            item.products
+              ?.map((p) => `${p.name} (ভ্যাট ${p.vatRate}%, আয়কর ${p.itRate}%)`)
+              .join('; ') || '',
           Status: item.status,
           'Bill ID': item.billId || '',
         };
@@ -1446,7 +1564,7 @@ export function ExpenseItemsPage() {
               setSearch(val);
               setPage(1);
             }}
-            searchPlaceholder="বিবরণ, কর্মচারী, কোড…"
+            searchPlaceholder="বিবরণ, পণ্য, কর্মচারী, কোড…"
             searchAriaLabel="Search expense items"
           />
         </div>
@@ -1554,6 +1672,25 @@ export function ExpenseItemsPage() {
                             {formatTaka(item.amount)}
                           </div>
                         </div>
+
+                        {item.amountBasis === 'voucher' &&
+                          item.products &&
+                          item.products.length > 0 && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px] tabular-nums">
+                              <span className="text-[var(--muted)]">
+                                প্রকৃত {formatTaka(item.baseTotal ?? 0)} · কর্তন{' '}
+                                {formatTaka(item.deductionTotal ?? 0)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setProductsModalState({ kind: 'view', item })}
+                                className="min-h-[34px] px-2.5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] font-semibold inline-flex items-center gap-1 hover:opacity-90"
+                              >
+                                <Eye className="w-3.5 h-3.5 shrink-0" />
+                                <span>ব্যয় সমূহ ({item.products.length}টি)</span>
+                              </button>
+                            </div>
+                          )}
 
                         {(item.createdBy || item.createdByName) && (
                           <div className="text-[11px] text-[var(--muted)] mt-1 truncate">
@@ -1679,6 +1816,23 @@ export function ExpenseItemsPage() {
                         </td>
                         <td className="py-3 px-3 bn max-w-[240px] break-words">
                           <div className="font-medium text-[var(--text)]">{item.description}</div>
+                          {item.amountBasis === 'voucher' &&
+                            item.products &&
+                            item.products.length > 0 && (
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] tabular-nums">
+                                <span className="text-[var(--muted)]">
+                                  প্রকৃত {formatTaka(item.baseTotal ?? 0)} · কর্তন{' '}
+                                  {formatTaka(item.deductionTotal ?? 0)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setProductsModalState({ kind: 'view', item })}
+                                  className="px-2 py-0.5 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] font-semibold hover:opacity-90"
+                                >
+                                  ব্যয় সমূহ ({item.products.length}টি)
+                                </button>
+                              </div>
+                            )}
                           {(item.createdBy || item.createdByName) && (
                             <div className="text-[11px] text-[var(--muted)] mt-0.5">
                               এন্ট্রি: {formatActorBrief(item.createdBy, officesById, item.createdByName)}
@@ -1700,7 +1854,7 @@ export function ExpenseItemsPage() {
                           )}
                         </td>
                         <td className="py-3 px-3 text-right font-semibold tabular-nums whitespace-nowrap">
-                          {formatTaka(item.amount)}
+                          <div>{formatTaka(item.amount)}</div>
                         </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           <StatusChip variant={item.status}>{t(item.status)}</StatusChip>
@@ -1765,7 +1919,7 @@ export function ExpenseItemsPage() {
             >
               {selectedDistinctCodeCount > 1
                 ? 'একাধিক অর্থনৈতিক কোড নির্বাচিত হয়েছে — একটি বিলে শুধু একই কোডের খরচ নেওয়া যাবে।'
-                : `কোড ${selectedEconomicCode} এর জন্য ১টি বিল প্রস্তুত হবে (কর্তন যোগ করে মোট বিল হিসাব হবে)`}
+                : `কোড ${selectedEconomicCode} এর জন্য ১টি বিল প্রস্তুত হবে`}
             </div>
           </div>
 
@@ -1795,7 +1949,7 @@ export function ExpenseItemsPage() {
         open={entryModalOpen}
         onClose={() => setEntryModalOpen(false)}
         title="নতুন খরচ যোগ করুন (খরচ তালিকা)"
-        subtitle={`FY ${selectedFy} · এখানে শুধু মূল খরচ লিখুন (বিল করার সময় ভ্যাট/ট্যাক্স যোগ করে মোট বিল হিসাব হবে)`}
+        subtitle={`FY ${selectedFy} · পণ্যভিত্তিক ভ্যাট ও আয়কর সহ ভাউচার এমাউন্ট হিসাব`}
         size="lg"
         fullScreenOnMobile
         confirmClose={isEntryDirty && !savingBatch}
@@ -1804,7 +1958,7 @@ export function ExpenseItemsPage() {
             loading={savingBatch}
             summary={
               <div className="flex items-baseline justify-between gap-3 text-[15px]">
-                <span className="text-[var(--text)]">মোট আইটেম: {rows.length}টি</span>
+                <span className="text-[var(--text)]">মোট আইটেম: {rows.length}টি (ভাউচার)</span>
                 <strong className="text-[18px] font-bold tabular-nums text-[var(--accent)]">
                   {formatTaka(entryBatchSummary.grandTotal)}
                 </strong>
@@ -1830,6 +1984,10 @@ export function ExpenseItemsPage() {
           noValidate
           className="space-y-4"
         >
+          <Banner variant="info">
+            টাকার ঘর নিজে লেখা যায় না। “ব্যয় সমূহ” এ পণ্যভিত্তিক খরচ দিলে মোট ভাউচার এমাউন্ট এখানে আসে।
+          </Banner>
+
           {/* Code Availability Summary + Stage 1 & Duplicate Warn Banners */}
           {(entryBatchSummary.codeStatuses.length > 0 ||
             entryBatchSummary.hasBudgetWarning ||
@@ -1885,11 +2043,41 @@ export function ExpenseItemsPage() {
             {rows.map((row, idx) => {
               const dateOutOfFy = row.date ? !isDateInFiscalYear(row.date, selectedFy) : false;
               const rowErr = entryFieldError?.index === idx ? entryFieldError : null;
+              const rowTotals = sumProducts(row.products);
+              const productsBad =
+                (entryValidationTried && row.products.length === 0) ||
+                rowErr?.field === 'products';
+
               return (
                 <RepeatCard
                   key={row.key}
                   index={idx}
                   title={`খরচ আইটেম #${idx + 1}`}
+                  extraActions={
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const copy: EntryRowDraft = {
+                          ...row,
+                          key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                          products: row.products.map((p, pIdx) => ({
+                            ...p,
+                            id: `p_${Date.now()}_${pIdx}_${Math.random().toString(36).slice(2, 5)}`,
+                          })),
+                        };
+                        setRows((prev) => {
+                          const next = [...prev];
+                          next.splice(idx + 1, 0, copy);
+                          return next;
+                        });
+                      }}
+                      aria-label={`আইটেম #${idx + 1} কপি করুন`}
+                      title="কপি করুন"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface-subtle)] transition-colors"
+                    >
+                      <Copy className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                  }
                   canRemove={rows.length > 1}
                   removeLabel={`আইটেম #${idx + 1} সরান`}
                   onRemove={() => {
@@ -1897,6 +2085,7 @@ export function ExpenseItemsPage() {
                     setEntryFieldError(null);
                   }}
                 >
+                  {/* 1. অর্থনৈতিক কোড */}
                   <Field
                     label="অর্থনৈতিক কোড"
                     labelAs="span"
@@ -1918,57 +2107,44 @@ export function ExpenseItemsPage() {
                     />
                   </Field>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field
-                      label={`তারিখ (FY ${selectedFy})`}
-                      required
-                      error={
-                        rowErr?.field === 'date'
-                          ? rowErr.message
-                          : dateOutOfFy
-                            ? `তারিখটি FY ${selectedFy} এর বাইরে।`
-                            : undefined
-                      }
-                    >
-                      <TextInput
-                        type="date"
-                        required
-                        value={row.date}
-                        onChange={(e) => updateRow(idx, { date: e.target.value })}
-                        className="tabular-nums"
-                      />
-                    </Field>
-
-                    <Field
-                      label="পরিমাণ (৳ · মূল খরচ)"
-                      required
-                      error={rowErr?.field === 'amount' ? rowErr.message : undefined}
-                    >
-                      <MoneyInput
-                        required
-                        value={row.amountStr}
-                        onChange={(e) => updateRow(idx, { amountStr: e.target.value })}
-                        placeholder="5000"
-                      />
-                    </Field>
-                  </div>
-
+                  {/* 2. তারিখ */}
                   <Field
-                    label="খরচের বিবরণ"
+                    label={`তারিখ (FY ${selectedFy})`}
+                    required
+                    error={
+                      rowErr?.field === 'date'
+                        ? rowErr.message
+                        : dateOutOfFy
+                          ? `তারিখটি FY ${selectedFy} এর বাইরে।`
+                          : undefined
+                    }
+                  >
+                    <TextInput
+                      type="date"
+                      required
+                      value={row.date}
+                      onChange={(e) => updateRow(idx, { date: e.target.value })}
+                      className="tabular-nums"
+                    />
+                  </Field>
+
+                  {/* 3. খরচের বিবরণ */}
+                  <Field
+                    label="খরচের বিবরণ (টি.আর ফরম-২১ এ যাবে)"
                     required
                     error={rowErr?.field === 'description' ? rowErr.message : undefined}
                   >
-                    <TextInput
-                      type="text"
+                    <Textarea
+                      rows={2}
                       required
                       value={row.description}
                       onChange={(e) => updateRow(idx, { description: e.target.value })}
-                      placeholder="যেমন: অফিস স্টেশনারি ক্রয় বা আপ্যায়ন সামগ্রী"
+                      placeholder="যেমন: ... বাবদ আপ্যায়ন ও ব্যানার ক্রয়"
                       className="bn"
                     />
                   </Field>
 
-                  {/* Responsible Employee Picker */}
+                  {/* 4. দায়িত্বপ্রাপ্ত কর্মচারী */}
                   <Field
                     label="দায়িত্বপ্রাপ্ত কর্মচারী"
                     labelAs="span"
@@ -1988,12 +2164,66 @@ export function ExpenseItemsPage() {
                       onChange={(next) => updateRow(idx, next)}
                     />
                   </Field>
+
+                  {/* 5. মোট টাকা (ভাউচার এমাউন্ট) · শুধু দেখার জন্য */}
+                  <Field label="মোট টাকা (ভাউচার এমাউন্ট) · শুধু দেখার জন্য">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        tabIndex={-1}
+                        aria-readonly="true"
+                        value={formatTaka(rowTotals.voucherTotal)}
+                        className="w-full min-h-[44px] pl-3.5 pr-10 rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)] text-[17px] font-bold tabular-nums text-[var(--text)] cursor-default focus:outline-none"
+                      />
+                      <Lock
+                        className="w-4 h-4 text-[var(--muted)] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </Field>
+
+                  {/* 6. ব্যয় সমূহ বাটন */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setProductsModalState({ kind: 'entry', rowIndex: idx })}
+                      className={`w-full min-h-[64px] px-3.5 py-2.5 rounded-xl border-[1.5px] border-dashed flex items-center gap-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+                        productsBad
+                          ? 'border-[var(--danger-solid)] bg-[var(--danger-bg)]/50 text-[var(--danger-text)]'
+                          : 'border-[var(--accent)] bg-[var(--accent-soft)]/60 text-[var(--accent)] hover:bg-[var(--accent-soft)]'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[15px] font-bold">
+                          ব্যয় সমূহ{row.products.length > 0 ? ` · ${row.products.length}টি` : ''}
+                        </div>
+                        <div
+                          className={`text-xs mt-0.5 tabular-nums ${
+                            productsBad ? 'text-[var(--danger-text)]' : 'text-[var(--muted)]'
+                          }`}
+                        >
+                          {row.products.length > 0
+                            ? `প্রকৃত খরচ ${formatTaka(rowTotals.baseTotal)} + কর্তন ${formatTaka(rowTotals.deductionTotal)}`
+                            : 'পণ্যের নাম, হার ও খরচ দিতে এখানে চাপুন'}
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 shrink-0" aria-hidden="true" />
+                    </button>
+                    {productsBad && (
+                      <div className="text-xs font-medium text-[var(--danger-text)] mt-1.5">
+                        {rowErr?.field === 'products'
+                          ? rowErr.message
+                          : 'অন্তত ১টি পণ্য বা ব্যয় যোগ করুন।'}
+                      </div>
+                    )}
+                  </div>
                 </RepeatCard>
               );
             })}
 
             <RepeatAddButton
-              label="আরেকটি যোগ করুন"
+              label="আরেকটি খরচ যোগ করুন"
               onClick={() => setRows((prev) => [...prev, makeEmptyRow(prev[prev.length - 1])])}
             />
           </div>
@@ -2054,47 +2284,30 @@ export function ExpenseItemsPage() {
             />
           </Field>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field
-              label="তারিখ"
+          <Field
+            label="তারিখ"
+            required
+            error={editFieldError?.field === 'date' ? editFieldError.message : undefined}
+          >
+            <TextInput
+              type="date"
               required
-              error={editFieldError?.field === 'date' ? editFieldError.message : undefined}
-            >
-              <TextInput
-                type="date"
-                required
-                value={editDate}
-                onChange={(e) => {
-                  setEditDate(e.target.value);
-                  if (editFieldError?.field === 'date') setEditFieldError(null);
-                }}
-                className="tabular-nums"
-              />
-            </Field>
-
-            <Field
-              label="পরিমাণ (৳)"
-              required
-              error={editFieldError?.field === 'amount' ? editFieldError.message : undefined}
-            >
-              <MoneyInput
-                required
-                value={editAmountStr}
-                onChange={(e) => {
-                  setEditAmountStr(e.target.value);
-                  if (editFieldError?.field === 'amount') setEditFieldError(null);
-                }}
-              />
-            </Field>
-          </div>
+              value={editDate}
+              onChange={(e) => {
+                setEditDate(e.target.value);
+                if (editFieldError?.field === 'date') setEditFieldError(null);
+              }}
+              className="tabular-nums"
+            />
+          </Field>
 
           <Field
-            label="বিবরণ"
+            label="খরচের বিবরণ (টি.আর ফরম-২১ এ যাবে)"
             required
             error={editFieldError?.field === 'description' ? editFieldError.message : undefined}
           >
-            <TextInput
-              type="text"
+            <Textarea
+              rows={2}
               required
               value={editDescription}
               onChange={(e) => {
@@ -2130,6 +2343,67 @@ export function ExpenseItemsPage() {
               }}
             />
           </Field>
+
+          {editingItem?.amountBasis === 'voucher' ? (
+            <>
+              <Field label="মোট টাকা (ভাউচার এমাউন্ট) · শুধু দেখার জন্য">
+                <div className="relative">
+                  <input
+                    type="text"
+                    readOnly
+                    tabIndex={-1}
+                    aria-readonly="true"
+                    value={formatTaka(sumProducts(editProducts).voucherTotal)}
+                    className="w-full min-h-[44px] pl-3.5 pr-10 rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)] text-[17px] font-bold tabular-nums text-[var(--text)] cursor-default focus:outline-none"
+                  />
+                  <Lock
+                    className="w-4 h-4 text-[var(--muted)] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    aria-hidden="true"
+                  />
+                </div>
+              </Field>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setProductsModalState({ kind: 'edit' })}
+                  className="w-full min-h-[64px] px-3.5 py-2.5 rounded-xl border-[1.5px] border-dashed border-[var(--accent)] bg-[var(--accent-soft)]/60 text-[var(--accent)] hover:bg-[var(--accent-soft)] flex items-center gap-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[15px] font-bold">
+                      ব্যয় সমূহ{editProducts.length > 0 ? ` · ${editProducts.length}টি` : ''}
+                    </div>
+                    <div className="text-xs mt-0.5 text-[var(--muted)] tabular-nums">
+                      {(() => {
+                        const t2 = sumProducts(editProducts);
+                        return `প্রকৃত খরচ ${formatTaka(t2.baseTotal)} + কর্তন ${formatTaka(t2.deductionTotal)}`;
+                      })()}
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 shrink-0" aria-hidden="true" />
+                </button>
+                {editFieldError?.field === 'products' && (
+                  <div className="text-xs font-medium text-[var(--danger-text)] mt-1.5">
+                    {editFieldError.message}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <Field
+              label="পরিমাণ (৳)"
+              required
+              error={editFieldError?.field === 'amount' ? editFieldError.message : undefined}
+            >
+              <MoneyInput
+                required
+                value={editAmountStr}
+                onChange={(e) => {
+                  setEditAmountStr(e.target.value);
+                  if (editFieldError?.field === 'amount') setEditFieldError(null);
+                }}
+              />
+            </Field>
+          )}
         </form>
       </Modal>
 
@@ -2440,8 +2714,27 @@ export function ExpenseItemsPage() {
                 </div>
 
                 {/* Section 3: কর্তন ও পরিশোধ */}
-                <Section title="কর্তন ও পরিশোধ" description="স্বয়ংক্রিয় হিসাব ও কাস্টম সারি">
-                  {group.vatVariants.length > 1 && (
+                <Section
+                  title="কর্তন ও পরিশোধ"
+                  description={
+                    group.isVoucherOnly
+                      ? 'খরচ এন্ট্রির পণ্যভিত্তিক কর্তন (স্থির কর্তন আলাদা যোগ করা যাবে)'
+                      : 'স্বয়ংক্রিয় হিসাব ও কাস্টম সারি'
+                  }
+                >
+                  {group.isVoucherOnly && (
+                    <Banner variant="info">
+                      কর্তন খরচ এন্ট্রি থেকে এসেছে। বিল হয় ভাউচার এমাউন্টে; স্থির কর্তন (যেমন নিরাপত্তা জমা) নিচে আলাদা যোগ করলে প্রদেয় বিল (প্রকৃত খরচ) অপরিবর্তিত থাকবে।
+                    </Banner>
+                  )}
+
+                  {group.isMixed && (
+                    <Banner variant="warn">
+                      এই বিলে নতুন (পণ্যভিত্তিক) ও পুরনো খরচ একসাথে আছে। নতুন খরচের কর্তন স্বয়ংক্রিয় থাকবে এবং পুরনো খরচে নিচের ভ্যাট হার প্রযোজ্য হবে।
+                    </Banner>
+                  )}
+
+                  {!group.isVoucherOnly && group.vatVariants.length > 1 && (
                     <div className="space-y-1.5">
                       <div className="text-xs font-semibold text-[var(--text)]">
                         ভ্যাটের ধরন নির্বাচন করুন
@@ -2533,135 +2826,166 @@ export function ExpenseItemsPage() {
                   </div>
 
                   <div className="space-y-2.5">
-                    {group.deductions.map((d, dIdx) => (
-                      <div
-                        key={d.id}
-                        className="p-3 rounded-xl bg-[var(--card)] border border-[var(--line)] space-y-2.5"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                            <div className="sm:col-span-4">
-                              <Field label="কোড">
-                                <TextInput
-                                  type="text"
-                                  value={d.code}
-                                  onChange={(e) =>
-                                    updateCodeDeductions((list) =>
-                                      list.map((row, idx2) =>
-                                        idx2 === dIdx ? { ...row, code: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="কোড"
-                                  aria-label="Deduction code"
-                                  className="tabular-nums"
-                                />
-                              </Field>
+                    {group.deductions.map((d, dIdx) => {
+                      const isLockedProductLine =
+                        (group.isVoucherOnly || group.isMixed) &&
+                        (d.kind === 'it' || d.kind === 'vat');
+
+                      if (isLockedProductLine) {
+                        return (
+                          <div
+                            key={d.id}
+                            className="p-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] flex items-center justify-between gap-3 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-semibold text-[var(--text)] bn">
+                                <span className="tabular-nums text-[var(--accent)] mr-1.5">
+                                  {d.code}
+                                </span>
+                                {d.name}
+                                {typeof d.rate === 'number' ? ` (${d.rate}%)` : ''}
+                              </div>
+                              <div className="text-[11px] text-[var(--muted)] mt-0.5">
+                                খরচ এন্ট্রির পণ্য থেকে স্বয়ংক্রিয়
+                              </div>
                             </div>
-                            <div className="sm:col-span-8">
-                              <Field label="কর্তনের বিবরণ">
-                                <TextInput
-                                  type="text"
-                                  value={d.name}
-                                  onChange={(e) =>
-                                    updateCodeDeductions((list) =>
-                                      list.map((row, idx2) =>
-                                        idx2 === dIdx ? { ...row, name: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="কর্তনের বিবরণ"
-                                  aria-label="Deduction description"
-                                  className="bn"
-                                />
-                              </Field>
+                            <div className="font-bold text-sm tabular-nums text-[var(--text)] shrink-0">
+                              {formatTaka(d.amount)}
                             </div>
                           </div>
+                        );
+                      }
 
-                          {group.deductions.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateCodeDeductions((list) =>
-                                  list.filter((_, idx2) => idx2 !== dIdx)
-                                )
-                              }
-                              aria-label="Remove deduction row"
-                              className="min-h-[44px] min-w-[44px] mt-5 inline-flex items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)] transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-                            >
-                              <Trash2 className="w-4 h-4" aria-hidden="true" />
-                            </button>
-                          )}
-                        </div>
+                      return (
+                        <div
+                          key={d.id}
+                          className="p-3 rounded-xl bg-[var(--card)] border border-[var(--line)] space-y-2.5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                              <div className="sm:col-span-4">
+                                <Field label="কোড">
+                                  <TextInput
+                                    type="text"
+                                    value={d.code}
+                                    onChange={(e) =>
+                                      updateCodeDeductions((list) =>
+                                        list.map((row, idx2) =>
+                                          idx2 === dIdx ? { ...row, code: e.target.value } : row
+                                        )
+                                      )
+                                    }
+                                    placeholder="কোড"
+                                    aria-label="Deduction code"
+                                    className="tabular-nums"
+                                  />
+                                </Field>
+                              </div>
+                              <div className="sm:col-span-8">
+                                <Field label="কর্তনের বিবরণ">
+                                  <TextInput
+                                    type="text"
+                                    value={d.name}
+                                    onChange={(e) =>
+                                      updateCodeDeductions((list) =>
+                                        list.map((row, idx2) =>
+                                          idx2 === dIdx ? { ...row, name: e.target.value } : row
+                                        )
+                                      )
+                                    }
+                                    placeholder="কর্তনের বিবরণ"
+                                    aria-label="Deduction description"
+                                    className="bn"
+                                  />
+                                </Field>
+                              </div>
+                            </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          <Field label="হার %">
-                            <TextInput
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={d.rate ?? ''}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                const nextRate = raw === '' ? null : Number(raw);
-                                updateCodeDeductions((list) =>
-                                  list.map((row, idx2) =>
-                                    idx2 === dIdx
-                                      ? {
-                                          ...row,
-                                          rate: nextRate,
-                                        }
-                                      : row
+                            {(group.deductions.length > 1 || group.isVoucherOnly) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateCodeDeductions((list) =>
+                                    list.filter((_, idx2) => idx2 !== dIdx)
                                   )
-                                );
-                              }}
-                              placeholder="হার %"
-                              aria-label="Deduction rate percent"
-                              className="tabular-nums"
-                            />
-                          </Field>
+                                }
+                                aria-label="Remove deduction row"
+                                className="min-h-[44px] min-w-[44px] mt-5 inline-flex items-center justify-center rounded-xl border border-[var(--border-strong)] bg-[var(--card)] text-[var(--danger-text)] hover:bg-[var(--danger-bg)] transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                              >
+                                <Trash2 className="w-4 h-4" aria-hidden="true" />
+                              </button>
+                            )}
+                          </div>
 
-                          <Field label="টাকা (৳)">
-                            <MoneyInput
-                              value={
-                                editingDeductionAmount?.id === d.id
-                                  ? editingDeductionAmount.raw
-                                  : formatPaisaInput(d.amount)
-                              }
-                              onFocus={() =>
-                                setEditingDeductionAmount({
-                                  id: d.id,
-                                  raw: formatPaisaInput(d.amount),
-                                })
-                              }
-                              onBlur={() => setEditingDeductionAmount(null)}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                setEditingDeductionAmount({ id: d.id, raw });
-                                const nextPaisa = toPaisa(raw);
-                                updateCodeDeductions((list) =>
-                                  list.map((row, idx2) =>
-                                    idx2 === dIdx
-                                      ? {
-                                          ...row,
-                                          rate: null,
-                                          amount:
-                                            Number.isFinite(nextPaisa) && nextPaisa >= 0
-                                              ? nextPaisa
-                                              : 0,
-                                        }
-                                      : row
-                                  )
-                                );
-                              }}
-                              placeholder="0"
-                              aria-label="Deduction amount"
-                              className="text-right"
-                            />
-                          </Field>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <Field label="হার %">
+                              <TextInput
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={d.rate ?? ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const nextRate = raw === '' ? null : Number(raw);
+                                  updateCodeDeductions((list) =>
+                                    list.map((row, idx2) =>
+                                      idx2 === dIdx
+                                        ? {
+                                            ...row,
+                                            rate: nextRate,
+                                          }
+                                        : row
+                                    )
+                                  );
+                                }}
+                                placeholder="হার %"
+                                aria-label="Deduction rate percent"
+                                className="tabular-nums"
+                              />
+                            </Field>
+
+                            <Field label="টাকা (৳)">
+                              <MoneyInput
+                                value={
+                                  editingDeductionAmount?.id === d.id
+                                    ? editingDeductionAmount.raw
+                                    : formatPaisaInput(d.amount)
+                                }
+                                onFocus={() =>
+                                  setEditingDeductionAmount({
+                                    id: d.id,
+                                    raw: formatPaisaInput(d.amount),
+                                  })
+                                }
+                                onBlur={() => setEditingDeductionAmount(null)}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  setEditingDeductionAmount({ id: d.id, raw });
+                                  const nextPaisa = toPaisa(raw);
+                                  updateCodeDeductions((list) =>
+                                    list.map((row, idx2) =>
+                                      idx2 === dIdx
+                                        ? {
+                                            ...row,
+                                            rate: null,
+                                            amount:
+                                              Number.isFinite(nextPaisa) && nextPaisa >= 0
+                                                ? nextPaisa
+                                                : 0,
+                                          }
+                                        : row
+                                    )
+                                  );
+                                }}
+                                placeholder="0"
+                                aria-label="Deduction amount"
+                                className="text-right"
+                              />
+                            </Field>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {group.rateError && <Banner variant="danger">{group.rateError}</Banner>}
@@ -2670,7 +2994,9 @@ export function ExpenseItemsPage() {
                   <div className="p-3 rounded-xl bg-[var(--card)] border border-[var(--line)] space-y-2 text-xs">
                     <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
                       <div>
-                        <div className="text-[var(--muted)]">মূল খরচ</div>
+                        <div className="text-[var(--muted)]">
+                          {group.isVoucherOnly ? 'প্রকৃত খরচ' : 'মূল খরচ'}
+                        </div>
                         <div className="font-semibold tabular-nums">
                           {formatTaka(group.expenseTotal)}
                         </div>
@@ -2682,13 +3008,17 @@ export function ExpenseItemsPage() {
                         </div>
                       </div>
                       <div>
-                        <div className="text-[var(--muted)]">ভ্যাট ({group.vatRate}%)</div>
+                        <div className="text-[var(--muted)]">
+                          {group.isVoucherOnly ? 'মোট ভ্যাট' : `ভ্যাট (${group.vatRate}%)`}
+                        </div>
                         <div className="font-semibold tabular-nums">
                           {formatTaka(group.vatAmount)}
                         </div>
                       </div>
                       <div>
-                        <div className="text-[var(--muted)]">আয়কর ({group.itRate}%)</div>
+                        <div className="text-[var(--muted)]">
+                          {group.isVoucherOnly ? 'মোট আয়কর' : `আয়কর (${group.itRate}%)`}
+                        </div>
                         <div className="font-semibold tabular-nums">
                           {formatTaka(group.itAmount)}
                         </div>
@@ -2706,10 +3036,16 @@ export function ExpenseItemsPage() {
                         </div>
                       </div>
                     </div>
-                    {group.totalPercentRate > 0 && !group.rateError && (
+                    {!group.isVoucherOnly && group.totalPercentRate > 0 && !group.rateError && (
                       <div className="text-[11px] text-[var(--muted)] tabular-nums border-t border-[var(--line)] pt-1.5">
                         হিসাব: ({formatNumberIN(group.expenseTotal)} × 100) / (100 −{' '}
                         {group.totalPercentRate}%) = {formatTaka(group.grossAmount)}
+                      </div>
+                    )}
+                    {group.isVoucherOnly && !group.rateError && (
+                      <div className="text-[11px] text-[var(--muted)] tabular-nums border-t border-[var(--line)] pt-1.5">
+                        বাজেট থেকে কাটবে {formatTaka(group.grossAmount)} · প্রদেয় বিল (ক−খ) ={' '}
+                        {formatTaka(group.netPayable)}
                       </div>
                     )}
                   </div>
@@ -2746,6 +3082,75 @@ export function ExpenseItemsPage() {
           payeeText: payeeTextInput,
         }}
       />
+
+      {(() => {
+        if (!productsModalState) return null;
+        let code = '';
+        let headLabel = '';
+        let initialProducts: ExpenseProduct[] = [];
+        let mode: 'edit' | 'readonly' = 'edit';
+
+        if (productsModalState.kind === 'entry') {
+          const r = rows[productsModalState.rowIndex];
+          if (!r) return null;
+          code = r.economicCode.trim();
+          const h = code
+            ? getHead(code, { headName: r.headName, headNameBn: r.headNameBn })
+            : null;
+          headLabel = h ? h.displayName : '';
+          initialProducts = r.products;
+          mode = 'edit';
+        } else if (productsModalState.kind === 'edit' && editingItem) {
+          code = editCode.trim();
+          const h = code
+            ? getHead(code, { headName: editHeadName, headNameBn: editHeadNameBn })
+            : null;
+          headLabel = h ? h.displayName : '';
+          initialProducts = editProducts;
+          mode = 'edit';
+        } else if (productsModalState.kind === 'view') {
+          code = productsModalState.item.economicCode;
+          const h = getHead(code, {
+            headName: productsModalState.item.headName,
+            headNameBn: productsModalState.item.headNameBn,
+          });
+          headLabel = h.displayName;
+          initialProducts = productsModalState.item.products || [];
+          mode = 'readonly';
+        }
+
+        const rates = code ? resolveCodeRates(code) : { incomeTax: 0, vat: [{ rate: 0 }] };
+        const defaultVatRate = rates.vat[0]?.rate ?? 0;
+        const defaultItRate = rates.incomeTax ?? 0;
+
+        return (
+          <ProductsModal
+            open={Boolean(productsModalState)}
+            onClose={() => setProductsModalState(null)}
+            mode={mode}
+            officeId={realOfficeId}
+            economicCode={code}
+            economicHeadLabel={headLabel}
+            defaultVatRate={defaultVatRate}
+            defaultItRate={defaultItRate}
+            initialProducts={initialProducts}
+            sessionRateCache={sessionRateCacheRef.current}
+            onSave={(nextProducts) => {
+              if (productsModalState.kind === 'entry') {
+                updateRow(productsModalState.rowIndex, { products: nextProducts });
+                if (entryFieldError?.index === productsModalState.rowIndex) {
+                  setEntryFieldError(null);
+                }
+              } else if (productsModalState.kind === 'edit') {
+                setEditProducts(nextProducts);
+                if (editFieldError?.field === 'products') {
+                  setEditFieldError(null);
+                }
+              }
+            }}
+          />
+        );
+      })()}
     </Layout>
   );
 }

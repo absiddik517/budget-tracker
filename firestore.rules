@@ -97,11 +97,35 @@ service cloud.firestore {
             'tr21FontSize',
             'tr21P1S3Mode',
             'tr21VoucherLabel',
+            'tr21P1S3IntroTemplate',
+            'tr21Margins',
             'tr21Clauses',
             'updatedAt',
             'updatedBy'
           ])
         );
+
+      match /productRates/{rateKey} {
+        allow get, list: if isSuperAdmin() || isOfficeMemberStrict(officeId);
+        allow create, update: if (isSuperAdmin() || isOfficeMemberStrict(officeId))
+          && rateKey.size() > 0
+          && rateKey.size() <= 300
+          && request.resource.data.keys().hasAll(['name', 'vatRate', 'itRate', 'lastEconomicCode', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['name', 'vatRate', 'itRate', 'lastEconomicCode', 'updatedAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 240
+          && request.resource.data.vatRate is number
+          && request.resource.data.vatRate >= 0
+          && request.resource.data.vatRate <= 100
+          && request.resource.data.itRate is number
+          && request.resource.data.itRate >= 0
+          && request.resource.data.itRate <= 100
+          && request.resource.data.lastEconomicCode is string
+          && request.resource.data.lastEconomicCode.size() <= 30
+          && request.resource.data.updatedAt is timestamp;
+        allow delete: if isSuperAdmin();
+      }
     }
 
     // Users collection (never deleted, only disabled)
@@ -332,18 +356,37 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    function isValidOptionalVoucherExpense(data) {
+      return !('amountBasis' in data)
+        || (
+          data.amountBasis == 'voucher'
+          && data.products is list
+          && data.products.size() >= 1
+          && data.products.size() <= 100
+          && data.baseTotal is int
+          && data.baseTotal > 0
+          && data.vatTotal is int
+          && data.vatTotal >= 0
+          && data.itTotal is int
+          && data.itTotal >= 0
+          && data.deductionTotal is int
+          && data.deductionTotal >= 0
+        );
+    }
+
     // Office-scoped Expense Items
     match /expenseItems/{itemId} {
       allow get: if isActiveUser() && (resource == null || isOfficeMemberOrAdmin(resource.data.get('officeId', null)));
       allow list: if isOfficeMemberOrAdmin(resource.data.officeId);
 
-      allow create: if (isSuperAdmin() && request.resource.data.deleted == false)
+      allow create: if ((isSuperAdmin() && request.resource.data.deleted == false)
         || (
           isOfficeMemberStrict(request.resource.data.officeId)
           && actorUid(request.resource.data.createdBy) == request.auth.uid
           && request.resource.data.status == 'listed'
           && request.resource.data.deleted == false
-        );
+        ))
+        && isValidOptionalVoucherExpense(request.resource.data);
 
       allow update: if (
           // Super Admin audited corrections (e.g. reverting billed item when soft-deleting bill)
@@ -378,7 +421,7 @@ service cloud.firestore {
           && request.resource.data.status == 'listed'
           && (isOfficeDdo(resource.data.officeId) || actorUid(resource.data.get('createdBy', null)) == request.auth.uid)
           && (
-            request.resource.data.deleted == false
+            (request.resource.data.deleted == false && isValidOptionalVoucherExpense(request.resource.data))
             || (
               request.resource.data.deleted == true
               && request.resource.data.diff(resource.data).affectedKeys()

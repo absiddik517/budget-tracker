@@ -223,6 +223,28 @@ export interface ResponsibleEmployee {
   designation: string;
 }
 
+export interface ExpenseProduct {
+  id: string;
+  name: string;
+  actualAmount: number; // integer paisa (x)
+  voucherAmount: number; // integer paisa (y)
+  vatRate: number; // %
+  itRate: number; // %
+  vatAmount: number; // integer paisa
+  itAmount: number; // integer paisa
+  deductionAmount: number; // integer paisa (vatAmount + itAmount)
+  lastEditedField?: 'x' | 'y';
+}
+
+export interface ProductRateDoc {
+  id: string;
+  name: string;
+  vatRate: number;
+  itRate: number;
+  lastEconomicCode: string;
+  updatedAt?: Timestamp | null;
+}
+
 export type ExpenseItemStatus = 'listed' | 'billed';
 
 export interface ExpenseItemDoc extends BaseAuditFields {
@@ -234,7 +256,13 @@ export interface ExpenseItemDoc extends BaseAuditFields {
   headNameBn?: string;
   date: string; // YYYY-MM-DD
   description: string;
-  amount: number; // integer paisa (gross only, no VAT/IT)
+  amount: number; // integer paisa (legacy: net expense; amountBasis='voucher': voucher sum y)
+  amountBasis?: 'voucher';
+  products?: ExpenseProduct[];
+  baseTotal?: number; // integer paisa (sum of actualAmount x)
+  vatTotal?: number; // integer paisa
+  itTotal?: number; // integer paisa
+  deductionTotal?: number; // integer paisa
   responsibleEmployee: ResponsibleEmployee;
   status: ExpenseItemStatus;
   billId: string | null;
@@ -249,6 +277,12 @@ export interface BillItemSnapshot {
   date: string;
   description: string;
   amount: number; // integer paisa
+  amountBasis?: 'voucher';
+  products?: ExpenseProduct[];
+  baseTotal?: number;
+  vatTotal?: number;
+  itTotal?: number;
+  deductionTotal?: number;
   responsibleEmployee: ResponsibleEmployee;
 }
 
@@ -293,6 +327,7 @@ export interface BillDoc extends BaseAuditFields {
   deductions?: BillDeductionLine[];
   itemIds: string[];
   items: BillItemSnapshot[];
+  amountBasis?: 'voucher' | 'mixed';
   grossAmount: number; // integer paisa
   vatRate: number; // snapshot %
   itRate: number; // snapshot %

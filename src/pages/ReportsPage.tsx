@@ -435,13 +435,23 @@ export function ReportsPage() {
             headName: item.headName,
             headNameBn: item.headNameBn,
           });
+          const isVoucher = item.amountBasis === 'voucher';
+          const actualPaisa = isVoucher ? item.baseTotal ?? 0 : item.amount;
+          const deductionPaisa = isVoucher ? item.deductionTotal ?? 0 : 0;
           return {
             Date: formatDateDisplay(item.date),
             'ব্যয়ের খাত': `${item.economicCode} ${head.displayName}`,
             Description: item.description,
             'Responsible Employee': item.responsibleEmployee.name,
             Designation: item.responsibleEmployee.designation,
+            'প্রকৃত খরচ (BDT)': fromPaisa(actualPaisa),
+            'কর্তন (BDT)': fromPaisa(deductionPaisa),
             'Amount (BDT)': fromPaisa(item.amount),
+            'পণ্য সমূহ': isVoucher
+              ? (item.products || [])
+                  .map((p) => `${p.name} (ভ্যাট ${p.vatRate}%, আয়কর ${p.itRate}%)`)
+                  .join('; ')
+              : '',
             Status: item.status,
           };
         });
@@ -1371,6 +1381,7 @@ export function ReportsPage() {
                       headName: item.headName,
                       headNameBn: item.headNameBn,
                     });
+                    const isVoucher = item.amountBasis === 'voucher';
                     return (
                       <div key={item.id} className="p-3.5 space-y-1.5 text-xs">
                         <div className="flex items-start justify-between gap-2">
@@ -1385,6 +1396,13 @@ export function ReportsPage() {
                           </span>{' '}
                           <span className="bn">{head.displayName}</span>
                         </div>
+                        {isVoucher && (
+                          <div className="text-[11px] text-[var(--muted)] bn tabular-nums">
+                            প্রকৃত {formatNumberIN(item.baseTotal ?? 0)} · কর্তন{' '}
+                            {formatNumberIN(item.deductionTotal ?? 0)}
+                            {item.products?.length ? ` · ${item.products.length}টি পণ্য` : ''}
+                          </div>
+                        )}
                         <div className="flex justify-between pt-1 border-t border-[var(--line)]/60">
                           <span className="text-[var(--muted)]">
                             {formatDateDisplay(item.date)} · {item.responsibleEmployee.name}
@@ -1407,7 +1425,9 @@ export function ReportsPage() {
                       <th className="py-3 px-4 font-medium">ব্যয়ের খাত</th>
                       <th className="py-3 px-4 font-medium">Description</th>
                       <th className="py-3 px-4 font-medium">Responsible</th>
-                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">Amount</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">প্রকৃত (৳)</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">কর্তন (৳)</th>
+                      <th className="py-3 px-4 font-medium text-right whitespace-nowrap">মোট (৳)</th>
                       <th className="py-3 px-4 font-medium whitespace-nowrap">Status</th>
                     </tr>
                   </thead>
@@ -1415,38 +1435,85 @@ export function ReportsPage() {
                     {filteredExpenseItems.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={8}
                           className="py-8 px-4 text-center text-sm text-[var(--muted)]"
                         >
                           {t('noDataFound')}
                         </td>
                       </tr>
                     ) : (
-                      filteredExpenseItems.map((item) => {
-                        const head = getHead(item.economicCode, {
-                          headName: item.headName,
-                          headNameBn: item.headNameBn,
-                        });
-                        return (
-                          <tr key={item.id}>
-                            <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
-                              {formatDateDisplay(item.date)}
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className="tabular-nums font-medium">{item.economicCode}</span>{' '}
-                              <span className="bn">{head.displayName}</span>
-                            </td>
-                            <td className="py-3 px-4 bn">{item.description}</td>
-                            <td className="py-3 px-4 bn">{item.responsibleEmployee.name}</td>
-                            <td className="py-3 px-4 text-right tabular-nums font-semibold">
-                              {formatNumberIN(item.amount)}
-                            </td>
-                            <td className="py-3 px-4">
-                              <StatusChip variant={item.status}>{t(item.status)}</StatusChip>
-                            </td>
-                          </tr>
-                        );
-                      })
+                      <>
+                        {filteredExpenseItems.map((item) => {
+                          const head = getHead(item.economicCode, {
+                            headName: item.headName,
+                            headNameBn: item.headNameBn,
+                          });
+                          const isVoucher = item.amountBasis === 'voucher';
+                          const actualAmt = isVoucher ? item.baseTotal ?? 0 : item.amount;
+                          const dedAmt = isVoucher ? item.deductionTotal ?? 0 : 0;
+                          return (
+                            <tr key={item.id}>
+                              <td className="py-3 px-4 tabular-nums whitespace-nowrap text-[var(--muted)]">
+                                {formatDateDisplay(item.date)}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="tabular-nums font-medium">{item.economicCode}</span>{' '}
+                                <span className="bn">{head.displayName}</span>
+                              </td>
+                              <td className="py-3 px-4 bn">
+                                <div>{item.description}</div>
+                                {isVoucher && item.products && item.products.length > 0 && (
+                                  <div className="text-[11px] text-[var(--muted)] mt-0.5">
+                                    {item.products.map((p) => p.name).join(', ')}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 bn">{item.responsibleEmployee.name}</td>
+                              <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                                {formatNumberIN(actualAmt)}
+                              </td>
+                              <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap text-[var(--muted)]">
+                                {formatNumberIN(dedAmt)}
+                              </td>
+                              <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap font-semibold">
+                                {formatNumberIN(item.amount)}
+                              </td>
+                              <td className="py-3 px-4">
+                                <StatusChip variant={item.status}>{t(item.status)}</StatusChip>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        <tr className="font-bold bg-[var(--surface-subtle)]">
+                          <td colSpan={4} className="py-3 px-4">
+                            Total ({filteredExpenseItems.length} items)
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                            {formatNumberIN(
+                              filteredExpenseItems.reduce(
+                                (s, it) =>
+                                  s + (it.amountBasis === 'voucher' ? it.baseTotal ?? 0 : it.amount),
+                                0
+                              )
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                            {formatNumberIN(
+                              filteredExpenseItems.reduce(
+                                (s, it) =>
+                                  s + (it.amountBasis === 'voucher' ? it.deductionTotal ?? 0 : 0),
+                                0
+                              )
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
+                            {formatNumberIN(
+                              filteredExpenseItems.reduce((s, it) => s + it.amount, 0)
+                            )}
+                          </td>
+                          <td className="py-3 px-4" />
+                        </tr>
+                      </>
                     )}
                   </tbody>
                 </table>

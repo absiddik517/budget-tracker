@@ -379,12 +379,14 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
   if (tab === 'expenseItems') {
     const items = payload.expenseItems || [];
     const columns: TableColumn[] = [
-      { label: 'Date', align: 'left', width: '11%' },
-      { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
-      { label: 'Description', align: 'left', width: '25%' },
-      { label: 'Responsible', align: 'left', width: '16%' },
-      { label: 'Amount (৳)', align: 'right', width: '11%' },
-      { label: 'Status', align: 'left', width: '9%' },
+      { label: 'Date', align: 'left', width: '10%' },
+      { label: 'ব্যয়ের খাত', align: 'left', width: '23%' },
+      { label: 'Description', align: 'left', width: '23%' },
+      { label: 'Responsible', align: 'left', width: '14%' },
+      { label: 'প্রকৃত (৳)', align: 'right', width: '8%' },
+      { label: 'কর্তন (৳)', align: 'right', width: '7%' },
+      { label: 'মোট (৳)', align: 'right', width: '8%' },
+      { label: 'Status', align: 'left', width: '7%' },
     ];
 
     const rowsHtml = items.map((item) => {
@@ -395,11 +397,22 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
       const resp = item.responsibleEmployee.designation
         ? `${item.responsibleEmployee.name} (${item.responsibleEmployee.designation})`
         : item.responsibleEmployee.name;
+      const isVoucher = item.amountBasis === 'voucher';
+      const actualAmt = isVoucher ? item.baseTotal ?? 0 : item.amount;
+      const dedAmt = isVoucher ? item.deductionTotal ?? 0 : 0;
+      const prodLine =
+        isVoucher && item.products && item.products.length > 0
+          ? `<div style="font-size: 10.5px; color: #55655F; margin-top: 2px;">${esc(
+              item.products.map((p) => p.name).join(', ')
+            )}</div>`
+          : '';
       return `<tr>
         <td style="${tdStyle('left', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatDateDisplay(item.date))}</td>
         <td style="${tdStyle('left')}">${buildHeadCell(item.economicCode, resolved.headName, resolved.headNameBn)}</td>
-        <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(item.description)}</td>
+        <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}"><div>${esc(item.description)}</div>${prodLine}</td>
         <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(resp)}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(actualAmt))}</td>
+        <td style="${tdStyle('right', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(dedAmt))}</td>
         <td style="${tdStyle('right', 'white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(item.amount))}</td>
         <td style="${tdStyle('left', 'text-transform: capitalize;')}">${esc(item.status)}</td>
       </tr>`;
@@ -407,13 +420,23 @@ function buildReportTable(payload: ExportReportPdfPayload): BuiltReportTable {
 
     if (rowsHtml.length === 0) {
       rowsHtml.push(
-        `<tr><td colspan="6" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No expense items match your filter.</td></tr>`
+        `<tr><td colspan="8" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No expense items match your filter.</td></tr>`
       );
     } else {
+      const totalBase = items.reduce(
+        (s, i) => s + (i.amountBasis === 'voucher' ? i.baseTotal ?? 0 : i.amount),
+        0
+      );
+      const totalDed = items.reduce(
+        (s, i) => s + (i.amountBasis === 'voucher' ? i.deductionTotal ?? 0 : 0),
+        0
+      );
       const totalAmt = items.reduce((s, i) => s + i.amount, 0);
       rowsHtml.push(
         `<tr style="background-color: #EDF2EF;">
           <td colspan="4" style="${tdStyle('left', 'font-weight: 700;')}">Total (${items.length} items)</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(totalBase))}</td>
+          <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(totalDed))}</td>
           <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(totalAmt))}</td>
           <td style="${tdStyle('left')}"></td>
         </tr>`
@@ -728,12 +751,14 @@ export async function exportExpenseItemsPdf(params: {
   ) => { headName: string; headNameBn: string };
 }): Promise<SaveAndShareOutcome> {
   const columns: TableColumn[] = [
-    { label: 'Date', align: 'left', width: '11%' },
-    { label: 'ব্যয়ের খাত', align: 'left', width: '28%' },
-    { label: 'Description', align: 'left', width: '25%' },
-    { label: 'Responsible', align: 'left', width: '16%' },
-    { label: 'Amount (৳)', align: 'right', width: '11%' },
-    { label: 'Status', align: 'left', width: '9%' },
+    { label: 'Date', align: 'left', width: '10%' },
+    { label: 'ব্যয়ের খাত', align: 'left', width: '23%' },
+    { label: 'Description', align: 'left', width: '23%' },
+    { label: 'Responsible', align: 'left', width: '14%' },
+    { label: 'প্রকৃত (৳)', align: 'right', width: '8%' },
+    { label: 'কর্তন (৳)', align: 'right', width: '7%' },
+    { label: 'মোট (৳)', align: 'right', width: '8%' },
+    { label: 'Status', align: 'left', width: '7%' },
   ];
 
   const rowsHtml = params.items.map((item) => {
@@ -744,11 +769,22 @@ export async function exportExpenseItemsPdf(params: {
     const resp = item.responsibleEmployee.designation
       ? `${item.responsibleEmployee.name} (${item.responsibleEmployee.designation})`
       : item.responsibleEmployee.name;
+    const isVoucher = item.amountBasis === 'voucher';
+    const actualAmt = isVoucher ? item.baseTotal ?? 0 : item.amount;
+    const dedAmt = isVoucher ? item.deductionTotal ?? 0 : 0;
+    const prodLine =
+      isVoucher && item.products && item.products.length > 0
+        ? `<div style="font-size: 10.5px; color: #55655F; margin-top: 2px;">${esc(
+            item.products.map((p) => p.name).join(', ')
+          )}</div>`
+        : '';
     return `<tr>
       <td style="${tdStyle('left', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatDateDisplay(item.date))}</td>
       <td style="${tdStyle('left')}">${buildHeadCell(item.economicCode, resolved.headName, resolved.headNameBn)}</td>
-      <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(item.description)}</td>
+      <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}"><div>${esc(item.description)}</div>${prodLine}</td>
       <td style="${tdStyle('left', "font-family: 'Nikosh', 'Noto Sans Bengali', sans-serif;")}">${esc(resp)}</td>
+      <td style="${tdStyle('right', 'white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(actualAmt))}</td>
+      <td style="${tdStyle('right', 'white-space: nowrap; color: #55655F; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(dedAmt))}</td>
       <td style="${tdStyle('right', 'white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(item.amount))}</td>
       <td style="${tdStyle('left', 'text-transform: capitalize;')}">${esc(item.status)}</td>
     </tr>`;
@@ -756,13 +792,23 @@ export async function exportExpenseItemsPdf(params: {
 
   if (rowsHtml.length === 0) {
     rowsHtml.push(
-      `<tr><td colspan="6" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No expense items found.</td></tr>`
+      `<tr><td colspan="8" style="${tdStyle('left', 'text-align: center; padding: 24px; color: #55655F;')}">No expense items found.</td></tr>`
     );
   } else {
+    const totalBase = params.items.reduce(
+      (s, i) => s + (i.amountBasis === 'voucher' ? i.baseTotal ?? 0 : i.amount),
+      0
+    );
+    const totalDed = params.items.reduce(
+      (s, i) => s + (i.amountBasis === 'voucher' ? i.deductionTotal ?? 0 : 0),
+      0
+    );
     const total = params.items.reduce((s, i) => s + i.amount, 0);
     rowsHtml.push(
       `<tr style="background-color: #EDF2EF;">
         <td colspan="4" style="${tdStyle('left', 'font-weight: 700;')}">Total (${params.items.length} items)</td>
+        <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(totalBase))}</td>
+        <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(totalDed))}</td>
         <td style="${tdStyle('right', 'font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;')}">${esc(formatNumberIN(total))}</td>
         <td style="${tdStyle('left')}"></td>
       </tr>`

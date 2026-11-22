@@ -7,6 +7,7 @@ export interface RepeatCardProps {
   index?: number;
   title?: React.ReactNode;
   subtitle?: React.ReactNode;
+  extraActions?: React.ReactNode;
   onRemove?: () => void;
   canRemove?: boolean;
   removeLabel?: string;
@@ -18,6 +19,7 @@ export function RepeatCard({
   index,
   title,
   subtitle,
+  extraActions,
   onRemove,
   canRemove = true,
   removeLabel,
@@ -47,16 +49,21 @@ export function RepeatCard({
             <div className="text-xs text-[var(--muted)] truncate mt-0.5">{subtitle}</div>
           )}
         </div>
-        {onRemove && canRemove && (
-          <button
-            type="button"
-            onClick={onRemove}
-            aria-label={resolvedRemoveLabel}
-            className="min-h-[44px] px-3 -mr-1.5 inline-flex items-center justify-center gap-1.5 rounded-xl border-0 bg-transparent text-sm font-semibold text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/60 transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
-          >
-            <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>{removeShortText}</span>
-          </button>
+        {(extraActions || (onRemove && canRemove)) && (
+          <div className="flex items-center gap-1 shrink-0">
+            {extraActions}
+            {onRemove && canRemove && (
+              <button
+                type="button"
+                onClick={onRemove}
+                aria-label={resolvedRemoveLabel}
+                className="min-h-[44px] px-3 -mr-1.5 inline-flex items-center justify-center gap-1.5 rounded-xl border-0 bg-transparent text-sm font-semibold text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/60 transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+              >
+                <Trash2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>{removeShortText}</span>
+              </button>
+            )}
+          </div>
         )}
       </div>
 

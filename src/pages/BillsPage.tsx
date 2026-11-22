@@ -53,6 +53,22 @@ function billStatusToChip(status: BillStatus): ChipVariant {
   }
 }
 
+function formatBillRateForExcel(bill: BillDoc, kind: 'vat' | 'it'): string | number {
+  if (bill.amountBasis === 'voucher' || bill.amountBasis === 'mixed') {
+    const lines = (bill.deductions || []).filter(
+      (d) => d.kind === kind && typeof d.rate === 'number' && Number.isFinite(d.rate)
+    );
+    if (lines.length > 1) {
+      return lines.map((l) => `${l.rate}%`).join(', ');
+    }
+    if (lines.length === 1 && typeof lines[0].rate === 'number') {
+      return lines[0].rate;
+    }
+    return 'পণ্যভিত্তিক';
+  }
+  return kind === 'vat' ? bill.vatRate : bill.itRate;
+}
+
 export function BillsPage() {
   const { isSuperAdmin } = useAuth();
   const navigate = useNavigate();
@@ -306,9 +322,9 @@ export function BillsPage() {
           অনুমোদনকারী: b.approvedBy ? formatApprovedByLine(b.approvedBy, officesById) : '',
           'Items Count': b.items.length,
           'Gross (BDT)': fromPaisa(b.grossAmount),
-          'VAT %': b.vatRate,
+          'VAT %': formatBillRateForExcel(b, 'vat'),
           'VAT (BDT)': fromPaisa(b.vatAmount),
-          'IT %': b.itRate,
+          'IT %': formatBillRateForExcel(b, 'it'),
           'IT (BDT)': fromPaisa(b.itAmount),
           'Total Deduction (BDT)': fromPaisa(b.totalDeduction),
           'Net Payable (BDT)': fromPaisa(b.netPayable),
@@ -549,6 +565,7 @@ export function BillsPage() {
                           </div>
                           <div className="text-xs text-[var(--muted)] mt-0.5 tabular-nums">
                             {formatDateDisplay(b.date)} · {b.items.length}টি আইটেম
+                            {b.amountBasis === 'voucher' ? ' · পণ্যভিত্তিক হার' : ''}
                           </div>
                           <div className="text-sm font-medium text-[var(--text)] mt-1 break-words">
                             <span className="tabular-nums font-semibold">{b.economicCode}</span>{' '}
@@ -678,7 +695,14 @@ export function BillsPage() {
                               ` · ✓ ${formatApprovedByLine(b.approvedBy, officesById)}`}
                           </div>
                         </td>
-                        <td className="py-3 px-4 text-right tabular-nums">{b.items.length}</td>
+                        <td className="py-3 px-4 text-right tabular-nums">
+                          <div>{b.items.length}</div>
+                          {b.amountBasis === 'voucher' && (
+                            <div className="text-[10px] text-[var(--muted)] bn whitespace-nowrap">
+                              পণ্যভিত্তিক
+                            </div>
+                          )}
+                        </td>
                         <td className="py-3 px-4 text-right tabular-nums whitespace-nowrap">
                           {formatNumberIN(b.grossAmount)}
                         </td>

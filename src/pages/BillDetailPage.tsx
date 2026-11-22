@@ -24,6 +24,7 @@ import { Timeline, type TimelineStep } from '../components/Timeline';
 import { ActivityList } from '../components/ActivityList';
 import { Banner, Field, Select, Textarea, focusFirstInvalidField } from '../components/form';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
+import { ProductsModal } from '../components/ProductsModal';
 import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -49,6 +50,7 @@ import { formatDateDisplay } from '../lib/dates';
 import {
   approveBillTx,
   cancelApprovedBillTx,
+  computeBillFinancialsFromItems,
   correctApprovedBillTx,
   deleteDraftBill,
   rejectBillTx,
@@ -58,7 +60,6 @@ import {
 } from '../lib/firestoreOps';
 import {
   calcPercentageAmount,
-  computeGrossedUpBill,
   formatPaisaInput,
   formatTaka,
   toPaisa,
@@ -76,7 +77,7 @@ import {
 } from '../lib/tr21Defaults';
 import { toBanglaDigits } from '../lib/banglaFormat';
 import { exportTr21Docx, exportTr21Pdf, printTr21Form } from '../utils/exportTr21';
-import type { BillDeductionLine, BillDoc, BillStatus } from '../types';
+import type { BillDeductionLine, BillDoc, BillItemSnapshot, BillStatus } from '../types';
 
 function billStatusToChip(status: BillStatus): ChipVariant {
   switch (status) {
@@ -247,9 +248,10 @@ export function BillDetailPage() {
   const [editDeductions, setEditDeductions] = useState<BillDeductionLine[]>([]);
   const [savingDraftEdit, setSavingDraftEdit] = useState(false);
 
-  // T.R. 21 Preview & direct export
+  // T.R. 21 Preview & direct export & Readonly product breakdown modal
   const [tr21PreviewOpen, setTr21PreviewOpen] = useState(false);
   const [tr21Busy, setTr21Busy] = useState<'print' | 'pdf' | 'docx' | null>(null);
+  const [viewProductsItem, setViewProductsItem] = useState<BillItemSnapshot | null>(null);
 
   // Workflow Modals
   const [acting, setActing] = useState(false);
@@ -343,8 +345,8 @@ export function BillDetailPage() {
 
     if (hasItems) {
       try {
-        const calc = computeGrossedUpBill({
-          expenseTotalPaisa: billExpenseTotal,
+        const calc = computeBillFinancialsFromItems({
+          items: bill.items,
           vatRate: variant.rate,
           itRate: billRates.incomeTax,
           customDeductions: editDeductions.length > 0 ? editDeductions : undefined,
@@ -355,7 +357,7 @@ export function BillDetailPage() {
           grossAmount: calc.grossAmount,
           vatRate: calc.effectiveVatRate,
           itRate: calc.effectiveItRate,
-          totalPercentRate: calc.totalPercentRate,
+          totalPercentRate: 0,
           deductions: calc.deductions,
           vatAmt: calc.vatAmount,
           itAmt: calc.itAmount,
@@ -903,6 +905,8 @@ export function BillDetailPage() {
   const isDraftEditable = bill.status === 'draft' && canModifyDraft(bill);
   const isSuperEditing = bill.status === 'approved' && canSuperCorrect && superCorrectMode === 'edit';
   const showEditor = (isDraftEditable && editorOpen) || isSuperEditing;
+  const isVoucherBill = bill.amountBasis === 'voucher';
+  const isMixedBill = bill.amountBasis === 'mixed';
 
   const activeGross =
     bill.status === 'draft' && editorOpen && previewDraftRate
@@ -1268,25 +1272,49 @@ export function BillDetailPage() {
                 </span>
               </div>
               <div className="divide-y divide-[var(--line)]">
-                {bill.items.map((it) => (
-                  <div key={it.id} className="p-3.5 md:px-4 flex items-start justify-between gap-3 text-xs sm:text-sm">
-                    <div className="min-w-0">
-                      <div className="font-medium bn text-[var(--text)] break-words">
-                        {it.description}
+                {bill.items.map((it) => {
+                  const hasProducts =
+                    it.amountBasis === 'voucher' && Array.isArray(it.products) && it.products.length > 0;
+                  return (
+                    <div key={it.id} className="p-3.5 md:px-4 flex items-start justify-between gap-3 text-xs sm:text-sm">
+                      <div className="min-w-0 space-y-1">
+                        <div className="font-medium bn text-[var(--text)] break-words">
+                          {it.description}
+                        </div>
+                        <div className="text-xs text-[var(--muted)]">
+                          <span className="tabular-nums">{formatDateDisplay(it.date)}</span> ·{' '}
+                          <span className="bn">{it.responsibleEmployee.name}</span>
+                          {it.responsibleEmployee.designation
+                            ? ` (${it.responsibleEmployee.designation})`
+                            : ''}
+                        </div>
+                        {hasProducts && (
+                          <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-[var(--muted)]">
+                            <span className="tabular-nums">
+                              প্রকৃত {formatTaka(it.baseTotal ?? 0)} · কর্তন{' '}
+                              {formatTaka(it.deductionTotal ?? 0)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setViewProductsItem(it)}
+                              className="px-2 py-0.5 rounded-md border border-[var(--line)] bg-[var(--surface-subtle)] hover:border-[var(--accent)] hover:text-[var(--accent)] text-[11px] font-semibold bn transition-colors"
+                            >
+                              ব্যয় সমূহ ({it.products!.length}টি)
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      <div className="text-xs text-[var(--muted)] mt-0.5">
-                        <span className="tabular-nums">{formatDateDisplay(it.date)}</span> ·{' '}
-                        <span className="bn">{it.responsibleEmployee.name}</span>
-                        {it.responsibleEmployee.designation
-                          ? ` (${it.responsibleEmployee.designation})`
-                          : ''}
+                      <div className="text-right shrink-0">
+                        <div className="font-semibold tabular-nums text-[var(--text)]">
+                          {formatTaka(it.amount)}
+                        </div>
+                        {hasProducts && (
+                          <div className="text-[10px] text-[var(--muted)] bn">ভাউচার মোট</div>
+                        )}
                       </div>
                     </div>
-                    <div className="font-semibold tabular-nums shrink-0 text-[var(--text)]">
-                      {formatTaka(it.amount)}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 <div className="px-3.5 py-2.5 md:px-4 bg-[var(--surface-subtle)] flex items-center justify-between text-xs font-semibold">
                   <span className="text-[var(--muted)]">{t('grossTotalRow')}</span>
                   <span className="tabular-nums text-[var(--text)]">
@@ -1408,32 +1436,40 @@ export function BillDetailPage() {
                     </div>
                     <div>
                       <label className="block text-[11px] text-[var(--muted)] mb-1">
-                        ভ্যাটের ধরন ({previewDraftRate?.vatRate ?? bill.vatRate}%)
+                        {isVoucherBill
+                          ? 'কর্তনের ধরন'
+                          : `ভ্যাটের ধরন (${previewDraftRate?.vatRate ?? bill.vatRate}%)`}
                       </label>
-                      <Select
-                        modalTitle="ভ্যাটের ধরন নির্বাচন করুন"
-                        searchable={false}
-                        clearable={false}
-                        value={editDraftVariantKey}
-                        onChange={(e) => {
-                          const key = e.target.value;
-                          setEditDraftVariantKey(key);
-                          const chosen =
-                            billRates.vat.find((v) => v.key === key) || billRates.vat[0];
-                          if (chosen) {
-                            setEditDeductions((prev) =>
-                              prev.map((d) =>
-                                d.kind === 'vat' ? { ...d, rate: chosen.rate } : d
-                              )
-                            );
-                          }
-                        }}
-                        options={billRates.vat.map((v) => ({
-                          value: v.key,
-                          label: v.label,
-                          metaRight: `${v.rate}%`,
-                        }))}
-                      />
+                      {isVoucherBill ? (
+                        <div className="w-full min-h-[42px] px-3 rounded-lg border border-[var(--line)] bg-[var(--card)]/70 flex items-center text-xs font-medium text-[var(--muted)] bn">
+                          পণ্যভিত্তিক হার (খরচ এন্ট্রি থেকে)
+                        </div>
+                      ) : (
+                        <Select
+                          modalTitle="ভ্যাটের ধরন নির্বাচন করুন"
+                          searchable={false}
+                          clearable={false}
+                          value={editDraftVariantKey}
+                          onChange={(e) => {
+                            const key = e.target.value;
+                            setEditDraftVariantKey(key);
+                            const chosen =
+                              billRates.vat.find((v) => v.key === key) || billRates.vat[0];
+                            if (chosen) {
+                              setEditDeductions((prev) =>
+                                prev.map((d) =>
+                                  d.kind === 'vat' ? { ...d, rate: chosen.rate } : d
+                                )
+                              );
+                            }
+                          }}
+                          options={billRates.vat.map((v) => ({
+                            value: v.key,
+                            label: v.label,
+                            metaRight: `${v.rate}%`,
+                          }))}
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -1597,16 +1633,32 @@ export function BillDetailPage() {
                       </div>
                     </div>
 
+                    {(isVoucherBill || isMixedBill) && (
+                      <p className="text-[11px] text-[var(--muted)] bn leading-relaxed">
+                        {isVoucherBill
+                          ? 'কর্তন খরচ এন্ট্রি থেকে এসেছে (ভ্যাট ও আয়কর স্বয়ংক্রিয়)। প্রয়োজনে নিরাপত্তা জমা বা অন্যান্য নির্দিষ্ট কর্তন যোগ/সম্পাদনা করতে পারেন।'
+                          : 'মিশ্র বিল: পণ্যভিত্তিক আইটেমের ভ্যাট/আয়কর খরচ এন্ট্রি থেকে স্বয়ংক্রিয় এবং পুরোনো আইটেম নির্বাচিত হারে হিসাব হচ্ছে।'}
+                      </p>
+                    )}
+
                     {editDeductions.map((d, dIdx) => {
-                      const liveAmount = previewDraftRate?.deductions[dIdx]?.amount ?? d.amount;
+                      const liveAmount =
+                        previewDraftRate?.deductions.find((p) => p.id === d.id)?.amount ??
+                        previewDraftRate?.deductions[dIdx]?.amount ??
+                        d.amount;
+                      const isLockedProductRow =
+                        isVoucherBill && (d.kind === 'it' || d.kind === 'vat');
                       return (
                         <div
                           key={d.id}
-                          className="p-2 rounded-lg bg-[var(--card)] border border-[var(--line)] grid grid-cols-12 gap-1.5 items-center"
+                          className={`p-2 rounded-lg border border-[var(--line)] grid grid-cols-12 gap-1.5 items-center ${
+                            isLockedProductRow ? 'bg-[var(--surface-subtle)]' : 'bg-[var(--card)]'
+                          }`}
                         >
                           <div className="col-span-4 sm:col-span-2">
                             <input
                               type="text"
+                              disabled={isLockedProductRow}
                               value={d.code}
                               onChange={(e) =>
                                 setEditDeductions((prev) =>
@@ -1616,12 +1668,13 @@ export function BillDetailPage() {
                                 )
                               }
                               placeholder="কোড"
-                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums"
+                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums disabled:opacity-75"
                             />
                           </div>
                           <div className="col-span-8 sm:col-span-5">
                             <input
                               type="text"
+                              disabled={isLockedProductRow}
                               value={d.name}
                               onChange={(e) =>
                                 setEditDeductions((prev) =>
@@ -1631,7 +1684,7 @@ export function BillDetailPage() {
                                 )
                               }
                               placeholder="বিবরণ"
-                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs bn"
+                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs bn disabled:opacity-75"
                             />
                           </div>
                           <div className="col-span-4 sm:col-span-2">
@@ -1639,6 +1692,7 @@ export function BillDetailPage() {
                               type="number"
                               step="0.01"
                               min="0"
+                              disabled={isLockedProductRow}
                               value={d.rate ?? ''}
                               onChange={(e) => {
                                 const raw = e.target.value;
@@ -1650,7 +1704,7 @@ export function BillDetailPage() {
                                 );
                               }}
                               placeholder="%"
-                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums"
+                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums disabled:opacity-75"
                             />
                           </div>
                           <div className="col-span-6 sm:col-span-2">
@@ -1658,6 +1712,7 @@ export function BillDetailPage() {
                               type="number"
                               step="0.01"
                               min="0"
+                              disabled={isLockedProductRow}
                               value={formatPaisaInput(liveAmount)}
                               onChange={(e) => {
                                 const nextPaisa = toPaisa(e.target.value);
@@ -1677,11 +1732,11 @@ export function BillDetailPage() {
                                 );
                               }}
                               placeholder="টাকা"
-                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums text-right"
+                              className="w-full min-h-[36px] px-2 rounded border border-[var(--line)] bg-[var(--bg)] text-base md:text-xs tabular-nums text-right disabled:opacity-75"
                             />
                           </div>
                           <div className="col-span-2 sm:col-span-1 flex justify-end">
-                            {editDeductions.length > 1 && (
+                            {!isLockedProductRow && editDeductions.length > 1 ? (
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1692,7 +1747,14 @@ export function BillDetailPage() {
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
-                            )}
+                            ) : isLockedProductRow ? (
+                              <span
+                                className="text-[10px] text-[var(--muted)] bn px-1"
+                                title="খরচ এন্ট্রি থেকে স্বয়ংক্রিয়"
+                              >
+                                স্বয়ংক্রিয়
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -2156,6 +2218,21 @@ export function BillDetailPage() {
         bill={bill}
         formData={tr21FormData}
       />
+
+      {/* Readonly Product Breakdown Modal */}
+      {viewProductsItem && (
+        <ProductsModal
+          open={Boolean(viewProductsItem)}
+          onClose={() => setViewProductsItem(null)}
+          mode="readonly"
+          officeId={bill.officeId || realOfficeId}
+          economicCode={bill.economicCode}
+          economicHeadLabel={`${bill.economicCode} ${head.headNameBn || head.headName}`}
+          defaultVatRate={bill.vatRate}
+          defaultItRate={bill.itRate}
+          initialProducts={viewProductsItem.products || []}
+        />
+      )}
     </Layout>
   );
 }

@@ -16,7 +16,14 @@ import { db } from './firebase';
 import { writeAuditLogInBatch, writeAuditLogInTx, type AuditActor } from './audit';
 import { computeAvailable, computeCodeAvailable, pickLatestEffectiveLimit } from './computeAvailable';
 import { isDateInFiscalYear } from './fy';
-import { calcPercentageAmount, computeGrossedUpBill } from './money';
+import {
+  aggregateDeductions,
+  calcPercentageAmount,
+  calcProduct,
+  computeGrossedUpBill,
+  normalizeProductRateKey,
+  sumProducts,
+} from './money';
 import { DEFAULT_IT_CODE, DEFAULT_NET_PAYABLE_CODE, DEFAULT_VAT_CODE } from './tr21Defaults';
 import { isValidEconomicCode, normalizeEmail } from './validation';
 import type {
@@ -34,9 +41,11 @@ import type {
   DeductionRates,
   EconomicCodeDoc,
   ExpenseItemDoc,
+  ExpenseProduct,
   FyCodeTotalDoc,
   OfficeDoc,
   OfficeSettings,
+  ProductRateDoc,
   ResponsibleEmployee,
   Role,
   SpendingDoc,
@@ -645,11 +654,30 @@ export interface ExpenseItemInput {
   headNameBn?: string;
   date: string;
   description: string;
-  amount: number; // integer paisa (> 0, gross only, NO VAT/IT)
+  amount: number; // integer paisa (legacy: net expense; voucher: total voucher sum)
+  amountBasis?: 'voucher';
+  products?: ExpenseProduct[];
+  baseTotal?: number;
+  vatTotal?: number;
+  itTotal?: number;
+  deductionTotal?: number;
   responsibleEmployee: ResponsibleEmployee;
 }
 
-function validateExpenseItemInput(input: ExpenseItemInput, indexLabel?: string): void {
+interface NormalizedExpenseProductFields {
+  amount: number;
+  amountBasis?: 'voucher';
+  products?: ExpenseProduct[];
+  baseTotal?: number;
+  vatTotal?: number;
+  itTotal?: number;
+  deductionTotal?: number;
+}
+
+function validateAndNormalizeExpenseItemInput(
+  input: ExpenseItemInput,
+  indexLabel?: string
+): NormalizedExpenseProductFields {
   const prefix = indexLabel ? `${indexLabel}: ` : '';
   if (!input.officeId?.trim()) {
     throw new Error(`${prefix}দপ্তর নির্বাচন আবশ্যক।`);
@@ -664,12 +692,118 @@ function validateExpenseItemInput(input: ExpenseItemInput, indexLabel?: string):
   if (!input.description.trim()) {
     throw new Error(`${prefix}খরচের বিবরণ আবশ্যক।`);
   }
-  if (!Number.isFinite(input.amount) || input.amount <= 0) {
-    throw new Error(`${prefix}খরচের পরিমাণ অবশ্যই ০ এর বেশি হতে হবে।`);
-  }
   if (!input.responsibleEmployee.name.trim()) {
     throw new Error(`${prefix}দায়িত্বপ্রাপ্ত কর্মচারীর নাম আবশ্যক।`);
   }
+
+  if (input.amountBasis === 'voucher') {
+    const rawProducts = input.products || [];
+    if (rawProducts.length === 0) {
+      throw new Error(`${prefix}কমপক্ষে ১টি পণ্য বা ব্যয় যোগ করুন।`);
+    }
+    const normalizedProducts: ExpenseProduct[] = rawProducts.map((p, idx) => {
+      const name = (p.name || '').trim();
+      if (!name) {
+        throw new Error(`${prefix}পণ্য #${idx + 1}: পণ্যের নাম আবশ্যক।`);
+      }
+      const by: 'x' | 'y' = p.lastEditedField === 'y' ? 'y' : 'x';
+      const sourceAmt = by === 'y' ? p.voucherAmount : p.actualAmount;
+      const computed = calcProduct({
+        id: p.id || `prod_${idx + 1}`,
+        name,
+        amount: sourceAmt,
+        by,
+        vatRate: p.vatRate,
+        itRate: p.itRate,
+      });
+      return {
+        id: computed.id,
+        name: computed.name,
+        actualAmount: computed.actualAmount,
+        voucherAmount: computed.voucherAmount,
+        vatRate: computed.vatRate,
+        itRate: computed.itRate,
+        vatAmount: computed.vatAmount,
+        itAmount: computed.itAmount,
+        deductionAmount: computed.deductionAmount,
+        lastEditedField: computed.lastEditedField,
+      };
+    });
+    const totals = sumProducts(normalizedProducts);
+    if (totals.baseTotal <= 0 || totals.voucherTotal <= 0) {
+      throw new Error(`${prefix}মোট খরচ অবশ্যই ০ এর বেশি হতে হবে।`);
+    }
+    return {
+      amount: totals.voucherTotal,
+      amountBasis: 'voucher',
+      products: normalizedProducts,
+      baseTotal: totals.baseTotal,
+      vatTotal: totals.vatTotal,
+      itTotal: totals.itTotal,
+      deductionTotal: totals.deductionTotal,
+    };
+  }
+
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    throw new Error(`${prefix}খরচের পরিমাণ অবশ্যই ০ এর বেশি হতে হবে।`);
+  }
+  return {
+    amount: Math.round(input.amount),
+  };
+}
+
+function upsertProductRatesInBatch(
+  batch: ReturnType<typeof writeBatch>,
+  officeId: string,
+  economicCode: string,
+  products: ExpenseProduct[] | undefined
+): void {
+  if (!officeId || !products || products.length === 0) return;
+  const deduped = new Map<string, ExpenseProduct>();
+  for (const p of products) {
+    const key = normalizeProductRateKey(p.name);
+    if (!key) continue;
+    deduped.set(key, p);
+  }
+  for (const [key, p] of deduped.entries()) {
+    const rateRef = doc(db, 'offices', officeId, 'productRates', key);
+    batch.set(
+      rateRef,
+      {
+        name: p.name.trim(),
+        vatRate: Number(p.vatRate),
+        itRate: Number(p.itRate),
+        lastEconomicCode: economicCode.trim(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+}
+
+export async function fetchProductRate(
+  officeId: string,
+  productName: string
+): Promise<ProductRateDoc | null> {
+  const trimmedOffice = officeId.trim();
+  const key = normalizeProductRateKey(productName);
+  if (!trimmedOffice || !key) return null;
+  const snap = await getDoc(doc(db, 'offices', trimmedOffice, 'productRates', key));
+  if (!snap.exists()) return null;
+  return {
+    id: snap.id,
+    ...(snap.data() as Omit<ProductRateDoc, 'id'>),
+  };
+}
+
+export async function fetchOfficeProductRates(officeId: string): Promise<ProductRateDoc[]> {
+  const trimmedOffice = officeId.trim();
+  if (!trimmedOffice) return [];
+  const snap = await getDocs(collection(db, 'offices', trimmedOffice, 'productRates'));
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Omit<ProductRateDoc, 'id'>),
+  }));
 }
 
 export async function createExpenseItemsBatch(
@@ -679,15 +813,29 @@ export async function createExpenseItemsBatch(
   if (items.length === 0) {
     throw new Error('কমপক্ষে একটি খরচ আইটেম যোগ করুন।');
   }
-  items.forEach((item, idx) => validateExpenseItemInput(item, `আইটেম #${idx + 1}`));
+  const normalizedList = items.map((item, idx) =>
+    validateAndNormalizeExpenseInputOrThrow(item, `আইটেম #${idx + 1}`)
+  );
 
   const actorPayload = toActorPayload(actor);
   const createdIds: string[] = [];
-  for (let i = 0; i < items.length; i += 200) {
-    const chunk = items.slice(i, i + 200);
+  for (let i = 0; i < items.length; i += 120) {
+    const chunk = items.slice(i, i + 120);
     const batch = writeBatch(db);
-    for (const item of chunk) {
+    chunk.forEach((item, offset) => {
+      const normalized = normalizedList[i + offset];
       const ref = doc(collection(db, 'expenseItems'));
+      const voucherFields =
+        normalized.amountBasis === 'voucher'
+          ? {
+              amountBasis: 'voucher' as const,
+              products: normalized.products!,
+              baseTotal: normalized.baseTotal!,
+              vatTotal: normalized.vatTotal!,
+              itTotal: normalized.itTotal!,
+              deductionTotal: normalized.deductionTotal!,
+            }
+          : {};
       const payload = {
         officeId: item.officeId.trim(),
         fiscalYear: item.fiscalYear,
@@ -696,7 +844,8 @@ export async function createExpenseItemsBatch(
         headNameBn: (item.headNameBn || '').trim(),
         date: item.date,
         description: item.description.trim(),
-        amount: Math.round(item.amount),
+        amount: normalized.amount,
+        ...voucherFields,
         responsibleEmployee: {
           userId: item.responsibleEmployee.userId || null,
           name: item.responsibleEmployee.name.trim(),
@@ -712,6 +861,9 @@ export async function createExpenseItemsBatch(
         updatedBy: actorPayload,
       };
       batch.set(ref, payload);
+      if (normalized.amountBasis === 'voucher') {
+        upsertProductRatesInBatch(batch, item.officeId.trim(), item.economicCode, normalized.products);
+      }
       writeAuditLogInBatch(batch, {
         officeId: item.officeId.trim(),
         collection: 'expenseItems',
@@ -722,10 +874,17 @@ export async function createExpenseItemsBatch(
         actor,
       });
       createdIds.push(ref.id);
-    }
+    });
     await batch.commit();
   }
   return createdIds;
+}
+
+function validateAndNormalizeExpenseInputOrThrow(
+  input: ExpenseItemInput,
+  indexLabel?: string
+): NormalizedExpenseProductFields {
+  return validateAndNormalizeExpenseItemInput(input, indexLabel);
 }
 
 export async function updateExpenseItem(
@@ -736,18 +895,30 @@ export async function updateExpenseItem(
   if (existing.status === 'billed') {
     throw new Error('বিলে অন্তর্ভুক্ত (billed) খরচ সম্পাদনা করা যায় না।');
   }
-  validateExpenseItemInput(updates);
+  const normalized = validateAndNormalizeExpenseItemInput(updates);
 
   const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'expenseItems', existing.id);
   const batch = writeBatch(db);
+  const voucherFields =
+    normalized.amountBasis === 'voucher'
+      ? {
+          amountBasis: 'voucher' as const,
+          products: normalized.products!,
+          baseTotal: normalized.baseTotal!,
+          vatTotal: normalized.vatTotal!,
+          itTotal: normalized.itTotal!,
+          deductionTotal: normalized.deductionTotal!,
+        }
+      : {};
   const patch = {
     economicCode: updates.economicCode.trim(),
     headName: updates.headName.trim(),
     headNameBn: (updates.headNameBn || '').trim(),
     date: updates.date,
     description: updates.description.trim(),
-    amount: Math.round(updates.amount),
+    amount: normalized.amount,
+    ...voucherFields,
     responsibleEmployee: {
       userId: updates.responsibleEmployee.userId || null,
       name: updates.responsibleEmployee.name.trim(),
@@ -757,6 +928,14 @@ export async function updateExpenseItem(
     updatedBy: actorPayload,
   };
   batch.update(ref, patch);
+  if (normalized.amountBasis === 'voucher') {
+    upsertProductRatesInBatch(
+      batch,
+      existing.officeId || updates.officeId.trim(),
+      updates.economicCode,
+      normalized.products
+    );
+  }
   writeAuditLogInBatch(batch, {
     officeId: existing.officeId || updates.officeId || null,
     collection: 'expenseItems',
@@ -889,6 +1068,206 @@ function summarizeBillDeductions(
   };
 }
 
+function isVoucherItemLike(
+  item: Pick<ExpenseItemDoc | BillItemSnapshot, 'amountBasis' | 'products'>
+): boolean {
+  return (
+    item.amountBasis === 'voucher' &&
+    Array.isArray(item.products) &&
+    item.products.length > 0
+  );
+}
+
+function mergeBillDeductionLines(lines: BillDeductionLine[]): BillDeductionLine[] {
+  const grouped = new Map<string, BillDeductionLine>();
+  for (const d of lines) {
+    const kind = d.kind || 'other';
+    const code = (d.code || '').trim();
+    const hasRate = typeof d.rate === 'number' && Number.isFinite(d.rate);
+    const rateKey = hasRate ? String(d.rate) : 'fixed';
+    const key =
+      kind === 'it' || kind === 'vat'
+        ? `${kind}__${code}__${rateKey}`
+        : `${kind}__${d.id}__${code}__${(d.name || '').trim()}__${rateKey}`;
+    const existing = grouped.get(key);
+    const amt = Math.max(0, Math.round(d.amount || 0));
+    if (existing) {
+      existing.amount += amt;
+    } else {
+      grouped.set(key, {
+        id: d.id || key,
+        code,
+        name: (d.name || '').trim(),
+        rate: hasRate ? d.rate! : null,
+        amount: amt,
+        kind,
+      });
+    }
+  }
+  const order: Record<string, number> = { it: 0, vat: 1, security: 2, other: 3 };
+  return Array.from(grouped.values()).sort((a, b) => {
+    const oa = order[a.kind || 'other'] ?? 3;
+    const ob = order[b.kind || 'other'] ?? 3;
+    if (oa !== ob) return oa - ob;
+    const ra = typeof a.rate === 'number' ? a.rate : -1;
+    const rb = typeof b.rate === 'number' ? b.rate : -1;
+    return rb - ra;
+  });
+}
+
+export function computeBillFinancialsFromItems(params: {
+  items: ReadonlyArray<Pick<ExpenseItemDoc | BillItemSnapshot, 'amount' | 'amountBasis' | 'products' | 'baseTotal'>>;
+  vatRate: number;
+  itRate: number;
+  customDeductions?: BillDeductionLine[];
+  defaultItCode?: string;
+  defaultVatCode?: string;
+}): {
+  amountBasis?: 'voucher' | 'mixed';
+  grossAmount: number;
+  deductions: BillDeductionLine[];
+  vatAmount: number;
+  itAmount: number;
+  totalDeduction: number;
+  netPayable: number;
+  effectiveVatRate: number;
+  effectiveItRate: number;
+} {
+  const itCode = params.defaultItCode || DEFAULT_IT_CODE;
+  const vatCode = params.defaultVatCode || DEFAULT_VAT_CODE;
+  const voucherItems = params.items.filter(isVoucherItemLike);
+  const legacyItems = params.items.filter((i) => !isVoucherItemLike(i));
+
+  // Pure legacy path
+  if (voucherItems.length === 0) {
+    const legacyTotal = legacyItems.reduce((sum, i) => sum + Math.round(i.amount || 0), 0);
+    const legacyRes = computeGrossedUpBill({
+      expenseTotalPaisa: legacyTotal,
+      vatRate: params.vatRate,
+      itRate: params.itRate,
+      customDeductions: params.customDeductions,
+      defaultItCode: itCode,
+      defaultVatCode: vatCode,
+    });
+    return {
+      grossAmount: legacyRes.grossAmount,
+      deductions: legacyRes.deductions,
+      vatAmount: legacyRes.vatAmount,
+      itAmount: legacyRes.itAmount,
+      totalDeduction: legacyRes.totalDeduction,
+      netPayable: legacyRes.netPayable,
+      effectiveVatRate: legacyRes.effectiveVatRate,
+      effectiveItRate: legacyRes.effectiveItRate,
+    };
+  }
+
+  // Extract voucher products & product deductions
+  const allProducts = voucherItems.flatMap((i) => i.products || []);
+  const prodTotals = sumProducts(allProducts);
+  const productDeductions = aggregateDeductions(allProducts, { itCode, vatCode });
+
+  // Extra non-VAT/IT fixed deductions (e.g., security deposit added on top of voucher amount)
+  const extraNonVatItLines = (params.customDeductions || []).filter(
+    (d) => d.kind !== 'it' && d.kind !== 'vat'
+  );
+  const fixedExtraLines: BillDeductionLine[] = [];
+  const percentExtraLines: BillDeductionLine[] = [];
+  for (let idx = 0; idx < extraNonVatItLines.length; idx++) {
+    const d = extraNonVatItLines[idx];
+    const hasRate = typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate >= 0;
+    if (hasRate && legacyItems.length > 0) {
+      percentExtraLines.push(d);
+    } else if (!hasRate) {
+      fixedExtraLines.push({
+        id: d.id || `extra_${idx + 1}`,
+        code: (d.code || '').trim(),
+        name: (d.name || '').trim(),
+        rate: null,
+        amount: Math.max(0, Math.round(d.amount || 0)),
+        kind: d.kind || 'other',
+      });
+    } else {
+      // On pure voucher bills, extra percentage deduction is computed on voucher base gross and added on top
+      const pctAmt = calcPercentageAmount(prodTotals.voucherTotal, d.rate!);
+      fixedExtraLines.push({
+        id: d.id || `extra_${idx + 1}`,
+        code: (d.code || '').trim(),
+        name: (d.name || '').trim(),
+        rate: d.rate!,
+        amount: pctAmt,
+        kind: d.kind || 'other',
+      });
+    }
+  }
+  const fixedExtraTotal = fixedExtraLines.reduce((s, d) => s + d.amount, 0);
+
+  // Pure voucher path
+  if (legacyItems.length === 0) {
+    const deductions = mergeBillDeductionLines([...productDeductions, ...fixedExtraLines]);
+    const itLines = deductions.filter((d) => d.kind === 'it');
+    const vatLines = deductions.filter((d) => d.kind === 'vat');
+    const itAmount = itLines.reduce((s, d) => s + d.amount, 0);
+    const vatAmount = vatLines.reduce((s, d) => s + d.amount, 0);
+    const totalDeduction = deductions.reduce((s, d) => s + d.amount, 0);
+    const grossAmount = prodTotals.voucherTotal + fixedExtraTotal;
+    const netPayable = grossAmount - totalDeduction; // equals prodTotals.baseTotal
+    return {
+      amountBasis: 'voucher',
+      grossAmount,
+      deductions,
+      vatAmount,
+      itAmount,
+      totalDeduction,
+      netPayable,
+      effectiveVatRate: vatLines.length === 1 ? vatLines[0].rate ?? 0 : 0,
+      effectiveItRate: itLines.length === 1 ? itLines[0].rate ?? 0 : 0,
+    };
+  }
+
+  // Mixed path: combine product deductions (for voucher items) + gross-up (for legacy items) + extra fixed
+  const legacyTotal = legacyItems.reduce((sum, i) => sum + Math.round(i.amount || 0), 0);
+  const legacyRateInputs = (params.customDeductions || []).filter(
+    (d) => (d.kind === 'it' || d.kind === 'vat') && typeof d.rate === 'number' && Number.isFinite(d.rate)
+  );
+  const legacyCustom =
+    legacyRateInputs.length > 0 || percentExtraLines.length > 0
+      ? [...legacyRateInputs, ...percentExtraLines]
+      : undefined;
+  const legacyRes = computeGrossedUpBill({
+    expenseTotalPaisa: legacyTotal,
+    vatRate: params.vatRate,
+    itRate: params.itRate,
+    customDeductions: legacyCustom,
+    defaultItCode: itCode,
+    defaultVatCode: vatCode,
+  });
+
+  const deductions = mergeBillDeductionLines([
+    ...productDeductions,
+    ...legacyRes.deductions.filter((d) => d.amount > 0 || d.kind === 'security' || d.kind === 'other'),
+    ...fixedExtraLines,
+  ]);
+  const itLines = deductions.filter((d) => d.kind === 'it');
+  const vatLines = deductions.filter((d) => d.kind === 'vat');
+  const itAmount = itLines.reduce((s, d) => s + d.amount, 0);
+  const vatAmount = vatLines.reduce((s, d) => s + d.amount, 0);
+  const totalDeduction = deductions.reduce((s, d) => s + d.amount, 0);
+  const grossAmount = prodTotals.voucherTotal + legacyRes.grossAmount + fixedExtraTotal;
+  const netPayable = grossAmount - totalDeduction;
+
+  return {
+    amountBasis: 'mixed',
+    grossAmount,
+    deductions,
+    vatAmount,
+    itAmount,
+    totalDeduction,
+    netPayable,
+    effectiveVatRate: legacyRes.effectiveVatRate,
+    effectiveItRate: legacyRes.effectiveItRate,
+  };
+}
+
 export async function createDraftBillsFromItems(
   groups: DraftBillGroupInput[],
   actor: AuditActor
@@ -935,6 +1314,7 @@ export async function createDraftBillsFromItems(
       throw new Error('মোট খরচের পরিমাণ ০ এর বেশি হতে হবে।');
     }
     const {
+      amountBasis,
       grossAmount,
       deductions,
       vatAmount,
@@ -943,8 +1323,8 @@ export async function createDraftBillsFromItems(
       netPayable,
       effectiveVatRate,
       effectiveItRate,
-    } = computeGrossedUpBill({
-      expenseTotalPaisa: expenseTotal,
+    } = computeBillFinancialsFromItems({
+      items: group.items,
       vatRate: group.vatRate,
       itRate: group.itRate,
       customDeductions: group.deductions,
@@ -957,17 +1337,28 @@ export async function createDraftBillsFromItems(
     }
 
     const billRef = doc(collection(db, 'bills'));
-    const snapshots: BillItemSnapshot[] = group.items.map((item) => ({
-      id: item.id,
-      date: item.date,
-      description: item.description,
-      amount: item.amount,
-      responsibleEmployee: {
-        userId: item.responsibleEmployee.userId || null,
-        name: item.responsibleEmployee.name,
-        designation: item.responsibleEmployee.designation,
-      },
-    }));
+    const snapshots: BillItemSnapshot[] = group.items.map((item) => {
+      const snap: BillItemSnapshot = {
+        id: item.id,
+        date: item.date,
+        description: item.description,
+        amount: item.amount,
+        responsibleEmployee: {
+          userId: item.responsibleEmployee.userId || null,
+          name: item.responsibleEmployee.name,
+          designation: item.responsibleEmployee.designation,
+        },
+      };
+      if (item.amountBasis === 'voucher' && item.products?.length) {
+        snap.amountBasis = 'voucher';
+        snap.products = item.products;
+        snap.baseTotal = item.baseTotal;
+        snap.vatTotal = item.vatTotal;
+        snap.itTotal = item.itTotal;
+        snap.deductionTotal = item.deductionTotal;
+      }
+      return snap;
+    });
 
     const cleanSupplier =
       group.supplier &&
@@ -999,11 +1390,16 @@ export async function createDraftBillsFromItems(
       deductions,
       itemIds: group.items.map((i) => i.id),
       items: snapshots,
+      ...(amountBasis ? { amountBasis } : {}),
       grossAmount,
       vatRate: effectiveVatRate,
       itRate: effectiveItRate,
-      vatVariant: group.vatVariant || 'default',
-      vatVariantLabel: group.vatVariantLabel || 'Standard',
+      vatVariant:
+        amountBasis === 'voucher' ? 'product-wise' : group.vatVariant || 'default',
+      vatVariantLabel:
+        amountBasis === 'voucher'
+          ? 'পণ্যভিত্তিক হার'
+          : group.vatVariantLabel || 'Standard',
       vatAmount,
       itAmount,
       totalDeduction,
@@ -1089,8 +1485,8 @@ export async function updateDraftBillRates(
   const itemsExpenseTotal = bill.items.reduce((sum, item) => sum + item.amount, 0);
   const hasItemBreakdown = bill.items.length > 0 && itemsExpenseTotal > 0;
   const computed = hasItemBreakdown
-    ? computeGrossedUpBill({
-        expenseTotalPaisa: itemsExpenseTotal,
+    ? computeBillFinancialsFromItems({
+        items: bill.items,
         vatRate: updates.vatRate,
         itRate: updates.itRate,
         customDeductions: updates.deductions,
@@ -1134,6 +1530,7 @@ export async function updateDraftBillRates(
         }
       : null;
 
+  const isPureVoucher = bill.amountBasis === 'voucher' || computed.amountBasis === 'voucher';
   const actorPayload = toActorPayload(actor);
   const ref = doc(db, 'bills', bill.id);
   const patch = {
@@ -1149,8 +1546,10 @@ export async function updateDraftBillRates(
     netPayableCode: (updates.netPayableCode ?? bill.netPayableCode ?? DEFAULT_NET_PAYABLE_CODE).trim(),
     supplier: updates.supplier !== undefined ? cleanSupplier : bill.supplier ?? null,
     deductions,
-    vatVariant: updates.vatVariant,
-    vatVariantLabel: updates.vatVariantLabel,
+    vatVariant: isPureVoucher ? bill.vatVariant || 'product-wise' : updates.vatVariant,
+    vatVariantLabel: isPureVoucher
+      ? bill.vatVariantLabel || 'পণ্যভিত্তিক হার'
+      : updates.vatVariantLabel,
     vatRate: effectiveVatRate,
     itRate: effectiveItRate,
     grossAmount,
@@ -2018,8 +2417,8 @@ export async function correctApprovedBillTx(
     const itemsExpenseTotal = before.items.reduce((sum, item) => sum + item.amount, 0);
     const hasItemBreakdown = before.items.length > 0 && itemsExpenseTotal > 0;
     const computed = hasItemBreakdown
-      ? computeGrossedUpBill({
-          expenseTotalPaisa: itemsExpenseTotal,
+      ? computeBillFinancialsFromItems({
+          items: before.items,
           vatRate: updates.vatRate,
           itRate: updates.itRate,
           customDeductions: updates.deductions,
@@ -2090,6 +2489,7 @@ export async function correctApprovedBillTx(
           }
         : null;
 
+    const isPureVoucher = before.amountBasis === 'voucher' || ('amountBasis' in computed && computed.amountBasis === 'voucher');
     const afterFields = {
       date: updates.date,
       billDate: updates.billDate || updates.date,
@@ -2107,8 +2507,10 @@ export async function correctApprovedBillTx(
       ).trim(),
       supplier: updates.supplier !== undefined ? cleanSupplier : before.supplier ?? null,
       deductions: computed.deductions,
-      vatVariant: updates.vatVariant,
-      vatVariantLabel: updates.vatVariantLabel,
+      vatVariant: isPureVoucher ? before.vatVariant || 'product-wise' : updates.vatVariant,
+      vatVariantLabel: isPureVoucher
+        ? before.vatVariantLabel || 'পণ্যভিত্তিক হার'
+        : updates.vatVariantLabel,
       vatRate: computed.effectiveVatRate,
       itRate: computed.effectiveItRate,
       grossAmount: computed.grossAmount,

@@ -97,11 +97,29 @@
         "date": { "type": "string" },
         "description": { "type": "string" },
         "amount": { "type": "integer" },
+        "amountBasis": { "type": "string", "enum": ["voucher"] },
+        "products": { "type": "array" },
+        "baseTotal": { "type": "integer" },
+        "vatTotal": { "type": "integer" },
+        "itTotal": { "type": "integer" },
+        "deductionTotal": { "type": "integer" },
         "responsibleEmployee": { "type": "object" },
         "status": { "type": "string", "enum": ["listed", "billed"] },
         "billId": { "type": ["string", "null"] }
       },
       "required": ["officeId", "fiscalYear", "economicCode", "date", "description", "amount", "responsibleEmployee", "status"]
+    },
+    "ProductRate": {
+      "title": "Product Rate Memory",
+      "description": "Per-office remembered VAT & IT rates keyed by normalized product name.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "vatRate": { "type": "number" },
+        "itRate": { "type": "number" },
+        "lastEconomicCode": { "type": "string" }
+      },
+      "required": ["name", "vatRate", "itRate", "lastEconomicCode"]
     },
     "Bill": {
       "title": "Bill",
@@ -143,6 +161,7 @@
   },
   "firestore": {
     "/offices/{officeId}": { "schema": { "$ref": "#/entities/Office" }, "description": "Offices" },
+    "/offices/{officeId}/productRates/{rateKey}": { "schema": { "$ref": "#/entities/ProductRate" }, "description": "Office-scoped product VAT & IT rate memory" },
     "/users/{uid}": { "schema": { "$ref": "#/entities/User" }, "description": "Users & per-office access maps" },
     "/workHistory/{whId}": { "schema": { "$ref": "#/entities/WorkHistory" }, "description": "Posting history records" },
     "/invites/{emailLower}": { "description": "Pending user invitations with office/role/kind" },
