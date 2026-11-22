@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ListFilter, PlusCircle, Search, X } from 'lucide-react';
 import { mergeDescribedBy, useFieldContext } from './FieldContext';
+import { useBackHandler } from '../../lib/backStack';
 
 export interface SelectOption {
   value: string;
@@ -220,6 +221,9 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(function 
       internalTriggerRef.current?.focus({ preventScroll: true });
     });
   }, []);
+
+  // Close the custom picker dialog when Android hardware Back is pressed.
+  useBackHandler(open, closeModal);
 
   const emitChange = useCallback(
     (nextValue: string, opt: SelectOption | null) => {

@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useMountTransition } from '../hooks/useMountTransition';
+import { useBackHandler } from '../lib/backStack';
 
 interface BottomSheetProps {
   open: boolean;
@@ -52,6 +53,9 @@ export function BottomSheet({
   const prevFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+
+  // Close this bottom sheet when Android hardware Back is pressed.
+  useBackHandler(open, onClose);
 
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : false

@@ -117,6 +117,21 @@ function evaluateRow(row: DraftProductRow): EvaluatedRow {
       deductionAmount: 0,
     };
   }
+  if (v + t >= 100) {
+    return {
+      valid: false,
+      nameMissing,
+      rateError: 'মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।',
+      amountError: '',
+      actualAmount: 0,
+      voucherAmount: 0,
+      vatRate: v,
+      itRate: t,
+      vatAmount: 0,
+      itAmount: 0,
+      deductionAmount: 0,
+    };
+  }
 
   const rawAmt = row.lastEditedField === 'y' ? toPaisa(row.voucherStr) : toPaisa(row.actualStr);
   if (!Number.isFinite(rawAmt) || rawAmt <= 0) {
@@ -284,7 +299,7 @@ export function ProductsModal({
   const recomputeOppositeAmount = (draft: DraftProductRow): DraftProductRow => {
     const v = parseRate(draft.vatRateStr);
     const t = parseRate(draft.itRateStr);
-    if (!Number.isFinite(v) || v < 0 || v > 100 || !Number.isFinite(t) || t < 0 || t > 100) {
+    if (!Number.isFinite(v) || v < 0 || v > 100 || !Number.isFinite(t) || t < 0 || t > 100 || v + t >= 100) {
       return draft;
     }
     const amt = draft.lastEditedField === 'y' ? toPaisa(draft.voucherStr) : toPaisa(draft.actualStr);
@@ -647,7 +662,7 @@ export function ProductsModal({
                           })
                         );
                       }}
-                      placeholder="6000"
+                      placeholder="6250"
                       aria-label="ভাউচার এমাউন্ট"
                       className={`w-full min-h-[44px] px-3 rounded-[10px] border bg-[var(--card)] text-base tabular-nums text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/30 disabled:opacity-75 disabled:bg-[var(--surface-subtle)] ${
                         showValidation && ev.amountError
@@ -664,18 +679,20 @@ export function ProductsModal({
                     data-tip-box="true"
                     className="mt-2 rounded-xl bg-[var(--text)] text-[var(--bg)] p-3 text-xs leading-relaxed shadow-xl z-20"
                   >
-                    <div className="font-bold mb-0.5">হিসাব</div>
+                    <div className="font-bold mb-0.5">হিসাব (ভাউচার থেকে ভ্যাট ও আয়কর কর্তন)</div>
                     <div>x = প্রকৃত খরচ, y = ভাউচার এমাউন্ট, z = ভ্যাট% + আয়কর%</div>
                     <div className="font-semibold text-[13px] mt-1 tabular-nums">
-                      y = x + x × z ÷ ১০০
+                      কর্তন = y × z ÷ ১০০ &nbsp;·&nbsp; x = y − কর্তন
                     </div>
                     <div className="font-semibold text-[13px] tabular-nums">
-                      x = y × ১০০ ÷ (১০০ + z)
+                      y = x × ১০০ ÷ (১০০ − z)
                     </div>
                     <div className="mt-1.5 pt-1.5 border-t border-[var(--bg)]/25 tabular-nums">
-                      এই পণ্যে: z = {ev.vatRate} + {ev.itRate} = {z}
-                      <br />y = {formatNumberIN(ev.actualAmount)} + {formatNumberIN(ev.actualAmount)} ×{' '}
-                      {z} ÷ ১০০ = {formatNumberIN(ev.voucherAmount)}
+                      এই পণ্যে: ভ্যাট {ev.vatRate}% ({formatNumberIN(ev.vatAmount)}) + আয়কর {ev.itRate}% (
+                      {formatNumberIN(ev.itAmount)}) = কর্তন {formatNumberIN(ev.deductionAmount)} (z = {z}%)
+                      <br />
+                      x = {formatNumberIN(ev.voucherAmount)} − {formatNumberIN(ev.deductionAmount)} ={' '}
+                      {formatNumberIN(ev.actualAmount)}
                       <br />
                       যেকোনো একটি ঘর বদলালে অন্যটি নিজে হিসাব হয়।
                     </div>

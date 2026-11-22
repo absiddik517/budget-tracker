@@ -22,6 +22,7 @@ import { ActivityPage } from './pages/ActivityPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { useApp } from './contexts/AppContext';
+import { useAndroidBack } from './hooks/useAndroidBack';
 
 function RequireSuperAdmin({ children }: { children: React.ReactNode }) {
   const { isSuperAdmin } = useAuth();
@@ -41,6 +42,9 @@ function RequireDdo({ children }: { children: React.ReactNode }) {
 }
 
 function AppGate() {
+  // Register native Android back-button handler before any early returns.
+  useAndroidBack();
+
   const { accessState, needsOfficeSetup, isSuperAdmin } = useAuth();
   const { offices, officesLoading } = useApp();
 

@@ -251,10 +251,10 @@ export function normalizeProductRateKey(name: string): string {
 }
 
 /**
- * Per-product forward & reverse VAT+IT math (integer paisa):
- *  - z = v + t
- *  - x-driven: vat = round(x * v / 100), it = round(x * t / 100), d = vat + it, y = x + d
- *  - y-driven: x = round(y * 100 / (100 + z)), d = y - x, vat = z > 0 ? round(d * v / z) : 0, it = d - vat
+ * Per-product forward & reverse VAT+IT math (integer paisa), deducting VAT & IT FROM voucherAmount (y):
+ *  - z = v + t (< 100)
+ *  - y-driven: vat = round(y * v / 100), it = round(y * t / 100), d = vat + it, x = y - d
+ *  - x-driven: y = z === 0 ? x : round(x * 100 / (100 - z)), d = y - x, vat = z > 0 ? round(d * v / z) : 0, it = d - vat
  */
 export function calcProduct(params: CalcProductInput): ComputedProductAmounts {
   const v = Number(params.vatRate);
@@ -265,12 +265,15 @@ export function calcProduct(params: CalcProductInput): ComputedProductAmounts {
   if (!Number.isFinite(t) || t < 0 || t > 100) {
     throw new Error('আয়কর হার ০ থেকে ১০০% এর মধ্যে হতে হবে।');
   }
+  const z = v + t;
+  if (z >= 100) {
+    throw new Error('মোট কর্তনের হার ১০০% বা তার বেশি হতে পারে না।');
+  }
   const rawAmt = Number(params.amount);
   if (!Number.isFinite(rawAmt) || Math.round(rawAmt) <= 0) {
     throw new Error('পণ্যের টাকার পরিমাণ শূন্যের বেশি হতে হবে।');
   }
 
-  const z = v + t;
   let actualAmount: number;
   let voucherAmount: number;
   let vatAmount: number;
@@ -279,19 +282,19 @@ export function calcProduct(params: CalcProductInput): ComputedProductAmounts {
 
   if (params.by === 'y') {
     voucherAmount = Math.round(rawAmt);
-    actualAmount = Math.round((voucherAmount * 100) / (100 + z));
+    vatAmount = Math.round((voucherAmount * v) / 100);
+    itAmount = Math.round((voucherAmount * t) / 100);
+    deductionAmount = vatAmount + itAmount;
+    actualAmount = voucherAmount - deductionAmount;
     if (actualAmount <= 0) {
       throw new Error('পণ্যের প্রকৃত খরচ শূন্যের বেশি হতে হবে।');
     }
+  } else {
+    actualAmount = Math.round(rawAmt);
+    voucherAmount = z === 0 ? actualAmount : Math.round((actualAmount * 100) / (100 - z));
     deductionAmount = voucherAmount - actualAmount;
     vatAmount = z > 0 ? Math.round((deductionAmount * v) / z) : 0;
     itAmount = deductionAmount - vatAmount;
-  } else {
-    actualAmount = Math.round(rawAmt);
-    vatAmount = Math.round((actualAmount * v) / 100);
-    itAmount = Math.round((actualAmount * t) / 100);
-    deductionAmount = vatAmount + itAmount;
-    voucherAmount = actualAmount + deductionAmount;
   }
 
   return {

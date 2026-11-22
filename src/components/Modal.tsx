@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Loader2, X } from 'lucide-react';
 import { useApp } from '../contexts/AppContext';
 import { useMountTransition } from '../hooks/useMountTransition';
+import { useBackHandler } from '../lib/backStack';
 
 export type ModalSize = 'sm' | 'md' | 'lg';
 
@@ -105,6 +106,17 @@ export function Modal({
 
   const showDiscardRef = useRef(showDiscardConfirm);
   showDiscardRef.current = showDiscardConfirm;
+
+  const handleBack = useCallback(() => {
+    if (showDiscardRef.current) {
+      setShowDiscardConfirm(false);
+    } else {
+      attemptCloseRef.current();
+    }
+  }, []);
+
+  // Close discard prompt or modal when Android hardware Back is pressed.
+  useBackHandler(open, handleBack);
 
   useEffect(() => {
     if (!open) {
