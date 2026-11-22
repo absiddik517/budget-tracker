@@ -210,6 +210,10 @@ const en = {
   keepEditing: 'Keep editing',
   itemLabel: 'Item',
   removeItemLabel: 'Remove item',
+  exitAppConfirmTitle: 'Exit app?',
+  exitAppConfirmBody: 'Are you sure you want to close Budget Tracker?',
+  exitAppStayBtn: 'Stay',
+  exitAppConfirmBtn: 'Exit',
 };
 
 const bn: Record<keyof typeof en, string> = {
@@ -422,6 +426,10 @@ const bn: Record<keyof typeof en, string> = {
   keepEditing: 'সম্পাদনা চালিয়ে যান',
   itemLabel: 'আইটেম',
   removeItemLabel: 'আইটেম সরান',
+  exitAppConfirmTitle: 'অ্যাপ থেকে বের হতে চান?',
+  exitAppConfirmBody: 'আপনি কি নিশ্চিতভাবে বাজেট ট্র্যাকার অ্যাপটি বন্ধ করতে চান?',
+  exitAppStayBtn: 'থাকুন',
+  exitAppConfirmBtn: 'বের হন',
 };
 
 export type TranslationKey = keyof typeof en;

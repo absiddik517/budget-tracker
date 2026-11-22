@@ -1,16 +1,35 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { runTopBackHandler } from '../lib/backStack';
 
+export interface AndroidBackState {
+  exitConfirmOpen: boolean;
+  cancelExit: () => void;
+  confirmExit: () => void;
+}
+
 /**
  * Handles the Android hardware/gesture Back button on native Capacitor builds.
+ * Shows an exit confirmation popup before exiting on the Dashboard.
  * Does nothing on web browsers.
  */
-export function useAndroidBack(): void {
+export function useAndroidBack(): AndroidBackState {
   const navigate = useNavigate();
   const location = useLocation();
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+
+  const cancelExit = useCallback(() => {
+    setExitConfirmOpen(false);
+  }, []);
+
+  const confirmExit = useCallback(() => {
+    setExitConfirmOpen(false);
+    if (Capacitor.isNativePlatform()) {
+      void App.exitApp();
+    }
+  }, []);
 
   useEffect(() => {
     // Only intercept the Back button inside the native Android container.
@@ -39,8 +58,8 @@ export function useAndroidBack(): void {
         return;
       }
 
-      // 4. Already on the Dashboard with no overlay or history: exit the app.
-      void App.exitApp();
+      // 4. Already on the Dashboard with no overlay or history: ask before exiting.
+      setExitConfirmOpen(true);
     }).then((handle) => {
       if (cancelled) {
         // Cleanup ran before addListener resolved; remove the handle immediately.
@@ -58,4 +77,10 @@ export function useAndroidBack(): void {
       }
     };
   }, [navigate, location.pathname]);
+
+  return {
+    exitConfirmOpen,
+    cancelExit,
+    confirmExit,
+  };
 }
