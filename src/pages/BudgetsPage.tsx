@@ -32,7 +32,6 @@ import { formatActorBrief } from '../lib/actor';
 import { formatDateDisplay, todayYmd } from '../lib/dates';
 import {
   createBudgetsBatchTx,
-  createBudgetTx,
   markBudgetStatusTx,
   softDeleteBudgetTx,
   updateBudgetTx,
@@ -289,10 +288,46 @@ export function BudgetsPage() {
     detailOpen && selectedBudget ? selectedBudget.id : null
   );
 
+  const originalMemoGroups = useMemo(() => {
+    const groups: Array<{
+      key: string;
+      memoNo: string;
+      memoDate: string;
+      totalAllocated: number;
+      items: BudgetDoc[];
+    }> = [];
+    const byKey = new Map<string, number>();
+
+    for (const b of budgets) {
+      if (b.entryType !== 'original') continue;
+      const k = `${b.memoNo}|${b.memoDate}`;
+      const existingIdx = byKey.get(k);
+      if (existingIdx === undefined) {
+        byKey.set(k, groups.length);
+        groups.push({
+          key: k,
+          memoNo: b.memoNo,
+          memoDate: b.memoDate,
+          totalAllocated: b.allocated,
+          items: [b],
+        });
+      } else {
+        groups[existingIdx].items.push(b);
+        groups[existingIdx].totalAllocated += b.allocated;
+      }
+    }
+    return groups;
+  }, [budgets]);
+
   const revisionChain = useMemo(() => {
     if (!selectedBudget) return [];
     const rootId = selectedBudget.revisionOf || selectedBudget.id;
-    return budgets.filter((b) => b.id === rootId || b.revisionOf === rootId);
+    return budgets.filter(
+      (b) =>
+        b.id === rootId ||
+        b.revisionOf === rootId ||
+        b.economicCode === selectedBudget.economicCode
+    );
   }, [budgets, selectedBudget]);
 
   const linkedBills = useMemo(() => {
@@ -339,7 +374,7 @@ export function BudgetsPage() {
   const allocationBatchTotalPaisa = useMemo(() => {
     return allocationRows.reduce((sum, row) => {
       const p = toPaisa(row.amountStr);
-      return Number.isFinite(p) && p > 0 ? sum + p : sum;
+      return Number.isFinite(p) ? sum + p : sum;
     }, 0);
   }, [allocationRows]);
 
@@ -357,11 +392,9 @@ export function BudgetsPage() {
         Boolean(correctionReason.trim())
       );
     }
-    if (entryType === 'revision') {
-      return Boolean(memoNo.trim() || revisionOf || amountStr.trim() || economicCode.trim());
-    }
     return Boolean(
       memoNo.trim() ||
+        revisionOf ||
         allocationRows.length > 1 ||
         allocationRows.some((r) => r.economicCode.trim() || r.amountStr.trim())
     );
@@ -372,9 +405,7 @@ export function BudgetsPage() {
     memoDate,
     amountStr,
     correctionReason,
-    entryType,
     revisionOf,
-    economicCode,
     allocationRows,
   ]);
 
@@ -415,25 +446,8 @@ export function BudgetsPage() {
     setFormOpen(true);
   };
 
-  const handleRevisionTargetChange = (targetId: string) => {
-    setRevisionOf(targetId);
-    setCodeError('');
-    const target = budgets.find((b) => b.id === targetId);
-    if (target) {
-      const head = getHead(target.economicCode, {
-        headName: target.headName,
-        headNameBn: target.headNameBn,
-      });
-      setEconomicCode(target.economicCode);
-      setHeadName(head.headName);
-      setHeadNameBn(head.headNameBn);
-      const match = vatTaxRates.find((r) => r.economicCode === target.economicCode);
-      setDeductionRates(
-        match
-          ? resolveDeductionRatesForCode(target.economicCode)
-          : (JSON.parse(JSON.stringify(target.deductionRates)) as DeductionRates)
-      );
-    }
+  const handleRevisionTargetChange = (memoKey: string) => {
+    setRevisionOf(memoKey);
   };
 
   const handleSubmitForm = async (e: React.FormEvent) => {
@@ -504,71 +518,13 @@ export function BudgetsPage() {
       return;
     }
 
-    if (entryType === 'revision') {
-      if (!revisionOf) {
-        const msg = 'Select the original budget entry being revised.';
-        setFormErrors({ revisionOf: msg });
-        pushToast('error', msg);
-        window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
-        return;
-      }
-      const code = economicCode.trim();
-      const masterEntry = getCodeEntry(code);
-      if (!masterEntry) {
-        setCodeError('Select a valid economic code from Economic Codes.');
-        pushToast('error', 'Select a valid economic code.');
-        window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
-        return;
-      }
-      if (masterEntry.special) {
-        setCodeError('GENERAL-CONSTRUCTION cannot be used on budgets.');
-        pushToast('error', 'GENERAL-CONSTRUCTION cannot be used on budgets.');
-        window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
-        return;
-      }
-      const allocatedPaisa = toPaisa(amountStr);
-      if (Number.isNaN(allocatedPaisa) || !amountStr.trim()) {
-        const msg = 'Enter a valid taka amount.';
-        setFormErrors({ amount: msg });
-        pushToast('error', msg);
-        window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
-        return;
-      }
-      setFormErrors({});
-      const resolvedHead = getHead(code, { headName, headNameBn });
-      setSaving(true);
-      try {
-        const newId = await createBudgetTx(
-          {
-            officeId: realOfficeId,
-            fiscalYear: selectedFy,
-            memoNo,
-            memoDate,
-            economicCode: code,
-            headName: resolvedHead.headName,
-            headNameBn: resolvedHead.headNameBn,
-            allocated: allocatedPaisa,
-            entryType: 'revision',
-            revisionOf,
-            deductionRates: resolveDeductionRatesForCode(code),
-          },
-          effectiveActor
-        );
-        setSelectedBudgetId(newId);
-        pushToast('success', 'Budget revision created.');
-        setFormOpen(false);
-      } catch (err) {
-        pushToast('error', err instanceof Error ? err.message : 'Failed to save budget.');
-      } finally {
-        setSaving(false);
-      }
-      return;
-    }
-
-    // New Original Allocation (supports 1 or more economic code + amount rows under same memo)
+    // New Original or Revision Allocation (supports 1 or more economic code + amount rows under same memo)
     const batchInputs: CreateBudgetInput[] = [];
     const seenCodes = new Set<string>();
     let hasRowError = false;
+    const selectedMemoGroup = revisionOf
+      ? originalMemoGroups.find((g) => g.key === revisionOf) || null
+      : null;
 
     const nextRows = allocationRows.map((row) => ({ ...row, codeError: '' }));
     for (let i = 0; i < nextRows.length; i++) {
@@ -593,19 +549,37 @@ export function BudgetsPage() {
       seenCodes.add(code);
 
       const allocatedPaisa = toPaisa(row.amountStr);
-      if (Number.isNaN(allocatedPaisa) || allocatedPaisa <= 0) {
-        const msg = `আইটেম #${i + 1} (${code}): ০ এর বেশি টাকার পরিমাণ দিন।`;
-        setFormErrors({ rowAmountIndex: i, rowAmountMsg: msg });
-        pushToast('error', msg);
-        setAllocationRows(nextRows);
-        window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
-        return;
+      if (entryType === 'original') {
+        if (Number.isNaN(allocatedPaisa) || allocatedPaisa <= 0) {
+          const msg = `আইটেম #${i + 1} (${code}): ০ এর বেশি টাকার পরিমাণ দিন।`;
+          setFormErrors({ rowAmountIndex: i, rowAmountMsg: msg });
+          pushToast('error', msg);
+          setAllocationRows(nextRows);
+          window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
+          return;
+        }
+      } else {
+        if (Number.isNaN(allocatedPaisa) || !row.amountStr.trim() || allocatedPaisa === 0) {
+          const msg = `আইটেম #${i + 1} (${code}): ০ ব্যতীত সঠিক টাকার পরিমাণ দিন (হ্রাসের জন্য ঋণাত্মক)।`;
+          setFormErrors({ rowAmountIndex: i, rowAmountMsg: msg });
+          pushToast('error', msg);
+          setAllocationRows(nextRows);
+          window.requestAnimationFrame(() => focusFirstInvalidField(budgetFormRef.current));
+          return;
+        }
       }
 
       const resolvedHead = getHead(code, {
         headName: row.headName || masterEntry.headName,
         headNameBn: row.headNameBn || masterEntry.headNameBn,
       });
+
+      const matchedOriginalId =
+        entryType === 'revision'
+          ? selectedMemoGroup?.items.find((b) => b.economicCode === code)?.id ||
+            budgets.find((b) => b.entryType === 'original' && b.economicCode === code)?.id ||
+            null
+          : null;
 
       batchInputs.push({
         officeId: realOfficeId,
@@ -616,8 +590,8 @@ export function BudgetsPage() {
         headName: resolvedHead.headName,
         headNameBn: resolvedHead.headNameBn,
         allocated: allocatedPaisa,
-        entryType: 'original',
-        revisionOf: null,
+        entryType,
+        revisionOf: matchedOriginalId,
         deductionRates: resolveDeductionRatesForCode(code),
       });
     }
@@ -636,9 +610,13 @@ export function BudgetsPage() {
       if (createdIds[0]) setSelectedBudgetId(createdIds[0]);
       pushToast(
         'success',
-        createdIds.length > 1
-          ? `${createdIds.length}টি অর্থনৈতিক কোডে বাজেট বরাদ্দ সংরক্ষণ হয়েছে।`
-          : 'Budget created.'
+        entryType === 'revision'
+          ? createdIds.length > 1
+            ? `${createdIds.length}টি অর্থনৈতিক কোডে বাজেট রিভিশন সংরক্ষণ হয়েছে।`
+            : 'Budget revision created.'
+          : createdIds.length > 1
+            ? `${createdIds.length}টি অর্থনৈতিক কোডে বাজেট বরাদ্দ সংরক্ষণ হয়েছে।`
+            : 'Budget created.'
       );
       setFormOpen(false);
     } catch (err) {
@@ -1278,7 +1256,7 @@ export function BudgetsPage() {
           <ModalFooter
             loading={saving}
             summary={
-              !editingBudget && entryType === 'original' ? (
+              !editingBudget ? (
                 <div className="flex items-center justify-between gap-2 text-xs sm:text-sm font-semibold tabular-nums">
                   <span>মোট {allocationRows.length}টি কোড</span>
                   <strong className="text-[var(--accent)]">
@@ -1295,7 +1273,7 @@ export function BudgetsPage() {
             primary={{
               label: saving
                 ? 'Saving…'
-                : !editingBudget && entryType === 'original' && allocationRows.length > 1
+                : !editingBudget && allocationRows.length > 1
                   ? `${t('save')} (${allocationRows.length})`
                   : t('save'),
               type: 'submit',
@@ -1331,15 +1309,14 @@ export function BudgetsPage() {
 
           {!editingBudget && entryType === 'revision' && (
             <Field
-              label="Revision of budget entry"
+              label="Revision of budget entry (optional)"
               htmlFor="budget-rev-of"
-              required
               error={formErrors.revisionOf}
+              hint="ঐচ্ছিক — মূল বরাদ্দে না থাকা নতুন অর্থনৈতিক কোডেও রিভাইসে বরাদ্দ দেওয়া যাবে।"
             >
               <Select
                 id="budget-rev-of"
-                required
-                placeholder="Select original budget…"
+                placeholder="Select original budget (optional)…"
                 modalTitle="Revision of budget entry"
                 modalIcon={<Wallet className="w-5 h-5" />}
                 emptyIcon={<Wallet className="w-4 h-4" />}
@@ -1352,21 +1329,13 @@ export function BudgetsPage() {
                     setFormErrors((prev) => ({ ...prev, revisionOf: undefined }));
                   }
                 }}
-                options={budgets
-                  .filter((b) => b.entryType === 'original')
-                  .map((b) => {
-                    const head = getHead(b.economicCode, {
-                      headName: b.headName,
-                      headNameBn: b.headNameBn,
-                    });
-                    return {
-                      value: b.id,
-                      label: `${b.memoNo} · ${b.economicCode}`,
-                      subtitle: head.displayName,
-                      metaRight: formatTaka(b.allocated),
-                      keywords: `${b.memoNo} ${b.economicCode} ${head.displayName}`,
-                    };
-                  })}
+                options={originalMemoGroups.map((g) => ({
+                  value: g.key,
+                  label: g.memoNo,
+                  subtitle: `তারিখ: ${formatDateDisplay(g.memoDate)}`,
+                  metaRight: formatTaka(g.totalAllocated),
+                  keywords: `${g.memoNo} ${g.memoDate} ${formatDateDisplay(g.memoDate)}`,
+                }))}
               />
             </Field>
           )}
@@ -1427,20 +1396,22 @@ export function BudgetsPage() {
             </Field>
           </div>
 
-          {!editingBudget && entryType === 'original' ? (
+          {!editingBudget ? (
             <Section title="ব্যয়ের খাত ও টাকা">
               <div className="space-y-3">
                 {allocationRows.map((row, idx) => {
-                  const resolvedHead = row.economicCode
-                    ? getHead(row.economicCode, {
-                        headName: row.headName,
-                        headNameBn: row.headNameBn,
-                      })
-                    : null;
                   const excludedForRow = allocationRows
                     .filter((_, otherIdx) => otherIdx !== idx)
                     .map((r) => r.economicCode.trim())
                     .filter(Boolean);
+                  const hasOriginalForCode =
+                    entryType === 'revision' && row.economicCode.trim()
+                      ? budgets.some(
+                          (b) =>
+                            b.entryType === 'original' &&
+                            b.economicCode === row.economicCode.trim()
+                        )
+                      : false;
 
                   return (
                     <RepeatCard
@@ -1459,6 +1430,13 @@ export function BudgetsPage() {
                         labelAs="span"
                         required
                         error={row.codeError || undefined}
+                        hint={
+                          entryType === 'revision' && row.economicCode.trim()
+                            ? hasOriginalForCode
+                              ? 'মূল বাজেটে এই কোড রয়েছে — রিভাইস হিসেবে সমন্বয় হবে।'
+                              : 'নতুন কোড — মূল বাজেটে ছিল না, রিভাইসে যুক্ত হচ্ছে।'
+                            : undefined
+                        }
                       >
                         <EconomicCodeSelect
                           label=""
@@ -1487,19 +1465,8 @@ export function BudgetsPage() {
                         />
                       </Field>
 
-                      {row.economicCode && resolvedHead && (
-                        <div className="px-3 py-2 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)] text-xs space-y-0.5">
-                          <div className="text-[11px] font-medium text-[var(--muted)]">
-                            ব্যয়ের খাত
-                          </div>
-                          <div className="font-medium text-[var(--text)] bn break-words">
-                            {resolvedHead.displayName}
-                          </div>
-                        </div>
-                      )}
-
                       <Field
-                        label="Amount (৳)"
+                        label={`Amount (৳)${entryType === 'revision' ? ' · negative allowed for reduction' : ''}`}
                         htmlFor={`budget-amount-${row.key}`}
                         required
                         error={
@@ -1539,7 +1506,7 @@ export function BudgetsPage() {
                 <Field
                   label="Economic code"
                   labelAs="span"
-                  required={!editingBudget}
+                  required={false}
                   error={codeError || undefined}
                 >
                   <EconomicCodeSelect
@@ -1551,23 +1518,12 @@ export function BudgetsPage() {
                       setHeadName(entry?.headName || '');
                       setHeadNameBn(entry?.headNameBn || '');
                     }}
-                    disabled={
-                      Boolean(editingBudget) || (entryType === 'revision' && Boolean(revisionOf))
-                    }
-                    includeInactive={Boolean(editingBudget)}
+                    disabled
+                    includeInactive
                     includeSpecial={false}
                     placeholder="Select economic code…"
                   />
                 </Field>
-
-                {economicCode && (
-                  <div className="px-3.5 py-2.5 rounded-xl bg-[var(--card)] border border-[var(--line)]">
-                    <div className="text-[11px] font-medium text-[var(--muted)]">ব্যয়ের খাত</div>
-                    <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
-                      {getHead(economicCode, { headName, headNameBn }).displayName}
-                    </div>
-                  </div>
-                )}
 
                 <Field
                   label={`Amount (৳)${entryType === 'revision' ? ' · negative allowed for reduction' : ''}`}

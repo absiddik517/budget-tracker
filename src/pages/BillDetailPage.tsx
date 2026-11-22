@@ -1459,13 +1459,19 @@ export function BillDetailPage() {
                         bill,
                       });
                       const previewIntro = buildTr21IntroText({
+                        template: officeSettings.tr21P1S3IntroTemplate,
                         officeName: officeSettings.officeName,
+                        officeAddress: officeSettings.address,
                         fiscalYear: bill.fiscalYear,
                         memoNo: primaryBudget?.memoNo || '',
                         memoDate: primaryBudget?.memoDate || '',
                         purposeText:
                           editPurposeText.trim() ||
                           `${head.headNameBn || head.headName} বাবদ ব্যয়ের বিল।`,
+                        headName: head.headNameBn || head.headName,
+                        economicCode: bill.economicCode,
+                        billNo: bill.billNo,
+                        billDate: bill.billDate || bill.date,
                       });
                       return (
                         <div className="p-2.5 rounded-lg border border-[var(--line)] bg-[var(--card)] text-xs bn leading-relaxed">

@@ -40,14 +40,17 @@ import {
   DEFAULT_TR21_FONT_SIZE,
   DEFAULT_TR21_FOOTER_TEXT,
   DEFAULT_TR21_MARGINS,
+  DEFAULT_TR21_P1S3_INTRO_TEMPLATE,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
   resolveTr21FontFamily,
   resolveTr21FontSize,
   resolveTr21Margins,
-  serializeTr21MarginsToLabel,
+  resolveTr21P1S3IntroTemplate,
+  serializeTr21SetupToLabel,
   TR21_FONT_OPTIONS,
   TR21_FONT_SIZE_OPTIONS,
+  TR21_P1S3_TEMPLATE_FIELDS,
 } from '../lib/tr21Defaults';
 import { ensureBengaliFontsLoaded } from '../utils/exportPdf';
 import { exportTr21Docx, exportTr21Pdf, printTr21Form } from '../utils/exportTr21';
@@ -65,7 +68,7 @@ const DEFAULT_MOBILE_FALLBACK = '০১৯৬৭৫০০১০৫';
 
 type ClauseFilter = 'all' | 'page1' | 'page2';
 type MobilePane = 'setup' | 'preview';
-type AccordionStep = 1 | 2 | 3;
+type AccordionStep = 1 | 2 | 3 | 4;
 
 interface MarginInputStrings {
   top: string;
@@ -240,6 +243,13 @@ export function Tr21SetupPage() {
   const [tr21FooterText, setTr21FooterText] = useState(
     officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT
   );
+  const [tr21P1S3IntroTemplate, setTr21P1S3IntroTemplate] = useState(() =>
+    resolveTr21P1S3IntroTemplate(
+      officeSettings.tr21P1S3IntroTemplate,
+      officeSettings.tr21VoucherLabel
+    )
+  );
+  const introTemplateRef = useRef<HTMLTextAreaElement | null>(null);
   const [tr21Clauses, setTr21Clauses] = useState<CertificationClause[]>(() =>
     resolveTr21Clauses(officeSettings.tr21Clauses)
   );
@@ -250,6 +260,7 @@ export function Tr21SetupPage() {
     1: true,
     2: false,
     3: false,
+    4: false,
   });
 
   // UI & Preview controls
@@ -301,6 +312,12 @@ export function Tr21SetupPage() {
     setTr21FontSize(resolveTr21FontSize(officeSettings.tr21FontSize));
     setMarginInputs(marginsToStrings(savedMarginsFromSettings));
     setTr21FooterText(officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT);
+    setTr21P1S3IntroTemplate(
+      resolveTr21P1S3IntroTemplate(
+        officeSettings.tr21P1S3IntroTemplate,
+        officeSettings.tr21VoucherLabel
+      )
+    );
     setTr21Clauses(resolveTr21Clauses(officeSettings.tr21Clauses));
   }, [officeSettings, savedMarginsFromSettings]);
 
@@ -428,6 +445,10 @@ export function Tr21SetupPage() {
     const savedMobile = officeSettings.officeMobileNo || '';
     const savedCode = officeSettings.institutionalCode || '';
     const savedFooter = officeSettings.tr21FooterText || DEFAULT_TR21_FOOTER_TEXT;
+    const savedIntroTemplate = resolveTr21P1S3IntroTemplate(
+      officeSettings.tr21P1S3IntroTemplate,
+      officeSettings.tr21VoucherLabel
+    );
     const savedFontFamily = resolveTr21FontFamily(officeSettings.tr21FontFamily);
     const savedFontSize = resolveTr21FontSize(officeSettings.tr21FontSize);
     const savedClauses = JSON.stringify(resolveTr21Clauses(officeSettings.tr21Clauses));
@@ -445,6 +466,8 @@ export function Tr21SetupPage() {
       officeMobileNo.trim() !== savedMobile.trim() ||
       institutionalCode !== savedCode ||
       tr21FooterText.trim() !== savedFooter.trim() ||
+      (tr21P1S3IntroTemplate.trim() || DEFAULT_TR21_P1S3_INTRO_TEMPLATE) !==
+        savedIntroTemplate.trim() ||
       tr21FontFamily !== savedFontFamily ||
       tr21FontSize !== savedFontSize ||
       marginsDirty ||
@@ -459,6 +482,7 @@ export function Tr21SetupPage() {
     officeMobileNo,
     institutionalCode,
     tr21FooterText,
+    tr21P1S3IntroTemplate,
     tr21FontFamily,
     tr21FontSize,
     parsedMargins,
@@ -478,7 +502,9 @@ export function Tr21SetupPage() {
       tr21FontFamily,
       tr21FontSize,
       tr21Margins: parsedMargins,
-      tr21VoucherLabel: serializeTr21MarginsToLabel(parsedMargins),
+      tr21P1S3IntroTemplate:
+        tr21P1S3IntroTemplate.trim() || DEFAULT_TR21_P1S3_INTRO_TEMPLATE,
+      tr21VoucherLabel: serializeTr21SetupToLabel(parsedMargins, tr21P1S3IntroTemplate),
       tr21Clauses,
     }),
     [
@@ -489,6 +515,7 @@ export function Tr21SetupPage() {
       officeMobileNo,
       institutionalCode,
       tr21FooterText,
+      tr21P1S3IntroTemplate,
       tr21FontFamily,
       tr21FontSize,
       parsedMargins,
@@ -911,7 +938,7 @@ export function Tr21SetupPage() {
           tr21FooterText: tr21FooterText.trim() || DEFAULT_TR21_FOOTER_TEXT,
           tr21FontFamily: tr21FontFamily || DEFAULT_TR21_FONT_FAMILY,
           tr21FontSize: tr21FontSize || DEFAULT_TR21_FONT_SIZE,
-          tr21VoucherLabel: serializeTr21MarginsToLabel(parsedMargins),
+          tr21VoucherLabel: serializeTr21SetupToLabel(parsedMargins, tr21P1S3IntroTemplate),
           tr21Clauses,
         },
         effectiveActor,
@@ -998,6 +1025,30 @@ export function Tr21SetupPage() {
     const clamped = clampTr21Margin(marginInputs[side], fallback);
     setMarginInputs((prev) => ({ ...prev, [side]: String(clamped) }));
   };
+
+  const insertP1S3FieldToken = (token: string) => {
+    if (!canEditTr21) return;
+    const el = introTemplateRef.current;
+    if (!el) {
+      setTr21P1S3IntroTemplate((prev) => (prev ? `${prev} ${token}` : token));
+      return;
+    }
+    const start = el.selectionStart ?? tr21P1S3IntroTemplate.length;
+    const end = el.selectionEnd ?? tr21P1S3IntroTemplate.length;
+    const before = tr21P1S3IntroTemplate.slice(0, start);
+    const after = tr21P1S3IntroTemplate.slice(end);
+    const nextValue = `${before}${token}${after}`;
+    setTr21P1S3IntroTemplate(nextValue);
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + token.length;
+      el.setSelectionRange(caret, caret);
+    });
+  };
+
+  const isCustomP1S3Template =
+    (tr21P1S3IntroTemplate.trim() || DEFAULT_TR21_P1S3_INTRO_TEMPLATE) !==
+    DEFAULT_TR21_P1S3_INTRO_TEMPLATE;
 
   if (isAllOfficesMode || (!currentOfficeId && !isLegacyPreMigration)) {
     return (
@@ -1272,13 +1323,116 @@ export function Tr21SetupPage() {
             </div>
           </AccordionCard>
 
-          {/* 2. Font, size, margin (inch) & footer */}
+          {/* 2. P1-S3 Intro Template */}
           <AccordionCard
             step={2}
-            title="ফন্ট, সাইজ, মার্জিন ও ফুটার"
-            subtitle={`${activeFontLabel} · ${toBanglaDigits(tr21FontSize)} px · মার্জিন ${parsedMargins.top}″/${parsedMargins.right}″/${parsedMargins.bottom}″/${parsedMargins.left}″`}
+            title="মূল বিলের বিবরণ টেমপ্লেট (P1-S3)"
+            subtitle={`${isCustomP1S3Template ? 'কাস্টম টেমপ্লেট' : 'ডিফল্ট ফরম্যাট'} · ${toBanglaDigits(
+              TR21_P1S3_TEMPLATE_FIELDS.length
+            )}টি ফিল্ড উপলব্ধ`}
             open={openSteps[2]}
             onToggle={() => toggleAccordionStep(2)}
+          >
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <label
+                  htmlFor="tr21-p1s3-intro-template"
+                  className="block text-xs font-semibold text-[var(--muted)]"
+                >
+                  P1-S3 বিবরণ লেখা (ডাইনামিক টেমপ্লেট)
+                </label>
+                {canEditTr21 && isCustomP1S3Template && (
+                  <button
+                    type="button"
+                    onClick={() => setTr21P1S3IntroTemplate(DEFAULT_TR21_P1S3_INTRO_TEMPLATE)}
+                    className="text-xs font-semibold text-[var(--accent)] hover:underline whitespace-nowrap"
+                  >
+                    ডিফল্ট রিসেট
+                  </button>
+                )}
+              </div>
+
+              <textarea
+                ref={introTemplateRef}
+                id="tr21-p1s3-intro-template"
+                rows={4}
+                disabled={!canEditTr21}
+                value={tr21P1S3IntroTemplate}
+                onChange={(e) => setTr21P1S3IntroTemplate(e.target.value)}
+                onBlur={() => {
+                  if (!tr21P1S3IntroTemplate.trim()) {
+                    setTr21P1S3IntroTemplate(DEFAULT_TR21_P1S3_INTRO_TEMPLATE);
+                  }
+                }}
+                placeholder={DEFAULT_TR21_P1S3_INTRO_TEMPLATE}
+                className="w-full px-3.5 py-2.5 rounded-[10px] border border-[var(--line)] bg-[var(--card)] text-base md:text-sm bn leading-relaxed text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-65"
+              />
+              <p className="text-[11px] text-[var(--muted)] mt-1">
+                নমুনা বা যেকোনো বিলের তথ্য অনুযায়ী নিচের ফিল্ডগুলো স্বয়ংক্রিয়ভাবে P1-S3 সেকশনে বসবে। ফাঁকা রাখলে ডিফল্ট লেখা ব্যবহার হবে।
+              </p>
+            </div>
+
+            {/* Live rendered result preview */}
+            <div className="p-3 rounded-xl border border-dashed border-[var(--line)] bg-[var(--surface-subtle)]/60 space-y-1">
+              <div className="text-[11px] font-semibold text-[var(--muted)]">
+                লাইভ আউটপুট প্রিভিউ (P1-S3):
+              </div>
+              <p className="text-xs sm:text-[13px] bn text-[var(--text)] leading-relaxed">
+                {previewFormData.introText}
+              </p>
+            </div>
+
+            {/* Available Fields List */}
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] overflow-hidden">
+              <div className="px-3.5 py-2.5 border-b border-[var(--line)] bg-[var(--surface-subtle)]/60 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-[var(--text)]">
+                  ব্যবহারযোগ্য ফিল্ডসমূহের তালিকা
+                </span>
+                <span className="text-[11px] text-[var(--muted)]">
+                  {canEditTr21 ? 'ক্লিক করলে টেমপ্লেটে যুক্ত হবে' : 'রেফারেন্স তালিকা'}
+                </span>
+              </div>
+              <div className="divide-y divide-[var(--line)]">
+                {TR21_P1S3_TEMPLATE_FIELDS.map((field) => (
+                  <div
+                    key={field.token}
+                    className="px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[var(--text)] bn">
+                        {field.labelBn}
+                      </div>
+                      <div className="text-[11px] text-[var(--muted)] bn truncate">
+                        উদাহরণ: {field.exampleBn}
+                      </div>
+                    </div>
+                    {canEditTr21 ? (
+                      <button
+                        type="button"
+                        onClick={() => insertP1S3FieldToken(field.token)}
+                        title="ক্লিক করে টেমপ্লেটে বসান"
+                        className="px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:opacity-90 font-mono text-[11px] font-semibold shrink-0 transition-opacity"
+                      >
+                        {field.token}
+                      </button>
+                    ) : (
+                      <code className="px-2.5 py-1 rounded-lg bg-[var(--surface-subtle)] text-[var(--text)] font-mono text-[11px] shrink-0">
+                        {field.token}
+                      </code>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </AccordionCard>
+
+          {/* 3. Font, size, margin (inch) & footer */}
+          <AccordionCard
+            step={3}
+            title="ফন্ট, সাইজ, মার্জিন ও ফুটার"
+            subtitle={`${activeFontLabel} · ${toBanglaDigits(tr21FontSize)} px · মার্জিন ${parsedMargins.top}″/${parsedMargins.right}″/${parsedMargins.bottom}″/${parsedMargins.left}″`}
+            open={openSteps[3]}
+            onToggle={() => toggleAccordionStep(3)}
           >
             {/* Font & Size */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1411,15 +1565,15 @@ export function Tr21SetupPage() {
             </div>
           </AccordionCard>
 
-          {/* 3. Declaration clauses */}
+          {/* 4. Declaration clauses */}
           <AccordionCard
-            step={3}
+            step={4}
             title="প্রত্যয়ন ও শর্তাবলি ধারা"
             subtitle={`${toBanglaDigits(clauseStats.enabledCount)} / ${toBanglaDigits(
               tr21Clauses.length
             )}টি সক্রিয় · পাতা ১ (${clauseStats.page1Numbers}) · পাতা ২ (${clauseStats.page2Numbers})`}
-            open={openSteps[3]}
-            onToggle={() => toggleAccordionStep(3)}
+            open={openSteps[4]}
+            onToggle={() => toggleAccordionStep(4)}
           >
             {/* Quick prefix split */}
             {canEditTr21 && tr21Clauses.length > 0 && (

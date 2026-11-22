@@ -2040,12 +2040,6 @@ export function ExpenseItemsPage() {
             labelAs="span"
             required
             error={editFieldError?.field === 'code' ? editFieldError.message : undefined}
-            hint={
-              editCode
-                ? getHead(editCode, { headName: editHeadName, headNameBn: editHeadNameBn })
-                    .displayName
-                : undefined
-            }
           >
             <EconomicCodeSelect
               label=""
@@ -2357,13 +2351,18 @@ export function ExpenseItemsPage() {
               economicCode: group.economicCode,
             });
             const previewIntro = buildTr21IntroText({
+              template: officeSettings.tr21P1S3IntroTemplate,
               officeName: officeSettings.officeName,
+              officeAddress: officeSettings.address,
               fiscalYear: selectedFy,
               memoNo: matchedBudget?.memoNo || '',
               memoDate: matchedBudget?.memoDate || '',
               purposeText:
                 (purposeByCode[group.economicCode] || '').trim() ||
                 `${group.headNameBn || group.headName} বাবদ ব্যয়ের বিল।`,
+              headName: group.headNameBn || group.headName,
+              economicCode: group.economicCode,
+              billDate,
             });
 
             return (

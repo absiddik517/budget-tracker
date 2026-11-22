@@ -59,6 +59,7 @@ export interface OfficeDoc extends BaseAuditFields {
   tr21FontSize?: number;
   tr21P1S3Mode?: Tr21P1S3Mode;
   tr21VoucherLabel?: string;
+  tr21P1S3IntroTemplate?: string;
   tr21Margins?: Tr21Margins;
   tr21Clauses?: CertificationClause[];
 }
@@ -155,6 +156,7 @@ export interface OfficeSettings extends BaseAuditFields {
   tr21FontSize?: number;
   tr21P1S3Mode?: Tr21P1S3Mode;
   tr21VoucherLabel?: string;
+  tr21P1S3IntroTemplate?: string;
   tr21Margins?: Tr21Margins;
   tr21Clauses?: CertificationClause[];
 }

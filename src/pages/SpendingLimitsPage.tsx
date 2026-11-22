@@ -516,17 +516,6 @@ export function SpendingLimitsPage() {
         />
       </Field>
 
-      {economicCode && (
-        <div className="px-3.5 py-2.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
-          <div className="text-[11px] font-medium text-[var(--muted)]">
-            ব্যয়ের খাত
-          </div>
-          <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
-            {getHead(economicCode, { headName, headNameBn }).displayName}
-          </div>
-        </div>
-      )}
-
       {limitType === 'budget' && (
         <Field label="Budget entry" htmlFor={`${formId}-budget`} required error={budgetError}>
           <Select

@@ -11,6 +11,7 @@ import {
   DEFAULT_NET_PAYABLE_CODE,
   DEFAULT_SECURITY_CODE,
   DEFAULT_TR21_FOOTER_TEXT,
+  DEFAULT_TR21_P1S3_INTRO_TEMPLATE,
   DEFAULT_VAT_CODE,
   resolveTr21Clauses,
   resolveTr21FontCss,
@@ -163,28 +164,107 @@ export function formatOfficePossessiveBn(officeName: string): string {
 }
 
 export function buildTr21IntroText(params: {
+  template?: string | null;
   officeName: string;
+  officeAddress?: string | null;
   fiscalYear: string;
   memoNo?: string | null;
   memoDate?: string | null;
   purposeText: string;
+  headName?: string | null;
+  economicCode?: string | null;
+  billNo?: string | null;
+  billDate?: string | null;
 }): string {
-  const officePossessive = formatOfficePossessiveBn(params.officeName);
-  const fyBn = toBanglaDigits(params.fiscalYear);
+  const officeNameClean = params.officeName.trim() || 'দপ্তর';
+  const officeAddressClean = (params.officeAddress || '').trim();
+  const officePossessive = formatOfficePossessiveBn(officeNameClean);
+  const fyBn = toBanglaDigits((params.fiscalYear || '').trim());
   const memoNoBn = params.memoNo ? toBanglaDigits(params.memoNo.trim()) : '';
   const memoDateBn = params.memoDate ? formatBanglaLongDate(params.memoDate.trim()) : '';
+  const cleanPurpose = params.purposeText.trim();
+  const headNameBn = (params.headName || '').trim();
+  const economicCodeBn = params.economicCode ? toBanglaDigits(params.economicCode.trim()) : '';
+  const billNoBn = params.billNo ? toBanglaDigits(params.billNo.trim()) : '';
+  const billDateBn = params.billDate ? formatBanglaLongDate(params.billDate.trim()) : '';
 
-  let memoPart = 'বরাদ্দকৃত অর্থ থেকে ';
-  if (memoDateBn && memoNoBn) {
-    memoPart = `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
-  } else if (memoNoBn) {
-    memoPart = `${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
-  } else if (memoDateBn) {
-    memoPart = `${memoDateBn} তারিখের স্মারকে বরাদ্দকৃত অর্থ থেকে `;
+  const rawTemplate = (params.template || '').trim();
+  if (!rawTemplate || rawTemplate === DEFAULT_TR21_P1S3_INTRO_TEMPLATE) {
+    let memoPart = 'বরাদ্দকৃত অর্থ থেকে ';
+    if (memoDateBn && memoNoBn) {
+      memoPart = `${memoDateBn} তারিখের ${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
+    } else if (memoNoBn) {
+      memoPart = `${memoNoBn} নং স্মারকে বরাদ্দকৃত অর্থ থেকে `;
+    } else if (memoDateBn) {
+      memoPart = `${memoDateBn} তারিখের স্মারকে বরাদ্দকৃত অর্থ থেকে `;
+    }
+    return `${officePossessive} অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${cleanPurpose}`;
   }
 
-  const cleanPurpose = params.purposeText.trim();
-  return `${officePossessive} অনুকূলে চলতি ${fyBn} অর্থ বছরের ${memoPart}${cleanPurpose}`;
+  let working = rawTemplate;
+
+  // Clean comma/paren wrappers if officeAddress is empty
+  if (!officeAddressClean) {
+    working = working
+      .replace(/,\s*\{\{\s*(?:officeAddress|address)\s*\}\}/gi, '')
+      .replace(/\{\{\s*(?:officeAddress|address)\s*\}\}\s*,/gi, '')
+      .replace(/\(\s*\{\{\s*(?:officeAddress|address)\s*\}\}\s*\)/gi, '');
+  }
+
+  // Clean empty memo date/number wrappers cleanly so no dangling 'ইং তারিখের' or 'নং' remains
+  if (!memoDateBn) {
+    working = working.replace(
+      /\{\{\s*(?:BudgetMemuDates?|budgetMemoDates?|memoDate)\s*\}\}\s*(?:ইং\s*)?(?:তারিখের\s*)?/gi,
+      ''
+    );
+  }
+  if (!memoNoBn) {
+    working = working.replace(
+      /\{\{\s*(?:budgetMemuNumber|budgetMemoNumber|budgetMemoNo|memoNo|memoNumber)\s*\}\}\s*(?:নং\s*)?/gi,
+      ''
+    );
+  }
+
+  const values: Record<string, string> = {
+    officename: officeNameClean,
+    officenamepossessive: officePossessive,
+    officeaddress: officeAddressClean,
+    address: officeAddressClean,
+    budgetfiscalyear: fyBn,
+    fiscalyear: fyBn,
+    fy: fyBn,
+    budgetmemudates: memoDateBn,
+    budgetmemudate: memoDateBn,
+    budgetmemodates: memoDateBn,
+    budgetmemodate: memoDateBn,
+    memodate: memoDateBn,
+    budgetmemunumber: memoNoBn,
+    budgetmemonumber: memoNoBn,
+    budgetmemono: memoNoBn,
+    memono: memoNoBn,
+    memonumber: memoNoBn,
+    purposetext: cleanPurpose,
+    purpose: cleanPurpose,
+    headname: headNameBn,
+    headnamebn: headNameBn,
+    economiccode: economicCodeBn,
+    code: economicCodeBn,
+    billno: billNoBn,
+    billdate: billDateBn,
+  };
+
+  let rendered = working.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key: string) => {
+    const normalized = key.toLowerCase();
+    return Object.prototype.hasOwnProperty.call(values, normalized) ? values[normalized] : match;
+  });
+
+  rendered = rendered
+    .replace(/\s+এর\s+এর(\s|$)/g, ' এর$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,।.])/g, '$1')
+    .trim();
+
+  return rendered;
 }
 
 export function resolveBillPrimaryBudget(params: {
@@ -313,11 +393,17 @@ export function buildTr21FormData(params: {
       : `${head.headName} বাবদ ব্যয়ের বিল।`);
 
   const introText = buildTr21IntroText({
+    template: officeSettings.tr21P1S3IntroTemplate,
     officeName,
+    officeAddress,
     fiscalYear: bill.fiscalYear,
     memoNo: memoNoRaw,
     memoDate: memoDateRaw,
     purposeText,
+    headName: head.headNameBn || head.headName,
+    economicCode: bill.economicCode,
+    billNo: bill.billNo,
+    billDate: billDateYmd,
   });
 
   const rawItems = bill.items || [];

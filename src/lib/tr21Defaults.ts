@@ -18,7 +18,86 @@ export const DEFAULT_TR21_MARGINS: Tr21Margins = {
   left: 0.4,
 };
 
+export const DEFAULT_TR21_P1S3_INTRO_TEMPLATE =
+  '{{ officeName }} এর অনুকূলে চলতি {{ budgetFiscalYear }} অর্থ বছরের {{ BudgetMemuDates }} তারিখের {{ budgetMemuNumber }} নং স্মারকে বরাদ্দকৃত অর্থ থেকে {{ purposeText }}';
+
+export interface Tr21P1S3FieldDoc {
+  token: string;
+  labelBn: string;
+  exampleBn: string;
+}
+
+export const TR21_P1S3_TEMPLATE_FIELDS: Tr21P1S3FieldDoc[] = [
+  {
+    token: '{{ officeName }}',
+    labelBn: 'দপ্তরের নাম',
+    exampleBn: 'উপজেলা উপানুষ্ঠানিক শিক্ষা ব্যুরো',
+  },
+  {
+    token: '{{ officeAddress }}',
+    labelBn: 'দপ্তরের ঠিকানা',
+    exampleBn: 'তারাকান্দা, ময়মনসিংহ',
+  },
+  {
+    token: '{{ budgetFiscalYear }}',
+    labelBn: 'চলতি অর্থবছর',
+    exampleBn: '২০২৬-২৭',
+  },
+  {
+    token: '{{ BudgetMemuDates }}',
+    labelBn: 'বাজেট স্মারকের তারিখ',
+    exampleBn: '২৪ জুলাই ২০২৬',
+  },
+  {
+    token: '{{ budgetMemuNumber }}',
+    labelBn: 'বাজেট স্মারক নম্বর',
+    exampleBn: '৩৮.০১.০০০০.০০৫.২০.০১১.২৫-৪২০',
+  },
+  {
+    token: '{{ purposeText }}',
+    labelBn: 'ব্যয়ের বিবরণ / উদ্দেশ্য (প্রতি বিলের খাত অনুযায়ী)',
+    exampleBn: 'অনুষ্ঠান / উৎসবাদি বাবদ ব্যয়ের বিল।',
+  },
+  {
+    token: '{{ headName }}',
+    labelBn: 'অর্থনৈতিক খাতের নাম',
+    exampleBn: 'অনুষ্ঠান / উৎসবাদি',
+  },
+  {
+    token: '{{ economicCode }}',
+    labelBn: 'অর্থনৈতিক কোড',
+    exampleBn: '৩২৫৭৩০১',
+  },
+  {
+    token: '{{ billNo }}',
+    labelBn: 'বিল নম্বর',
+    exampleBn: '২০২৬-২৭/০৪',
+  },
+  {
+    token: '{{ billDate }}',
+    labelBn: 'বিলের তারিখ',
+    exampleBn: '২১ সেপ্টেম্বর ২০২৬',
+  },
+];
+
 const TR21_MARGINS_LABEL_PREFIX = '__margins__:';
+const TR21_CFG_LABEL_PREFIX = '__tr21cfg__:';
+
+interface EncodedTr21Setup {
+  m?: [number, number, number, number];
+  p1s3?: string;
+}
+
+function parseTr21CfgLabel(encodedLabel?: string | null): EncodedTr21Setup | null {
+  const raw = (encodedLabel || '').trim();
+  if (!raw.startsWith(TR21_CFG_LABEL_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(TR21_CFG_LABEL_PREFIX.length)) as EncodedTr21Setup;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 export function clampTr21Margin(value: unknown, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value);
@@ -32,6 +111,27 @@ export function serializeTr21MarginsToLabel(margins: Tr21Margins): string {
   const bottom = clampTr21Margin(margins.bottom, DEFAULT_TR21_MARGINS.bottom);
   const left = clampTr21Margin(margins.left, DEFAULT_TR21_MARGINS.left);
   return `${TR21_MARGINS_LABEL_PREFIX}${top},${right},${bottom},${left}`;
+}
+
+export function serializeTr21SetupToLabel(
+  margins: Tr21Margins,
+  p1s3IntroTemplate?: string | null
+): string {
+  const top = clampTr21Margin(margins.top, DEFAULT_TR21_MARGINS.top);
+  const right = clampTr21Margin(margins.right, DEFAULT_TR21_MARGINS.right);
+  const bottom = clampTr21Margin(margins.bottom, DEFAULT_TR21_MARGINS.bottom);
+  const left = clampTr21Margin(margins.left, DEFAULT_TR21_MARGINS.left);
+  const cleanIntro = (p1s3IntroTemplate || '').trim();
+
+  if (!cleanIntro || cleanIntro === DEFAULT_TR21_P1S3_INTRO_TEMPLATE) {
+    return `${TR21_MARGINS_LABEL_PREFIX}${top},${right},${bottom},${left}`;
+  }
+
+  const payload: EncodedTr21Setup = {
+    m: [top, right, bottom, left],
+    p1s3: cleanIntro,
+  };
+  return `${TR21_CFG_LABEL_PREFIX}${JSON.stringify(payload)}`;
 }
 
 export function resolveTr21Margins(
@@ -52,6 +152,15 @@ export function resolveTr21Margins(
       left: clampTr21Margin(margins.left, DEFAULT_TR21_MARGINS.left),
     };
   }
+  const cfg = parseTr21CfgLabel(encodedLabel);
+  if (cfg && Array.isArray(cfg.m) && cfg.m.length === 4) {
+    return {
+      top: clampTr21Margin(cfg.m[0], DEFAULT_TR21_MARGINS.top),
+      right: clampTr21Margin(cfg.m[1], DEFAULT_TR21_MARGINS.right),
+      bottom: clampTr21Margin(cfg.m[2], DEFAULT_TR21_MARGINS.bottom),
+      left: clampTr21Margin(cfg.m[3], DEFAULT_TR21_MARGINS.left),
+    };
+  }
   const raw = (encodedLabel || '').trim();
   if (raw.startsWith(TR21_MARGINS_LABEL_PREFIX)) {
     const parts = raw.slice(TR21_MARGINS_LABEL_PREFIX.length).split(',');
@@ -65,6 +174,19 @@ export function resolveTr21Margins(
     }
   }
   return { ...DEFAULT_TR21_MARGINS };
+}
+
+export function resolveTr21P1S3IntroTemplate(
+  explicitTemplate?: string | null,
+  encodedLabel?: string | null
+): string {
+  const direct = (explicitTemplate || '').trim();
+  if (direct) return direct;
+  const cfg = parseTr21CfgLabel(encodedLabel);
+  if (cfg && typeof cfg.p1s3 === 'string' && cfg.p1s3.trim()) {
+    return cfg.p1s3.trim();
+  }
+  return DEFAULT_TR21_P1S3_INTRO_TEMPLATE;
 }
 
 export function resolveTr21P1S3Mode(_value?: string | null): Tr21P1S3Mode {

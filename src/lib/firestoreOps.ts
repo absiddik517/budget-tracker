@@ -122,9 +122,6 @@ export async function createBudgetTx(
   if (input.entryType === 'revision' && input.allocated === 0) {
     throw new Error('Revision amount cannot be zero.');
   }
-  if (input.entryType === 'revision' && !input.revisionOf) {
-    throw new Error('Select the original budget entry being revised.');
-  }
 
   const masterRef = doc(db, 'economicCodes', economicCode);
   const masterSnap = await getDoc(masterRef);
@@ -264,6 +261,7 @@ export async function createBudgetsBatchTx(
   const officeId = normalized[0].officeId;
   if (!officeId) throw new Error('Office is required.');
 
+  const batchEntryType = normalized[0].entryType;
   const seenCodeSet = new Set<string>();
   for (let i = 0; i < normalized.length; i++) {
     const item = normalized[i];
@@ -278,11 +276,14 @@ export async function createBudgetsBatchTx(
     if (!item.headName && !item.headNameBn) {
       throw new Error(`আইটেম #${i + 1}: ব্যয়ের খাত প্রয়োজন।`);
     }
-    if (item.entryType !== 'original') {
-      throw new Error('মাল্টি-কোড ব্যাচে শুধুমাত্র মূল বরাদ্দ (Original allocation) যোগ করা যায়।');
+    if (item.entryType !== batchEntryType) {
+      throw new Error('একই ব্যাচে সব সারির ধরন (Original বা Revision) একই হতে হবে।');
     }
-    if (item.allocated <= 0) {
+    if (item.entryType === 'original' && item.allocated <= 0) {
       throw new Error(`আইটেম #${i + 1} (${item.economicCode}): টাকার পরিমাণ ০ এর বেশি হতে হবে।`);
+    }
+    if (item.entryType === 'revision' && item.allocated === 0) {
+      throw new Error(`আইটেম #${i + 1} (${item.economicCode}): সংশোধনের পরিমাণ ০ হতে পারে না।`);
     }
     if (seenCodeSet.has(item.economicCode)) {
       throw new Error(
@@ -329,7 +330,7 @@ export async function createBudgetsBatchTx(
         !data.deleted &&
         data.memoNo === memoNo &&
         data.economicCode === item.economicCode &&
-        (data.entryType || 'original') === 'original'
+        (data.entryType || 'original') === item.entryType
       );
     });
     if (hasActiveDup) {
@@ -344,10 +345,30 @@ export async function createBudgetsBatchTx(
   const fyTotalRefs = resolvedItems.map((item) =>
     doc(db, 'fyCodeTotals', buildFyCodeTotalId(officeId, item.fiscalYear, item.economicCode))
   );
+  const uniqueRevTargetIds = Array.from(
+    new Set(
+      resolvedItems
+        .filter((it) => it.entryType === 'revision' && it.revisionOf)
+        .map((it) => it.revisionOf as string)
+    )
+  );
+  const revTargetRefs = uniqueRevTargetIds.map((id) => doc(db, 'budgets', id));
   const actorPayload = toActorPayload(actor);
 
   await runTransaction(db, async (tx) => {
-    const fyTotalSnaps = await Promise.all(fyTotalRefs.map((r) => tx.get(r)));
+    const [fyTotalSnaps, revTargetSnaps] = await Promise.all([
+      Promise.all(fyTotalRefs.map((r) => tx.get(r))),
+      Promise.all(revTargetRefs.map((r) => tx.get(r))),
+    ]);
+
+    for (const revSnap of revTargetSnaps) {
+      if (!revSnap.exists() || revSnap.data()?.deleted) {
+        throw new Error('Selected target budget for revision was not found.');
+      }
+      if (revSnap.data()?.officeId && revSnap.data()?.officeId !== officeId) {
+        throw new Error('Revision target budget belongs to a different office.');
+      }
+    }
 
     for (let i = 0; i < resolvedItems.length; i++) {
       const item = resolvedItems[i];
@@ -373,7 +394,7 @@ export async function createBudgetsBatchTx(
         headNameBn: item.headNameBn,
         allocated: item.allocated,
         entryType: item.entryType,
-        revisionOf: null,
+        revisionOf: item.entryType === 'revision' ? item.revisionOf || null : null,
         deductionRates: item.deductionRates,
         spent: 0,
         approvedSpent: 0,

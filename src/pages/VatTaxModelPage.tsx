@@ -542,17 +542,6 @@ export function VatTaxModelPage() {
             />
           </Field>
 
-          {code && (
-            <div className="px-3.5 py-2.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--line)]">
-              <div className="text-[11px] font-medium text-[var(--muted)]">
-                ব্যয়ের খাত
-              </div>
-              <div className="text-sm font-medium text-[var(--text)] mt-0.5 bn break-words">
-                {getHead(code, { headName: description, headNameBn: descriptionBn }).displayName}
-              </div>
-            </div>
-          )}
-
           <Field label="Income tax (%)" error={itError}>
             <TextInput
               type="number"
