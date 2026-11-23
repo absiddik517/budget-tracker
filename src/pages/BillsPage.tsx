@@ -10,6 +10,7 @@ import {
   FileText,
   Plus,
   ReceiptText,
+  Trash2,
   WifiOff,
 } from 'lucide-react';
 import { Layout } from '../components/Layout';
@@ -20,19 +21,21 @@ import { SegmentedChips } from '../components/SegmentedChips';
 import { FilterBar } from '../components/FilterBar';
 import { EmptyState } from '../components/EmptyState';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
+import { DeleteBillModal } from '../components/DeleteBillModal';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_OFFICES_ID, LEGACY_UNMIGRATED_OFFICE_ID, useApp } from '../contexts/AppContext';
 import { useFyData } from '../hooks/useFyData';
 import { useEconomicCodes } from '../hooks/useEconomicCodes';
-import { formatActorBrief, formatApprovedByLine } from '../lib/actor';
+import { formatActorBrief, formatApprovedByLine, getActorUid } from '../lib/actor';
 import {
   buildTr21FormData,
   formatVoucherNoForTr21,
   sanitizeBillFileSegment,
 } from '../lib/billFormData';
 import { formatDateDisplay } from '../lib/dates';
+import { deleteBill } from '../lib/firestoreOps';
 import { formatNumberIN, formatTaka, fromPaisa } from '../lib/money';
-import { canCreateDraftBill } from '../lib/permissions';
+import { canCreateDraftBill, canDeleteBill } from '../lib/permissions';
 import { exportBillsPdf } from '../utils/exportPdf';
 import { exportTr21Pdf } from '../utils/exportTr21';
 import { saveAndShareFile } from '../utils/saveFile';
@@ -70,7 +73,7 @@ function formatBillRateForExcel(bill: BillDoc, kind: 'vat' | 'it'): string | num
 }
 
 export function BillsPage() {
-  const { isSuperAdmin } = useAuth();
+  const { userDoc, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const {
@@ -80,6 +83,7 @@ export function BillsPage() {
     currentOfficeRole,
     isAllOfficesMode,
     isLegacyPreMigration,
+    actorSnapshot,
     officesById,
     pushToast,
     t,
@@ -101,6 +105,26 @@ export function BillsPage() {
     !isLegacyPreMigration &&
     Boolean(realOfficeId) &&
     canCreateDraftBill(permCtx);
+
+  const effectiveActor =
+    actorSnapshot || (userDoc ? { uid: userDoc.id, name: userDoc.name } : null);
+
+  const canDeleteRowBill = (b: BillDoc) =>
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canDeleteBill(
+      permCtx,
+      b.status,
+      Boolean(b.createdBy && getActorUid(b.createdBy) === userDoc?.id)
+    );
+
+  const [deleteTargetBillId, setDeleteTargetBillId] = useState<string | null>(null);
+  const [deletingBill, setDeletingBill] = useState(false);
+  const deleteTargetBill = useMemo(
+    () => (deleteTargetBillId ? bills.find((b) => b.id === deleteTargetBillId) || null : null),
+    [bills, deleteTargetBillId]
+  );
 
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -273,6 +297,28 @@ export function BillsPage() {
       pushToast('error', err instanceof Error ? err.message : 'TR 21 export failed.');
     } finally {
       setTr21Busy(null);
+    }
+  };
+
+  const handleConfirmDeleteBill = async (reason?: string) => {
+    if (!deleteTargetBill || !effectiveActor || !canDeleteRowBill(deleteTargetBill)) return;
+    setDeletingBill(true);
+    try {
+      await deleteBill(deleteTargetBill, effectiveActor, reason);
+      const msg =
+        deleteTargetBill.status === 'draft'
+          ? 'খসড়া বিল মুছে ফেলা হয়েছে; খরচ আইটেম তালিকায় ফিরে গেছে।'
+          : deleteTargetBill.status === 'submitted'
+          ? `জমাকৃত বিল ${deleteTargetBill.billNo || ''} মুছে ফেলা হয়েছে; আটকে থাকা বাজেট মুক্ত হয়েছে।`
+          : deleteTargetBill.status === 'approved'
+          ? `অনুমোদিত বিল ${deleteTargetBill.billNo || ''} মুছে ফেলা হয়েছে ও বাজেট সমন্বয় হয়েছে।`
+          : t('billDeletedToast');
+      pushToast('success', msg);
+      setDeleteTargetBillId(null);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'বিল মুছে ফেলা যায়নি।');
+    } finally {
+      setDeletingBill(false);
     }
   };
 
@@ -630,6 +676,17 @@ export function BillsPage() {
                         <FileDown className="w-3.5 h-3.5 shrink-0" />
                         <span>PDF</span>
                       </button>
+                      {canDeleteRowBill(b) && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTargetBillId(b.id)}
+                          aria-label={t('deleteBillBtn')}
+                          title={t('deleteBillBtn')}
+                          className="min-h-[44px] min-w-[44px] px-2.5 rounded-lg border border-[var(--danger-text)]/40 text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 inline-flex items-center justify-center"
+                        >
+                          <Trash2 className="w-4 h-4 shrink-0" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -747,6 +804,17 @@ export function BillsPage() {
                             >
                               <FileDown className="w-3.5 h-3.5" />
                             </button>
+                            {canDeleteRowBill(b) && (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteTargetBillId(b.id)}
+                                title={t('deleteBillBtn')}
+                                aria-label={t('deleteBillBtn')}
+                                className="min-h-[34px] min-w-[34px] px-2 rounded-md border border-[var(--danger-text)]/40 text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 text-xs inline-flex items-center justify-center"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -766,6 +834,17 @@ export function BillsPage() {
         onClose={() => setTr21BillId(null)}
         bill={tr21Bill}
         formData={tr21FormData}
+      />
+
+      <DeleteBillModal
+        open={Boolean(deleteTargetBill)}
+        onClose={() => {
+          if (!deletingBill) setDeleteTargetBillId(null);
+        }}
+        bill={deleteTargetBill}
+        isOnline={isOnline}
+        deleting={deletingBill}
+        onConfirm={handleConfirmDeleteBill}
       />
     </Layout>
   );

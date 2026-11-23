@@ -24,6 +24,7 @@ import { Timeline, type TimelineStep } from '../components/Timeline';
 import { ActivityList } from '../components/ActivityList';
 import { Banner, Field, Select, Textarea, focusFirstInvalidField } from '../components/form';
 import { BillFormPreviewModal } from '../components/BillFormPreviewModal';
+import { DeleteBillModal } from '../components/DeleteBillModal';
 import { ProductsModal } from '../components/ProductsModal';
 import { SubmitBillModal, type SubmitBillFormValues } from '../components/SubmitBillModal';
 import { db } from '../lib/firebase';
@@ -52,9 +53,8 @@ import {
   cancelApprovedBillTx,
   computeBillFinancialsFromItems,
   correctApprovedBillTx,
-  deleteDraftBill,
+  deleteBill,
   rejectBillTx,
-  softDeleteApprovedBillTx,
   submitBillTx,
   updateDraftBillRates,
 } from '../lib/firestoreOps';
@@ -67,6 +67,7 @@ import {
 import {
   canApproveRejectCancelBill,
   canCreateDraftBill,
+  canDeleteBill,
   canEditDeleteApprovedSpending,
 } from '../lib/permissions';
 import {
@@ -219,6 +220,16 @@ export function BillDetailPage() {
     b.status === 'draft' &&
     (isDdo || !b.createdBy || getActorUid(b.createdBy) === userDoc?.id);
 
+  const canDeleteThisBill = (b: BillDoc) =>
+    !isAllOfficesMode &&
+    !isLegacyPreMigration &&
+    Boolean(realOfficeId) &&
+    canDeleteBill(
+      permCtx,
+      b.status,
+      Boolean(b.createdBy && getActorUid(b.createdBy) === userDoc?.id)
+    );
+
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -256,10 +267,10 @@ export function BillDetailPage() {
   // Workflow Modals
   const [acting, setActing] = useState(false);
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
-  const [deleteDraftOpen, setDeleteDraftOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [reasonMode, setReasonMode] = useState<'reject' | 'cancel' | null>(null);
   const [reasonText, setReasonText] = useState('');
-  const [superCorrectMode, setSuperCorrectMode] = useState<'edit' | 'delete' | null>(null);
+  const [superCorrectMode, setSuperCorrectMode] = useState<'edit' | null>(null);
   const [superReason, setSuperReason] = useState('');
 
   useEffect(() => {
@@ -696,46 +707,23 @@ export function BillDetailPage() {
     }
   };
   const [reasonError, setReasonError] = useState('');
-  const [superDeleteError, setSuperDeleteError] = useState('');
   const reasonFormRef = useRef<HTMLFormElement>(null);
-  const superDeleteFormRef = useRef<HTMLFormElement>(null);
 
-  const handleConfirmSuperDelete = async () => {
-    if (!userDoc || !effectiveActor || !canSuperCorrect || !bill || bill.status !== 'approved') {
-      return;
-    }
-    if (!isOnline) {
-      pushToast('error', 'অনুমোদিত বিল মুছে ফেলতে ইন্টারনেট সংযোগ প্রয়োজন।');
-      return;
-    }
-    if (!superReason.trim()) {
-      setSuperDeleteError('কারণ উল্লেখ করা আবশ্যক।');
-      pushToast('error', 'কারণ উল্লেখ করা আবশ্যক।');
-      requestAnimationFrame(() => focusFirstInvalidField(superDeleteFormRef.current));
-      return;
-    }
-    setSuperDeleteError('');
+  const handleConfirmDeleteBill = async (reason?: string) => {
+    if (!userDoc || !effectiveActor || !bill || !canDeleteThisBill(bill)) return;
     setActing(true);
     try {
-      await softDeleteApprovedBillTx(bill.id, superReason.trim(), effectiveActor);
-      pushToast('success', `অনুমোদিত বিল ${bill.billNo || ''} অডিটেড মুছে ফেলা হয়েছে।`);
-      setSuperCorrectMode(null);
-      setSuperReason('');
-      navigate(backTo);
-    } catch (err) {
-      pushToast('error', err instanceof Error ? err.message : 'মুছে ফেলা ব্যর্থ হয়েছে।');
-    } finally {
-      setActing(false);
-    }
-  };
-
-  const handleConfirmDeleteDraft = async () => {
-    if (!userDoc || !effectiveActor || !bill || !canModifyDraft(bill)) return;
-    setActing(true);
-    try {
-      await deleteDraftBill(bill, effectiveActor);
-      pushToast('success', 'খসড়া বিল মুছে ফেলা হয়েছে; খরচ আইটেম তালিকায় ফিরে গেছে।');
-      setDeleteDraftOpen(false);
+      await deleteBill(bill, effectiveActor, reason);
+      const msg =
+        bill.status === 'draft'
+          ? 'খসড়া বিল মুছে ফেলা হয়েছে; খরচ আইটেম তালিকায় ফিরে গেছে।'
+          : bill.status === 'submitted'
+          ? `জমাকৃত বিল ${bill.billNo || ''} মুছে ফেলা হয়েছে; আটকে থাকা বাজেট মুক্ত হয়েছে।`
+          : bill.status === 'approved'
+          ? `অনুমোদিত বিল ${bill.billNo || ''} মুছে ফেলা হয়েছে ও বাজেট সমন্বয় হয়েছে।`
+          : t('billDeletedToast');
+      pushToast('success', msg);
+      setDeleteModalOpen(false);
       navigate(backTo);
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'মুছে ফেলা ব্যর্থ হয়েছে।');
@@ -1106,15 +1094,17 @@ export function BillDetailPage() {
                           <Edit3 className="w-4 h-4 shrink-0" />
                           <span>{editorOpen ? t('hideEditFormBtn') : t('editDraftRatesBtn')}</span>
                         </button>
-                        <button
-                          type="button"
-                          disabled={acting}
-                          onClick={() => setDeleteDraftOpen(true)}
-                          className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] text-xs sm:text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 inline-flex items-center gap-1.5"
-                        >
-                          <Trash2 className="w-4 h-4 shrink-0" />
-                          <span>{t('confirmDeleteBtn')}</span>
-                        </button>
+                        {canDeleteThisBill(bill) && (
+                          <button
+                            type="button"
+                            disabled={acting}
+                            onClick={() => setDeleteModalOpen(true)}
+                            className="min-h-[44px] px-3.5 rounded-xl border border-[var(--danger-text)]/40 text-xs sm:text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 inline-flex items-center gap-1.5 disabled:opacity-60"
+                          >
+                            <Trash2 className="w-4 h-4 shrink-0" />
+                            <span>{t('confirmDeleteBtn')}</span>
+                          </button>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -1127,14 +1117,27 @@ export function BillDetailPage() {
                       </button>
                     </>
                   ) : (
-                    <div className="w-full p-2.5 rounded-lg bg-[var(--surface-subtle)] text-xs text-[var(--muted)] flex items-center gap-2">
-                      <Lock className="w-4 h-4 shrink-0" />
-                      <span>
-                        {isSuperAdmin
-                          ? 'সুপার অ্যাডমিন খসড়া বিল সম্পাদনা বা জমা দেন না (শুধু দেখতে পারবেন)।'
-                          : 'শুধুমাত্র এই খসড়া বিলের প্রস্তুতকারী অথবা দপ্তরের DDO এটি সম্পাদনা বা জমা দিতে পারবেন।'}
-                      </span>
-                    </div>
+                    <>
+                      <div className="flex-1 min-w-[200px] p-2.5 rounded-lg bg-[var(--surface-subtle)] text-xs text-[var(--muted)] flex items-center gap-2">
+                        <Lock className="w-4 h-4 shrink-0" />
+                        <span>
+                          {isSuperAdmin
+                            ? 'সুপার অ্যাডমিন খসড়া বিল সম্পাদনা বা জমা দেন না (শুধু দেখতে পারবেন)।'
+                            : 'শুধুমাত্র এই খসড়া বিলের প্রস্তুতকারী অথবা দপ্তরের DDO এটি সম্পাদনা বা জমা দিতে পারবেন।'}
+                        </span>
+                      </div>
+                      {canDeleteThisBill(bill) && (
+                        <button
+                          type="button"
+                          disabled={acting}
+                          onClick={() => setDeleteModalOpen(true)}
+                          className="min-h-[44px] px-3.5 rounded-xl border border-[var(--danger-text)]/40 text-xs sm:text-sm font-medium text-[var(--danger-text)] hover:bg-[var(--danger-bg)]/40 inline-flex items-center gap-1.5 disabled:opacity-60"
+                        >
+                          <Trash2 className="w-4 h-4 shrink-0" />
+                          <span>{t('confirmDeleteBtn')}</span>
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -1202,34 +1205,42 @@ export function BillDetailPage() {
                       </button>
                     )}
                     {canSuperCorrect && !superCorrectMode && (
-                      <>
-                        <button
-                          type="button"
-                          disabled={acting || !isOnline}
-                          onClick={() => {
-                            setSuperReason('');
-                            setSuperCorrectMode('edit');
-                          }}
-                          className="min-h-[44px] px-3.5 rounded-xl border border-[var(--accent)] text-[var(--accent)] text-xs font-semibold hover:bg-[var(--accent-soft)] disabled:opacity-60"
-                        >
-                          সুপার অ্যাডমিন সংশোধন
-                        </button>
-                        <button
-                          type="button"
-                          disabled={acting || !isOnline}
-                          onClick={() => {
-                            setSuperReason('');
-                            setSuperCorrectMode('delete');
-                          }}
-                          className="min-h-[44px] px-3.5 rounded-xl border border-[var(--danger-text)]/50 text-[var(--danger-text)] text-xs font-semibold hover:bg-[var(--danger-bg)]/40 disabled:opacity-60"
-                        >
-                          অডিটেড মুছুন
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        disabled={acting || !isOnline}
+                        onClick={() => {
+                          setSuperReason('');
+                          setSuperCorrectMode('edit');
+                        }}
+                        className="min-h-[44px] px-3.5 rounded-xl border border-[var(--accent)] text-[var(--accent)] text-xs font-semibold hover:bg-[var(--accent-soft)] disabled:opacity-60"
+                      >
+                        সুপার অ্যাডমিন সংশোধন
+                      </button>
                     )}
                   </div>
                 </div>
               )}
+
+              {/* Rejected / Cancelled Actions */}
+              {(bill.status === 'rejected' || bill.status === 'cancelled') &&
+                canDeleteThisBill(bill) && (
+                  <div className="pt-3 border-t border-[var(--line)] flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-[var(--muted)]">
+                      {bill.status === 'rejected'
+                        ? 'প্রত্যাখ্যাত বিলের রেকর্ড তালিকা থেকে সরানো যাবে।'
+                        : 'বাতিলকৃত বিলের রেকর্ড তালিকা থেকে সরানো যাবে।'}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={acting}
+                      onClick={() => setDeleteModalOpen(true)}
+                      className="min-h-[44px] px-3.5 rounded-xl border border-[var(--danger-text)]/40 text-[var(--danger-text)] text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 hover:bg-[var(--danger-bg)]/40 disabled:opacity-60"
+                    >
+                      <Trash2 className="w-4 h-4 shrink-0" />
+                      <span>{t('deleteBillBtn')}</span>
+                    </button>
+                  </div>
+                )}
             </div>
 
             {/* Live Budget & Cap Availability Box for Draft/Submitted */}
@@ -1995,42 +2006,17 @@ export function BillDetailPage() {
         </div>
       )}
 
-      {/* Confirm Delete Draft Modal */}
-      <Modal
-        open={deleteDraftOpen}
+      {/* Unified Delete Bill Modal */}
+      <DeleteBillModal
+        open={deleteModalOpen}
         onClose={() => {
-          if (!acting) setDeleteDraftOpen(false);
+          if (!acting) setDeleteModalOpen(false);
         }}
-        title={t('deleteDraftConfirmTitle')}
-        size="sm"
-        footer={
-          <ModalFooter
-            danger
-            loading={acting}
-            secondary={{
-              label: t('cancel'),
-              disabled: acting,
-              onClick: () => setDeleteDraftOpen(false),
-            }}
-            primary={{
-              label: acting ? 'মুছে ফেলা হচ্ছে…' : t('confirmDeleteBtn'),
-              onClick: handleConfirmDeleteDraft,
-            }}
-          />
-        }
-      >
-        <div className="space-y-4">
-          <div
-            aria-hidden="true"
-            className="w-14 h-14 rounded-full bg-[var(--danger-bg)] text-[var(--danger-text)] flex items-center justify-center mx-auto"
-          >
-            <AlertTriangle className="w-7 h-7" />
-          </div>
-          <Banner variant="danger">
-            {t('deleteDraftConfirmBody')}
-          </Banner>
-        </div>
-      </Modal>
+        bill={bill}
+        isOnline={isOnline}
+        deleting={acting}
+        onConfirm={handleConfirmDeleteBill}
+      />
 
       {/* Reject / Cancel Reason Modal */}
       <Modal
@@ -2107,80 +2093,6 @@ export function BillDetailPage() {
                 if (reasonError) setReasonError('');
               }}
               placeholder="কারণ লিখুন…"
-              className="bn"
-            />
-          </Field>
-        </form>
-      </Modal>
-
-      {/* Super Admin Audited Delete Modal */}
-      <Modal
-        open={superCorrectMode === 'delete'}
-        onClose={() => {
-          if (!acting) {
-            setSuperCorrectMode(null);
-            setSuperReason('');
-            setSuperDeleteError('');
-          }
-        }}
-        title="সুপার অ্যাডমিন অডিটেড বিল মুছে ফেলা"
-        size="sm"
-        confirmClose={Boolean(superReason.trim()) && !acting}
-        footer={
-          <ModalFooter
-            danger
-            loading={acting}
-            secondary={{
-              label: t('cancel'),
-              disabled: acting,
-              onClick: () => {
-                setSuperCorrectMode(null);
-                setSuperReason('');
-                setSuperDeleteError('');
-              },
-            }}
-            primary={{
-              label: acting ? 'মুছে ফেলা হচ্ছে…' : 'অডিটেড মুছুন নিশ্চিত করুন',
-              type: 'submit',
-              form: 'super-delete-form',
-              disabled: !isOnline,
-            }}
-          />
-        }
-      >
-        <form
-          ref={superDeleteFormRef}
-          id="super-delete-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleConfirmSuperDelete();
-          }}
-          noValidate
-          className="space-y-4"
-        >
-          {!isOnline && (
-            <Banner variant="warn">
-              অনুমোদিত বিল মুছে ফেলতে ইন্টারনেট সংযোগ প্রয়োজন।
-            </Banner>
-          )}
-          <div
-            aria-hidden="true"
-            className="w-14 h-14 rounded-full bg-[var(--danger-bg)] text-[var(--danger-text)] flex items-center justify-center mx-auto"
-          >
-            <AlertTriangle className="w-7 h-7" />
-          </div>
-          <Banner variant="danger">
-            বিলটি মুছে ফেলা হলে বাজেটের ব্যয়িত অর্থ ফেরত আসবে, অন্তর্ভুক্ত খরচ আইটেমগুলো তালিকাভুক্ত অবস্থায় ফিরে যাবে এবং অডিট লগে রেকর্ড থাকবে।
-          </Banner>
-          <Field label="মুছে ফেলার কারণ (বাধ্যতামূলক)" required error={superDeleteError}>
-            <Textarea
-              rows={3}
-              value={superReason}
-              onChange={(e) => {
-                setSuperReason(e.target.value);
-                if (superDeleteError) setSuperDeleteError('');
-              }}
-              placeholder="মুছে ফেলার সুনির্দিষ্ট কারণ লিখুন…"
               className="bn"
             />
           </Field>

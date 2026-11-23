@@ -1,4 +1,4 @@
-import type { OfficeRole, Role } from '../types';
+import type { BillStatus, OfficeRole, Role } from '../types';
 
 export interface PermissionContext {
   isSuperAdmin: boolean;
@@ -70,6 +70,21 @@ export function canApproveRejectCancelBill(roleOrCtx: Role | PermissionContext |
 
 export function canEditDeleteApprovedSpending(roleOrCtx: Role | PermissionContext | null | undefined): boolean {
   return normalizeCtx(roleOrCtx).isSuperAdmin;
+}
+
+export function canDeleteBill(
+  roleOrCtx: Role | PermissionContext | null | undefined,
+  status: BillStatus,
+  isCreator: boolean
+): boolean {
+  if (status !== 'draft' && status !== 'rejected' && status !== 'cancelled') return false;
+  const ctx = normalizeCtx(roleOrCtx);
+  if (ctx.isSuperAdmin) return true;
+  if (ctx.officeRole === 'ddo') return true;
+  if (ctx.officeRole === 'employee') {
+    return isCreator && (status === 'draft' || status === 'rejected');
+  }
+  return false;
 }
 
 export function canCreateDraftSpending(roleOrCtx: Role | PermissionContext | null | undefined): boolean {

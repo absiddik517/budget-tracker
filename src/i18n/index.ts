@@ -214,6 +214,20 @@ const en = {
   exitAppConfirmBody: 'Are you sure you want to close Budget Tracker?',
   exitAppStayBtn: 'Stay',
   exitAppConfirmBtn: 'Exit',
+  deleteBillBtn: 'Delete bill',
+  deleteBillConfirmTitle: 'Delete bill?',
+  deleteSubmittedConfirmTitle: 'Delete submitted bill?',
+  deleteSubmittedConfirmBody: 'The pending budget hold will be released and included expense items will return to Listed status.',
+  deleteClosedConfirmTitle: 'Delete bill from list?',
+  deleteClosedConfirmBody: 'This bill record will be removed from the bills list. Its expense items were already returned.',
+  deleteApprovedConfirmTitle: 'Delete approved bill?',
+  deleteApprovedConfirmBody: 'Spent budget will be restored, included expense items will return to Listed status, and the reason will be recorded in the audit log.',
+  deleteBillReasonLabel: 'Reason for deletion (required)',
+  deleteBillReasonPlaceholder: 'Write a specific reason for deleting this bill…',
+  deleteBillReasonRequired: 'A reason is required.',
+  deleteBillOnlineRequired: 'Internet connection is required to delete this bill.',
+  confirmDeleteBillBtn: 'Delete bill',
+  billDeletedToast: 'Bill deleted successfully.',
 };
 
 const bn: Record<keyof typeof en, string> = {
@@ -430,6 +444,20 @@ const bn: Record<keyof typeof en, string> = {
   exitAppConfirmBody: 'আপনি কি নিশ্চিতভাবে বাজেট ট্র্যাকার অ্যাপটি বন্ধ করতে চান?',
   exitAppStayBtn: 'থাকুন',
   exitAppConfirmBtn: 'বের হন',
+  deleteBillBtn: 'বিল মুছুন',
+  deleteBillConfirmTitle: 'বিল মুছে ফেলবেন?',
+  deleteSubmittedConfirmTitle: 'জমাকৃত বিল মুছে ফেলবেন?',
+  deleteSubmittedConfirmBody: 'আটকে থাকা বাজেট বরাদ্দ মুক্ত হবে এবং অন্তর্ভুক্ত খরচ আইটেমগুলো পুনরায় তালিকাভুক্ত (Listed) অবস্থায় ফিরে যাবে।',
+  deleteClosedConfirmTitle: 'বিলটি তালিকা থেকে মুছে ফেলবেন?',
+  deleteClosedConfirmBody: 'এই বিলের রেকর্ড তালিকা থেকে সরিয়ে ফেলা হবে। এর খরচ আইটেমগুলো আগেই তালিকাভুক্ত অবস্থায় ফিরে গেছে।',
+  deleteApprovedConfirmTitle: 'অনুমোদিত বিল মুছে ফেলবেন?',
+  deleteApprovedConfirmBody: 'বিলটি মুছে ফেলা হলে বাজেটের ব্যয়িত অর্থ ফেরত আসবে, অন্তর্ভুক্ত খরচ আইটেমগুলো তালিকাভুক্ত অবস্থায় ফিরে যাবে এবং কারণ অডিট লগে সংরক্ষিত থাকবে।',
+  deleteBillReasonLabel: 'মুছে ফেলার কারণ (বাধ্যতামূলক)',
+  deleteBillReasonPlaceholder: 'মুছে ফেলার সুনির্দিষ্ট কারণ লিখুন…',
+  deleteBillReasonRequired: 'কারণ উল্লেখ করা আবশ্যক।',
+  deleteBillOnlineRequired: 'এই বিলটি মুছে ফেলতে ইন্টারনেট সংযোগ প্রয়োজন।',
+  confirmDeleteBillBtn: 'বিল মুছুন',
+  billDeletedToast: 'বিলটি মুছে ফেলা হয়েছে।',
 };
 
 export type TranslationKey = keyof typeof en;

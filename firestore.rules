@@ -452,6 +452,16 @@ service cloud.firestore {
           && request.resource.data.officeId == resource.data.officeId
         )
         || (
+          // Office DDO can soft-delete draft, rejected, or cancelled bills in their office
+          isOfficeDdo(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
+          && resource.data.status in ['draft', 'rejected', 'cancelled']
+          && resource.data.get('deleted', false) == false
+          && request.resource.data.deleted == true
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['deleted', 'updatedAt', 'updatedBy'])
+        )
+        || (
           // Creator or DDO in that office can edit/submit/soft-delete ONLY while draft
           isOfficeMemberStrict(resource.data.officeId)
           && request.resource.data.officeId == resource.data.officeId
@@ -465,6 +475,17 @@ service cloud.firestore {
                    .hasOnly(['deleted', 'updatedAt', 'updatedBy'])
             )
           )
+        )
+        || (
+          // Bill creator can soft-delete their own rejected bill
+          isOfficeMemberStrict(resource.data.officeId)
+          && request.resource.data.officeId == resource.data.officeId
+          && resource.data.status == 'rejected'
+          && resource.data.get('deleted', false) == false
+          && actorUid(resource.data.get('createdBy', null)) == request.auth.uid
+          && request.resource.data.deleted == true
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['deleted', 'updatedAt', 'updatedBy'])
         )
         || (
           // Strictly office DDO ONLY: Approve submitted bill

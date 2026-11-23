@@ -1579,6 +1579,10 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
     throw new Error('শুধুমাত্র খসড়া (draft) বিল মুছে ফেলা যায়।');
   }
   const actorPayload = toActorPayload(actor);
+  const itemSnaps = await Promise.all(
+    (bill.itemIds || []).map((itemId) => getDoc(doc(db, 'expenseItems', itemId)))
+  );
+
   const batch = writeBatch(db);
   const billRef = doc(db, 'bills', bill.id);
   batch.update(billRef, {
@@ -1587,9 +1591,12 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
     updatedBy: actorPayload,
   });
 
-  for (const itemId of bill.itemIds) {
-    const itemRef = doc(db, 'expenseItems', itemId);
-    batch.update(itemRef, {
+  for (const itemSnap of itemSnaps) {
+    if (!itemSnap.exists()) continue;
+    const itemData = itemSnap.data();
+    if (itemData?.deleted) continue;
+    if (itemData?.status !== 'billed' || itemData?.billId !== bill.id) continue;
+    batch.update(itemSnap.ref, {
       status: 'listed',
       billId: null,
       updatedAt: serverTimestamp(),
@@ -1604,6 +1611,154 @@ export async function deleteDraftBill(bill: BillDoc, actor: AuditActor): Promise
     action: 'delete',
     before: bill as unknown as Record<string, unknown>,
     after: { ...bill, deleted: true } as unknown as Record<string, unknown>,
+    actor,
+  });
+  await batch.commit();
+}
+
+export async function deleteSubmittedBillTx(
+  billId: string,
+  actor: AuditActor,
+  reasonInput?: string
+): Promise<void> {
+  assertOnlineForTransaction('জমাকৃত বিল মুছে ফেলা');
+  const reason = (reasonInput || '').trim();
+
+  const billRef = doc(db, 'bills', billId);
+  const preBillSnap = await getDoc(billRef);
+  if (!preBillSnap.exists() || preBillSnap.data().deleted) {
+    throw new Error('বিলটি পাওয়া যায়নি।');
+  }
+  const preBill = preBillSnap.data() as Omit<BillDoc, 'id'>;
+  const officeId = preBill.officeId || '';
+
+  const budgetRefs = (preBill.pendingSlices || []).map((sl) => doc(db, 'budgets', sl.budgetId));
+  const itemRefs = (preBill.itemIds || []).map((id) => doc(db, 'expenseItems', id));
+  const fyTotalRef = doc(
+    db,
+    'fyCodeTotals',
+    buildFyCodeTotalId(officeId, preBill.fiscalYear, preBill.economicCode)
+  );
+  const actorPayload = toActorPayload(actor);
+
+  await runTransaction(db, async (tx) => {
+    const [billSnap, fyTotalSnap, ...otherSnaps] = await Promise.all([
+      tx.get(billRef),
+      tx.get(fyTotalRef),
+      ...budgetRefs.map((r) => tx.get(r)),
+      ...itemRefs.map((r) => tx.get(r)),
+    ]);
+
+    if (!billSnap.exists() || billSnap.data().deleted) {
+      throw new Error('বিলটি পাওয়া যায়নি।');
+    }
+    const before = billSnap.data() as Omit<BillDoc, 'id'>;
+    if (before.status !== 'submitted') {
+      throw new Error('শুধুমাত্র জমাকৃত (submitted) বিল এই অপারেশনের মাধ্যমে মুছে ফেলা যায়।');
+    }
+
+    const budgetSnaps = otherSnaps.slice(0, budgetRefs.length) as DocumentSnapshot[];
+    const itemSnaps = otherSnaps.slice(budgetRefs.length) as DocumentSnapshot[];
+
+    const sliceMap = new Map<string, number>();
+    for (const sl of before.pendingSlices || []) {
+      sliceMap.set(sl.budgetId, (sliceMap.get(sl.budgetId) || 0) + sl.amount);
+    }
+
+    for (const bSnap of budgetSnaps) {
+      if (!bSnap.exists()) continue;
+      const b = bSnap.data() as Omit<BudgetDoc, 'id'>;
+      const release = sliceMap.get(bSnap.id) || 0;
+      if (release <= 0) continue;
+      const newPending = Math.max(0, (b.pendingAmount || 0) - release);
+      const newRemaining = b.allocated - b.spent - newPending;
+      tx.update(bSnap.ref, {
+        pendingAmount: newPending,
+        remaining: newRemaining,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      });
+    }
+
+    if (fyTotalSnap.exists()) {
+      const f = fyTotalSnap.data() as Omit<FyCodeTotalDoc, 'id'>;
+      tx.update(fyTotalRef, {
+        pendingAmount: Math.max(0, (f.pendingAmount || 0) - before.grossAmount),
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      });
+    }
+
+    for (const itemSnap of itemSnaps) {
+      if (!itemSnap.exists()) continue;
+      const itemData = itemSnap.data();
+      if (itemData?.deleted) continue;
+      if (itemData?.status !== 'billed' || (itemData?.billId && itemData.billId !== billId)) {
+        continue;
+      }
+      tx.update(itemSnap.ref, {
+        status: 'listed',
+        billId: null,
+        updatedAt: serverTimestamp(),
+        updatedBy: actorPayload,
+      });
+    }
+
+    const billPatch: Record<string, unknown> = {
+      deleted: true,
+      updatedAt: serverTimestamp(),
+      updatedBy: actorPayload,
+    };
+    if (reason) {
+      billPatch.cancelReason = reason;
+    }
+
+    tx.update(billRef, billPatch);
+    writeAuditLogInTx(tx, {
+      officeId: officeId || null,
+      collection: 'bills',
+      docId: billId,
+      action: 'delete',
+      before: { id: billId, ...before },
+      after: { id: billId, ...before, deleted: true, ...(reason ? { cancelReason: reason } : {}) },
+      actor,
+    });
+  });
+}
+
+export async function deleteClosedBill(
+  bill: BillDoc,
+  actor: AuditActor,
+  reasonInput?: string
+): Promise<void> {
+  if (bill.status !== 'rejected' && bill.status !== 'cancelled') {
+    throw new Error('শুধুমাত্র প্রত্যাখ্যাত বা বাতিল বিল এইভাবে মুছে ফেলা যায়।');
+  }
+  const reason = (reasonInput || '').trim();
+  const actorPayload = toActorPayload(actor);
+  const batch = writeBatch(db);
+  const billRef = doc(db, 'bills', bill.id);
+  const patch: Record<string, unknown> = {
+    deleted: true,
+    updatedAt: serverTimestamp(),
+    updatedBy: actorPayload,
+  };
+  if (reason && !bill.cancelReason) {
+    patch.cancelReason = reason;
+  }
+
+  batch.update(billRef, patch);
+  writeAuditLogInBatch(batch, {
+    officeId: bill.officeId || null,
+    collection: 'bills',
+    docId: bill.id,
+    action: 'delete',
+    before: bill as unknown as Record<string, unknown>,
+    after: {
+      ...bill,
+      deleted: true,
+      ...(reason && !bill.cancelReason ? { cancelReason: reason } : {}),
+    } as unknown as Record<string, unknown>,
     actor,
   });
   await batch.commit();
@@ -2615,6 +2770,25 @@ export async function softDeleteApprovedBillTx(
           updatedBy: actorPayload,
         });
       }
+    } else {
+      let toRestore = before.grossAmount;
+      for (const bSnap of budgetSnaps) {
+        if (!bSnap.exists() || toRestore <= 0) continue;
+        const b = bSnap.data() as Omit<BudgetDoc, 'id'>;
+        const take = Math.min(toRestore, Math.max(0, b.spent));
+        if (take > 0) {
+          const newSpent = b.spent - take;
+          const pending = Math.max(0, b.pendingAmount || 0);
+          tx.update(bSnap.ref, {
+            spent: newSpent,
+            approvedSpent: newSpent,
+            remaining: b.allocated - newSpent - pending,
+            updatedAt: serverTimestamp(),
+            updatedBy: actorPayload,
+          });
+          toRestore -= take;
+        }
+      }
     }
 
     if (fyTotalSnap.exists()) {
@@ -2629,7 +2803,12 @@ export async function softDeleteApprovedBillTx(
     }
 
     for (const itemSnap of itemSnaps) {
-      if (!itemSnap.exists() || itemSnap.data()?.deleted) continue;
+      if (!itemSnap.exists()) continue;
+      const itemData = itemSnap.data();
+      if (itemData?.deleted) continue;
+      if (itemData?.status !== 'billed' || (itemData?.billId && itemData.billId !== billId)) {
+        continue;
+      }
       tx.update(itemSnap.ref, {
         status: 'listed',
         billId: null,
@@ -2655,6 +2834,24 @@ export async function softDeleteApprovedBillTx(
       actor,
     });
   });
+}
+
+export async function deleteBill(
+  bill: BillDoc,
+  actor: AuditActor,
+  reasonInput?: string
+): Promise<void> {
+  switch (bill.status) {
+    case 'draft':
+      await deleteDraftBill(bill, actor);
+      return;
+    case 'rejected':
+    case 'cancelled':
+      await deleteClosedBill(bill, actor, reasonInput);
+      return;
+    default:
+      throw new Error('শুধুমাত্র খসড়া (draft), প্রত্যাখ্যাত (rejected) অথবা বাতিল (cancelled) বিল মুছে ফেলা যায়।');
+  }
 }
 
 /* ============================================================================
